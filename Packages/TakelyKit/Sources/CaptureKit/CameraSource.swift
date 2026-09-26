@@ -16,10 +16,10 @@ public final class CameraSource: NSObject, FrameSource, AVCaptureVideoDataOutput
         guard let device else { throw CaptureError.noCamera }
         session.beginConfiguration()
         defer { session.commitConfiguration() }
-        if session.canSetSessionPreset(.hd1280x720) { session.sessionPreset = .hd1280x720 }
         let input = try AVCaptureDeviceInput(device: device)
         guard session.canAddInput(input) else { throw CaptureError.noCamera }
         session.addInput(input)
+        if session.canSetSessionPreset(.hd1280x720) { session.sessionPreset = .hd1280x720 }
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
         output.alwaysDiscardsLateVideoFrames = true
@@ -29,12 +29,13 @@ public final class CameraSource: NSObject, FrameSource, AVCaptureVideoDataOutput
     }
 
     public func start() async throws {
-        await withCheckedContinuation { continuation in
+        let running = await withCheckedContinuation { continuation in
             sessionQueue.async {
                 self.session.startRunning()
-                continuation.resume()
+                continuation.resume(returning: self.session.isRunning)
             }
         }
+        guard running else { throw CaptureError.noCamera }
     }
 
     public func stop() async {

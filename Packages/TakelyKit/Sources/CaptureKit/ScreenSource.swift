@@ -34,6 +34,9 @@ public final class ScreenSource: NSObject, FrameSource, SCStreamOutput, SCStream
         if let sourceRect { c.sourceRect = sourceRect }
         c.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(config.fps))
         c.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        // Pin sRGB + Rec. 709 so files look the same in every player (the display default is often Display P3).
+        c.colorSpaceName = CGColorSpace.sRGB
+        c.colorMatrix = CGDisplayStream.yCbCrMatrix_ITU_R_709_2
         c.showsCursor = true
         c.queueDepth = 6
         c.capturesAudio = config.systemAudio
@@ -85,12 +88,13 @@ public final class ScreenSource: NSObject, FrameSource, SCStreamOutput, SCStream
         onError(error)
     }
 
-    /// SCStream sends `.idle` frames without pixels when nothing changed.
+    /// Frames with pixels: `.complete`, and `.started` (the first frame). `.idle` etc. carry none.
     static func isCompleteFrame(_ buffer: CMSampleBuffer) -> Bool {
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+        guard buffer.imageBuffer != nil,
+            let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
             let raw = attachments.first?[.status] as? Int,
             let status = SCFrameStatus(rawValue: raw)
         else { return false }
-        return status == .complete
+        return status == .complete || status == .started
     }
 }

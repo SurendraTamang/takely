@@ -50,6 +50,11 @@ public struct WriterConfig: Sendable, Equatable {
             AVVideoWidthKey: size.width,
             AVVideoHeightKey: size.height,
             AVVideoCompressionPropertiesKey: compression,
+            AVVideoColorPropertiesKey: [
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+            ],
         ]
     }
 
