@@ -7,8 +7,10 @@ paths=()
 for p in App Packages/TakelyKit/Sources Packages/TakelyKit/Tests; do
     [[ -d "$p" ]] && paths+=("$p")
 done
-echo "==> swift-format lint"
-xcrun swift-format lint --strict -r "${paths[@]}"
+if ((${#paths[@]})); then
+    echo "==> swift-format lint"
+    xcrun swift-format lint --strict -r "${paths[@]}"
+fi
 
 echo "==> swift test"
 swift test --package-path Packages/TakelyKit --quiet
