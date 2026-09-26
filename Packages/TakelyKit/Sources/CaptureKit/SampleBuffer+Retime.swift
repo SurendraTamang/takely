@@ -1,7 +1,7 @@
 import CoreMedia
 
 extension CMSampleBuffer {
-    /// Copy of a single-timing sample buffer with a new presentation time.
+    /// Copy of a single-sample buffer (e.g. one video frame) with a new presentation time.
     func retimed(to pts: CMTime) -> CMSampleBuffer? {
         var timing = CMSampleTimingInfo(duration: duration, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
         var copy: CMSampleBuffer?

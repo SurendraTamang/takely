@@ -68,4 +68,32 @@ import Testing
         let (writer, _) = try await writeOneSecond(to: url)
         #expect(!writer.append(Synthetic.audio(pts: Synthetic.seconds(1000.5)), as: .mic))
     }
+
+    @Test func staticScreenSpansWholeSegment() async throws {
+        let url = Synthetic.temporaryFolder().appending(path: "segment.mov")
+        let writer = try SegmentWriter(url: url, config: config)
+        writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(1000), rgb: (255, 0, 0)), as: .screen)
+        _ = try await writer.finish(at: Synthetic.seconds(1003))
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.load(.tracks)
+        let screenTrack = tracks.sorted { $0.trackID < $1.trackID }.first { $0.mediaType == .video }!
+        let timeRange = try await screenTrack.load(.timeRange)
+        #expect(abs(timeRange.duration.seconds - 3.0) < 0.05)
+        let assetDuration = try await asset.load(.duration).seconds
+        #expect(abs(assetDuration - 3.0) < 0.05)
+    }
+
+    @Test func finishTwiceIsSafe() async throws {
+        let url = Synthetic.temporaryFolder().appending(path: "segment.mov")
+        let (writer, _) = try await writeOneSecond(to: url)
+        #expect(try await writer.finish(at: Synthetic.seconds(1002)) == nil)
+    }
+
+    @Test func keepsAudioStraddlingSessionStart() throws {
+        let url = Synthetic.temporaryFolder().appending(path: "segment.mov")
+        let writer = try SegmentWriter(url: url, config: config)
+        writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(1000), rgb: (255, 0, 0)), as: .screen)
+        #expect(writer.append(Synthetic.audio(pts: Synthetic.seconds(999.99)), as: .system))
+        #expect(!writer.append(Synthetic.audio(pts: Synthetic.seconds(999.9)), as: .mic))
+    }
 }
