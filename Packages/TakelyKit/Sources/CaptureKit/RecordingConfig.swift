@@ -77,5 +77,6 @@ public struct RecordingConfig: Sendable, Equatable {
 }
 
 extension Int {
-    var even: Int { self & ~1 }
+    /// Rounded down to even (encoder requirement), never below 2.
+    var even: Int { Swift.max(2, self & ~1) }
 }

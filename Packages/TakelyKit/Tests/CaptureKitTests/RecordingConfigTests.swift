@@ -23,6 +23,10 @@ import Testing
         #expect(config(1001, 777, .native).outputSize == PixelSize(width: 1000, height: 776))
     }
 
+    @Test func tinySourcesStayEncodable() {
+        #expect(config(1, 1, .native).outputSize == PixelSize(width: 2, height: 2))
+    }
+
     @Test func bitrateFollowsPresetTable() {
         #expect(config(2880, 1800, .p1080, codec: .h264).videoBitrate == 8_000_000)
         #expect(config(2880, 1800, .p1080, fps: 60, codec: .hevc).videoBitrate == 7_500_000)

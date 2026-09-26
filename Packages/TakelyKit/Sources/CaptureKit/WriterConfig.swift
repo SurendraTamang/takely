@@ -25,9 +25,10 @@ public struct WriterConfig: Sendable, Equatable {
     func outputSettings(for kind: TrackKind) -> [String: Any] {
         switch kind {
         case .screen:
-            videoSettings(size: screenSize, bitrate: videoBitrate)
+            videoSettings(size: screenSize, bitrate: videoBitrate, fps: fps)
+        // CameraSource captures at a fixed 30 fps regardless of the screen preset.
         case .camera:
-            videoSettings(size: cameraSize, bitrate: 2_500_000)
+            videoSettings(size: cameraSize, bitrate: 2_500_000, fps: 30)
                 .merging([AVVideoScalingModeKey: AVVideoScalingModeResizeAspectFill]) { $1 }
         case .system:
             audioSettings(channels: 2)
@@ -36,7 +37,7 @@ public struct WriterConfig: Sendable, Equatable {
         }
     }
 
-    private func videoSettings(size: PixelSize, bitrate: Int) -> [String: Any] {
+    private func videoSettings(size: PixelSize, bitrate: Int, fps: Int) -> [String: Any] {
         var compression: [String: Any] = [
             AVVideoAverageBitRateKey: bitrate,
             AVVideoExpectedSourceFrameRateKey: fps,
