@@ -22,14 +22,23 @@ public struct ProjectBundle: Sendable, Hashable {
         "segment-" + String(format: "%03d", index) + ".mov"
     }
 
-    /// Creates `Recording-yyyy-MM-dd-HH-mm-ss.takely` with `segments/` and `exports/` inside `folder`.
+    /// Creates `Recording-yyyy-MM-dd-HH-mm-ss.takely` (local time; `-2`, `-3`, … if taken) with `segments/` and `exports/` inside `folder`.
     public static func create(in folder: URL, date: Date = .now) throws -> ProjectBundle {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        // Local time on purpose: the name matches the wall clock the user saw; createdAt in project.json stays UTC.
+        formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
-        let name = "Recording-\(formatter.string(from: date)).\(pathExtension)"
-        let bundle = ProjectBundle(url: folder.appending(path: name, directoryHint: .isDirectory))
+        let base = "Recording-\(formatter.string(from: date))"
         let fm = FileManager.default
+        // Same-second starts get "-2", "-3", … like Finder, instead of reusing an existing bundle.
+        var name = base
+        var suffix = 2
+        while fm.fileExists(atPath: folder.appending(path: "\(name).\(pathExtension)").path) {
+            name = "\(base)-\(suffix)"
+            suffix += 1
+        }
+        let bundle = ProjectBundle(url: folder.appending(path: "\(name).\(pathExtension)", directoryHint: .isDirectory))
         try fm.createDirectory(at: bundle.segmentsURL, withIntermediateDirectories: true)
         try fm.createDirectory(at: bundle.exportsURL, withIntermediateDirectories: true)
         return bundle

@@ -15,6 +15,14 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: bundle.exportsURL.path))
     }
 
+    @Test func sameSecondRecordingsGetDistinctBundles() throws {
+        let date = Date(timeIntervalSince1970: 0)
+        let first = try ProjectBundle.create(in: folder, date: date)
+        let second = try ProjectBundle.create(in: folder, date: date)
+        #expect(first.url != second.url)
+        #expect(second.name == first.name + "-2")
+    }
+
     @Test func persistsManifestAndCursor() throws {
         let bundle = try ProjectBundle.create(in: folder)
         let project = ProjectTests.sample()
