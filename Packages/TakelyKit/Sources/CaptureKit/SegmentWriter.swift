@@ -127,6 +127,6 @@ public final class SegmentWriter: @unchecked Sendable {
 }
 
 /// Holds a sample buffer inside `Mutex` state; the buffer is immutable once delivered.
-private struct UncheckedBuffer: @unchecked Sendable {
+struct UncheckedBuffer: @unchecked Sendable {
     let buffer: CMSampleBuffer
 }

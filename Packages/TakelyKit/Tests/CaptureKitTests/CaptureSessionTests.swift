@@ -101,8 +101,9 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(await session.state == .paused)
 
         try await source.emitScreen(from: 150, seconds: 0.5)  // dropped while paused
+        clock.set(200)
         try await session.resume()
-        try await source.emitScreen(from: 200, seconds: 2)
+        try await source.emitScreen(from: 200.01, seconds: 2)
         clock.set(202)
         let bundle = try await session.stop()
 
@@ -113,6 +114,30 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         let times = try bundle.readCursor().samples.map(\.t)
         #expect(times.contains { abs($0 - 1.0) < 1e-6 })
         #expect(times.allSatisfy { $0 < 3 })
+    }
+
+    @Test func resumeOnStaticScreenStartsImmediately() async throws {
+        let (session, clock) = makeSession()
+        let fake = Mutex<FakeSource?>(nil)
+        try await session.start(config: config, in: Synthetic.temporaryFolder()) { router in
+            let source = FakeSource(router: router)
+            fake.withLock { $0 = source }
+            return [source]
+        }
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 100, seconds: 1)
+        clock.set(101)
+        try await session.pause()
+
+        clock.set(150)
+        try await session.resume()
+        // No frames emitted: the screen is static.
+        clock.set(152)
+        let bundle = try await session.stop()
+
+        let project = try bundle.readProject()
+        #expect(project.segments.map(\.file) == ["segment-000.mov", "segment-001.mov"])
+        #expect(abs(project.duration - 3.0) < 0.01)
     }
 
     @Test func cannotStartTwice() async throws {
@@ -273,5 +298,18 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100)) { CGPoint(x: 50, y: 50) }
         router.receive(Synthetic.video(width: 8, height: 8, pts: .zero, rgb: (0, 0, 0)), kind: .screen)
         #expect(router.cursor.samples.isEmpty)
+    }
+
+    @Test func primeStartsSegmentFromLastFrame() throws {
+        let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100)) { CGPoint(x: 50, y: 50) }
+        router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
+        let url = Synthetic.temporaryFolder().appending(path: "s.mov")
+        let writer = try SegmentWriter(
+            url: url,
+            config: WriterConfig(
+                tracks: [.screen], screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30, videoBitrate: 500_000))
+        router.attach(writer, offset: 0)
+        router.prime(at: Synthetic.seconds(60))
+        #expect(writer.startTime == Synthetic.seconds(60))
     }
 }

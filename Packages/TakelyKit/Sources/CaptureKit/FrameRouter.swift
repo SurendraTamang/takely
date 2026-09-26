@@ -11,6 +11,7 @@ public final class FrameRouter: Sendable {
         /// Edited-timeline time at which the current segment starts.
         var offset: Double = 0
         var cursor = CursorTrack()
+        var lastScreen: UncheckedBuffer?
     }
 
     private let state = Mutex(State())
@@ -33,12 +34,21 @@ public final class FrameRouter: Sendable {
     public var cursor: CursorTrack { state.withLock { $0.cursor } }
 
     public func receive(_ buffer: CMSampleBuffer, kind: TrackKind) {
-        let (writer, offset) = state.withLock { ($0.writer, $0.offset) }
+        let (writer, offset) = state.withLock { s -> (SegmentWriter?, Double) in
+            if kind == .screen { s.lastScreen = UncheckedBuffer(buffer: buffer) }
+            return (s.writer, s.offset)
+        }
         guard let writer, writer.append(buffer, as: kind), kind == .screen,
             let start = writer.startTime, let point = normalizedCursor()
         else { return }
         let t = offset + (buffer.presentationTimeStamp - start).seconds
         state.withLock { $0.cursor.samples.append(CursorSample(t: t, x: point.x, y: point.y)) }
+    }
+
+    /// Starts the attached segment at `hostTime` with the last screen frame, so a static screen doesn't delay it.
+    func prime(at hostTime: CMTime) {
+        guard let last = state.withLock({ $0.lastScreen })?.buffer, let retimed = last.retimed(to: hostTime) else { return }
+        receive(retimed, kind: .screen)
     }
 
     /// Records a click at host time `hostTime` if a segment is running.

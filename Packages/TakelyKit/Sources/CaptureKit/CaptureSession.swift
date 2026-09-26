@@ -110,6 +110,7 @@ public actor CaptureSession {
         let index = nextSegmentIndex
         let writer = try SegmentWriter(url: bundle.segmentURL(ProjectBundle.segmentFileName(index: index)), config: config.writerConfig)
         router.attach(writer, offset: project.duration)
+        router.prime(at: now())
         self.writer = writer
         nextSegmentIndex += 1
         state = .recording
