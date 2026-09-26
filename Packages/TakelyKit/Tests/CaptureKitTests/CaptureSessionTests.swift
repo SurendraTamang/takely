@@ -34,6 +34,24 @@ final class FakeClock: Sendable {
     var now: @Sendable () -> CMTime { { Synthetic.seconds(self.value.withLock { $0 }) } }
 }
 
+/// A source whose `start()` takes a while, to widen the window for concurrent-start races.
+final class SlowStartSource: FrameSource {
+    let router: FrameRouter
+    let started = Mutex(false)
+
+    init(router: FrameRouter) { self.router = router }
+
+    func start() async throws {
+        try await Task.sleep(for: .milliseconds(50))
+        started.withLock { $0 = true }
+    }
+    func stop() async { started.withLock { $0 = false } }
+}
+
+func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
+    do { return .success(try await body()) } catch { return .failure(error) }
+}
+
 @Suite struct CaptureSessionTests {
     let config = RecordingConfig(
         target: .display, captureRect: CGRect(x: 0, y: 0, width: 100, height: 100),
@@ -43,7 +61,7 @@ final class FakeClock: Sendable {
 
     func makeSession() -> (CaptureSession, FakeClock) {
         let clock = FakeClock()
-        return (CaptureSession(now: clock.now), clock)
+        return (CaptureSession(now: clock.now, cursorLocation: { CGPoint(x: 50, y: 50) }), clock)
     }
 
     @Test func recordStopProducesFinishedManifest() async throws {
@@ -120,6 +138,116 @@ final class FakeClock: Sendable {
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
         #expect(await session.state == .idle)
     }
+
+    @Test func stopDuringPauseKeepsSegment() async throws {
+        let (session, clock) = makeSession()
+        let fake = Mutex<FakeSource?>(nil)
+        try await session.start(config: config, in: Synthetic.temporaryFolder()) { router in
+            let source = FakeSource(router: router)
+            fake.withLock { $0 = source }
+            return [source]
+        }
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 100, seconds: 1)
+        clock.set(101)
+
+        let p = Task { try await session.pause() }
+        let s = Task { try await session.stop() }
+        _ = await p.result
+        let bundle = try await s.value
+
+        let project = try bundle.readProject()
+        #expect(project.status == .finished)
+        #expect(project.segments.map(\.file) == ["segment-000.mov"])
+        #expect(await session.state == .idle)
+
+        // The session can start again.
+        try await session.start(config: config, in: Synthetic.temporaryFolder()) { [FakeSource(router: $0)] }
+    }
+
+    @Test func doubleStopKeepsSegment() async throws {
+        let (session, clock) = makeSession()
+        let fake = Mutex<FakeSource?>(nil)
+        try await session.start(config: config, in: Synthetic.temporaryFolder()) { router in
+            let source = FakeSource(router: router)
+            fake.withLock { $0 = source }
+            return [source]
+        }
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 100, seconds: 1)
+        clock.set(101)
+
+        async let first = attempt { try await session.stop() }
+        let second = await attempt { try await session.stop() }
+        let outcomes = [await first, second]
+
+        var successes: [ProjectBundle] = []
+        var captureErrors = 0
+        for outcome in outcomes {
+            switch outcome {
+            case .success(let bundle): successes.append(bundle)
+            case .failure(let error): if error is CaptureError { captureErrors += 1 }
+            }
+        }
+        #expect(successes.count == 1)
+        #expect(captureErrors == 1)
+
+        let bundle = try #require(successes.first)
+        let project = try bundle.readProject()
+        #expect(project.status == .finished)
+        #expect(project.segments.map(\.file) == ["segment-000.mov"])
+    }
+
+    @Test func concurrentStartsLeakNothing() async throws {
+        let session = CaptureSession(cursorLocation: { CGPoint(x: 50, y: 50) })
+        // Separate boxes per attempt: a single `Mutex` can't be captured by two independent closures.
+        let sourceA = Mutex<SlowStartSource?>(nil)
+        let sourceB = Mutex<SlowStartSource?>(nil)
+        let folderA = Synthetic.temporaryFolder()
+        let folderB = Synthetic.temporaryFolder()
+
+        async let a = attempt {
+            try await session.start(config: config, in: folderA) { router in
+                let source = SlowStartSource(router: router)
+                sourceA.withLock { $0 = source }
+                return [source]
+            }
+        }
+        async let b = attempt {
+            try await session.start(config: config, in: folderB) { router in
+                let source = SlowStartSource(router: router)
+                sourceB.withLock { $0 = source }
+                return [source]
+            }
+        }
+        let outcomes = [await a, await b]
+
+        var successes = 0
+        var captureErrors = 0
+        for outcome in outcomes {
+            switch outcome {
+            case .success: successes += 1
+            case .failure(let error): if error is CaptureError { captureErrors += 1 }
+            }
+        }
+        #expect(successes == 1)
+        #expect(captureErrors == 1)
+
+        _ = try? await session.stop()
+        #expect(!(sourceA.withLock { $0?.started.withLock { $0 } } ?? false))
+        #expect(!(sourceB.withLock { $0?.started.withLock { $0 } } ?? false))
+    }
+
+    @Test func throwingFactoryRemovesBundle() async throws {
+        struct Boom: Error {}
+        let session = CaptureSession(cursorLocation: { CGPoint(x: 50, y: 50) })
+        let folder = Synthetic.temporaryFolder()
+        await #expect(throws: Boom.self) {
+            try await session.start(config: config, in: folder) { _ in throw Boom() }
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+        #expect(await session.state == .idle)
+    }
 }
 
 @Suite struct FrameRouterTests {
@@ -142,8 +270,8 @@ final class FakeClock: Sendable {
     }
 
     @Test func detachedRouterDropsFrames() {
-        let router = FrameRouter(captureRect: .zero) { nil }
+        let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100)) { CGPoint(x: 50, y: 50) }
         router.receive(Synthetic.video(width: 8, height: 8, pts: .zero, rgb: (0, 0, 0)), kind: .screen)
-        #expect(router.cursor == CursorTrack())
+        #expect(router.cursor.samples.isEmpty)
     }
 }
