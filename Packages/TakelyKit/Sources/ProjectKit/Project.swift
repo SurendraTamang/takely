@@ -68,7 +68,7 @@ public struct Project: Codable, Sendable, Equatable {
     public struct Segment: Codable, Sendable, Equatable {
         public var file: String
         public var duration: Double
-        /// Track kinds in track-ID order (writer inputs are added in this order).
+        /// Track kinds actually written, in track-ID order (empty inputs are omitted from the file).
         public var tracks: [TrackKind]
 
         public init(file: String, duration: Double, tracks: [TrackKind]) {

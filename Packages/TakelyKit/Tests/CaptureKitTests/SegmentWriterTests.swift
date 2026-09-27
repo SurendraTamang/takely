@@ -108,4 +108,24 @@ import Testing
         _ = try await writer.finish(at: Synthetic.seconds(1001))
         #expect(writer.failure == nil)
     }
+
+    @Test func recordsOnlyWrittenTracks() async throws {
+        let url = Synthetic.temporaryFolder().appending(path: "segment.mov")
+        let writer = try SegmentWriter(url: url, config: config)
+        for i in 0..<30 {
+            let t = 1000 + Double(i) / 30
+            writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(t), rgb: (255, 0, 0)), as: .screen)
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        for i in 0..<47 {
+            let t = Synthetic.seconds(1000 + Double(i) * 1024 / 48_000)
+            writer.append(Synthetic.audio(pts: t), as: .mic)
+        }
+        _ = try await writer.finish(at: Synthetic.seconds(1001))
+        #expect(writer.writtenTracks == [.screen, .mic])
+        let tracks = try await AVURLAsset(url: url).load(.tracks)
+        let sorted = tracks.sorted { $0.trackID < $1.trackID }
+        #expect(sorted.count == 2)
+        #expect(sorted.map(\.mediaType) == [.video, .audio])
+    }
 }

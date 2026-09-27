@@ -126,7 +126,9 @@ public actor CaptureSession {
         }
         for source in sources { await source.stop() }
         project?.status = .finished
-        if let project { try? bundle.write(project) }
+        if let project {
+            do { try bundle.write(project) } catch { log.error("writing final manifest failed: \(error.localizedDescription)") }
+        }
         reset()
         return bundle
     }
@@ -136,7 +138,7 @@ public actor CaptureSession {
         router.attach(nil, offset: project?.duration ?? 0)
         self.writer = nil
         if let duration = try await writer.finish(at: now()) {
-            project?.segments.append(.init(file: writer.url.lastPathComponent, duration: duration, tracks: writer.tracks))
+            project?.segments.append(.init(file: writer.url.lastPathComponent, duration: duration, tracks: writer.writtenTracks))
         }
         if let project { try bundle.write(project) }
         try bundle.write(router.cursor)

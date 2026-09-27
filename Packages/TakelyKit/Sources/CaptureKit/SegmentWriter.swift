@@ -27,6 +27,7 @@ public final class SegmentWriter: @unchecked Sendable {
         var dropped: [TrackKind: Int] = [:]
         /// Last appended PTS per video track; AVAssetWriter fails the whole file on a non-increasing one.
         var lastVideoPTS: [TrackKind: CMTime] = [:]
+        var written: Set<TrackKind> = []
     }
 
     // ponytail: one lock across all tracks; split per input if signposts show contention.
@@ -60,6 +61,9 @@ public final class SegmentWriter: @unchecked Sendable {
     /// Set once the underlying writer fails; the segment then accepts nothing more.
     public var failure: (any Error)? { state.withLock { $0.failure } }
 
+    /// Tracks that received at least one sample, in track-ID order. AVAssetWriter omits empty inputs from the file.
+    public var writtenTracks: [TrackKind] { state.withLock { s in tracks.filter { s.written.contains($0) } } }
+
     /// Appends `buffer`. The session starts at the first screen frame; earlier buffers are discarded.
     @discardableResult
     public func append(_ buffer: CMSampleBuffer, as kind: TrackKind) -> Bool {
@@ -81,6 +85,7 @@ public final class SegmentWriter: @unchecked Sendable {
                 return false
             }
             if kind.isVideo { s.lastVideoPTS[kind] = buffer.presentationTimeStamp }
+            s.written.insert(kind)
             if kind == .screen { s.lastScreen = UncheckedBuffer(buffer: buffer) }
             return true
         }

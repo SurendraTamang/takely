@@ -81,6 +81,7 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         let project = try bundle.readProject()
         #expect(project.status == .finished)
         #expect(project.segments.map(\.file) == ["segment-000.mov"])
+        #expect(project.segments.first?.tracks == [.screen])
         #expect(abs(project.duration - 1) < 0.001)
         #expect(!source.started.withLock { $0 })
         #expect(await session.state == .idle)
