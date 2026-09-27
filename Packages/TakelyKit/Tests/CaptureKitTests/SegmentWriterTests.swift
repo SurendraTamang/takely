@@ -96,4 +96,16 @@ import Testing
         #expect(writer.append(Synthetic.audio(pts: Synthetic.seconds(999.99)), as: .system))
         #expect(!writer.append(Synthetic.audio(pts: Synthetic.seconds(999.9)), as: .mic))
     }
+
+    @Test func rejectsNonIncreasingVideoPTS() async throws {
+        let url = Synthetic.temporaryFolder().appending(path: "segment.mov")
+        let writer = try SegmentWriter(url: url, config: config)
+        #expect(writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(1000), rgb: (255, 0, 0)), as: .screen))
+        #expect(writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(1000.1), rgb: (255, 0, 0)), as: .screen))
+        #expect(!writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(1000.1), rgb: (255, 0, 0)), as: .screen))
+        #expect(!writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(1000.05), rgb: (255, 0, 0)), as: .screen))
+        #expect(writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(1000.2), rgb: (255, 0, 0)), as: .screen))
+        _ = try await writer.finish(at: Synthetic.seconds(1001))
+        #expect(writer.failure == nil)
+    }
 }

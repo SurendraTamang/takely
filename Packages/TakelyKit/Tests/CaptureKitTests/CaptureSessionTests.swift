@@ -103,7 +103,7 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         try await source.emitScreen(from: 150, seconds: 0.5)  // dropped while paused
         clock.set(200)
         try await session.resume()
-        try await source.emitScreen(from: 200.01, seconds: 2)
+        try await source.emitScreen(from: 200, seconds: 2)
         clock.set(202)
         let bundle = try await session.stop()
 

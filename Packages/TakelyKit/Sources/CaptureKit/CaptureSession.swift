@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreMedia
 import Foundation
+import OSLog
 import ProjectKit
 
 /// Owns one recording: bundle, segments, sources. `recording ⇄ paused`, then `stop()`.
@@ -23,6 +24,7 @@ public actor CaptureSession {
     private var nextSegmentIndex = 0
     /// The tail of the serialized operation queue; each new operation waits for this to finish.
     private var tail: Task<Void, Never>?
+    private let log = Logger(subsystem: "app.takely", category: "capture")
 
     public init(
         now: @escaping @Sendable () -> CMTime = { CMClockGetTime(CMClockGetHostTimeClock()) },
@@ -60,6 +62,7 @@ public actor CaptureSession {
     }
 
     /// Stops sources, finalizes the manifest and returns the bundle.
+    /// A failure closing the last segment is logged; earlier segments are kept.
     public func stop() async throws -> ProjectBundle {
         try await serialized { session in try await session.stopNow() }
     }
@@ -101,8 +104,8 @@ public actor CaptureSession {
 
     private func pauseNow() async throws {
         guard state == .recording else { throw CaptureError.invalidState }
+        defer { state = .paused }
         try await closeSegment()
-        state = .paused
     }
 
     private func resumeNow() async throws {
@@ -118,10 +121,12 @@ public actor CaptureSession {
 
     private func stopNow() async throws -> ProjectBundle {
         guard state != .idle, let bundle else { throw CaptureError.invalidState }
-        if state == .recording { try await closeSegment() }
+        if state == .recording {
+            do { try await closeSegment() } catch { log.error("closing last segment failed: \(error.localizedDescription)") }
+        }
         for source in sources { await source.stop() }
         project?.status = .finished
-        if let project { try bundle.write(project) }
+        if let project { try? bundle.write(project) }
         reset()
         return bundle
     }

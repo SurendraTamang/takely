@@ -25,6 +25,8 @@ public final class SegmentWriter: @unchecked Sendable {
         var finished = false
         var failure: (any Error)?
         var dropped: [TrackKind: Int] = [:]
+        /// Last appended PTS per video track; AVAssetWriter fails the whole file on a non-increasing one.
+        var lastVideoPTS: [TrackKind: CMTime] = [:]
     }
 
     // ponytail: one lock across all tracks; split per input if signposts show contention.
@@ -69,6 +71,7 @@ public final class SegmentWriter: @unchecked Sendable {
                 s.start = buffer.presentationTimeStamp
             }
             guard let start = s.start, Self.overlapsSession(buffer, kind: kind, start: start) else { return false }
+            if kind.isVideo, let last = s.lastVideoPTS[kind], buffer.presentationTimeStamp <= last { return false }
             guard input.isReadyForMoreMediaData, input.append(buffer) else {
                 if writer.status == .failed {
                     s.failure = writer.error ?? CaptureError.writerFailed("writer failed")
@@ -77,6 +80,7 @@ public final class SegmentWriter: @unchecked Sendable {
                 }
                 return false
             }
+            if kind.isVideo { s.lastVideoPTS[kind] = buffer.presentationTimeStamp }
             if kind == .screen { s.lastScreen = UncheckedBuffer(buffer: buffer) }
             return true
         }

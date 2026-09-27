@@ -35,7 +35,10 @@ public final class FrameRouter: Sendable {
 
     public func receive(_ buffer: CMSampleBuffer, kind: TrackKind) {
         let (writer, offset) = state.withLock { s -> (SegmentWriter?, Double) in
-            if kind == .screen { s.lastScreen = UncheckedBuffer(buffer: buffer) }
+            // Only keep the newest screen frame, so `prime`'s retimed copy can't clobber a newer live one.
+            if kind == .screen, s.lastScreen.map({ buffer.presentationTimeStamp > $0.buffer.presentationTimeStamp }) ?? true {
+                s.lastScreen = UncheckedBuffer(buffer: buffer)
+            }
             return (s.writer, s.offset)
         }
         guard let writer, writer.append(buffer, as: kind), kind == .screen,
