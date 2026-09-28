@@ -7,10 +7,12 @@ public struct Exporter: Sendable {
 
     public func export(_ bundle: ProjectBundle, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
         let project = try bundle.readProject()
+        guard !project.segments.isEmpty else { throw RenderError.emptyRecording }
         let cursorTrack = try bundle.readCursor()
         let renderer = FrameRenderer(project: project, cursor: cursorTrack)
         let composition = AVMutableComposition()
         var tracks: [TrackKind: AVMutableCompositionTrack] = [:]
+        var cameraCoverage: [CMTimeRange] = []
         var cursor = CMTime.zero
 
         for segment in project.segments {
@@ -23,19 +25,23 @@ public struct Exporter: Sendable {
             for (kind, source) in zip(segment.tracks, sources) {
                 let range = try await source.load(.timeRange)
                 let end = CMTimeMinimum(range.end, segmentEnd)
-                guard end > range.start else { continue }
+                guard end > range.start, kind != .camera || project.camera.enabled else { continue }
                 let track = try tracks[kind] ?? addTrack(kind, to: composition)
                 tracks[kind] = track
                 try track.insertTimeRange(CMTimeRange(start: range.start, end: end), of: source, at: cursor + range.start)
+                if kind == .camera {
+                    cameraCoverage.append(CMTimeRange(start: cursor + range.start, end: cursor + end))
+                }
             }
             cursor = cursor + segmentEnd
         }
         guard let screenTrack = tracks[.screen] else { throw RenderError.trackMismatch("no screen track") }
 
-        let audioTracks = [TrackKind.system, .mic].compactMap { tracks[$0] }
+        let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
         let passthrough =
             !Exporter.needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
-            && audioTracks.count <= 1
+            && presentAudioKinds.count <= 1
+            && !Exporter.audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
         let preset =
             passthrough
             ? AVAssetExportPresetPassthrough
@@ -49,7 +55,8 @@ public struct Exporter: Sendable {
             let instruction = TakelyInstruction(
                 timeRange: CMTimeRange(start: .zero, duration: composition.duration),
                 screenTrackID: screenTrack.trackID,
-                cameraTrackID: project.camera.enabled ? tracks[.camera]?.trackID : nil,
+                cameraTrackID: tracks[.camera]?.trackID,
+                cameraCoverage: cameraCoverage,
                 renderer: renderer
             )
             var configuration = AVVideoComposition.Configuration(
@@ -65,14 +72,13 @@ public struct Exporter: Sendable {
             session.videoComposition = AVVideoComposition(configuration: configuration)
 
             let mix = AVMutableAudioMix()
-            mix.inputParameters = [(TrackKind.system, project.audio.systemVolume), (.mic, project.audio.micVolume)]
-                .compactMap { kind, volume in
-                    tracks[kind].map {
-                        let parameters = AVMutableAudioMixInputParameters(track: $0)
-                        parameters.setVolume(volume, at: .zero)
-                        return parameters
-                    }
+            mix.inputParameters = [TrackKind.system, .mic].compactMap { kind in
+                tracks[kind].map {
+                    let parameters = AVMutableAudioMixInputParameters(track: $0)
+                    parameters.setVolume(Exporter.volume(for: kind, in: project), at: .zero)
+                    return parameters
                 }
+            }
             session.audioMix = mix
         }
 
@@ -95,6 +101,20 @@ public struct Exporter: Sendable {
         (project.camera.enabled && hasCameraTrack)
             || (project.effects.cursorHighlight && !cursor.samples.isEmpty)
             || (project.effects.clickRipples && !cursor.clicks.isEmpty)
+    }
+
+    /// The configured volume for an audio track kind; non-audio kinds are unaffected (1).
+    static func volume(for kind: TrackKind, in project: Project) -> Float {
+        switch kind {
+        case .system: project.audio.systemVolume
+        case .mic: project.audio.micVolume
+        case .screen, .camera: 1
+        }
+    }
+
+    /// Whether any audio track actually present has a non-default volume, forcing a re-encode even without overlays.
+    static func audioNeedsMixing(project: Project, presentAudio: [TrackKind]) -> Bool {
+        presentAudio.contains { volume(for: $0, in: project) != 1 }
     }
 
     private func addTrack(_ kind: TrackKind, to composition: AVMutableComposition) throws -> AVMutableCompositionTrack {

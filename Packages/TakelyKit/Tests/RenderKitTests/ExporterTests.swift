@@ -52,6 +52,46 @@ import Testing
         return bundle
     }
 
+    struct SegSpec {
+        var seconds: Double
+        var tracks: [TrackKind]
+        var cameraFrom: Double = 0
+    }
+
+    /// Writes a bundle from heterogeneous per-segment track specs (red screen, green camera from `cameraFrom`).
+    func makeBundle(segments specs: [SegSpec], cameraEnabled: Bool) async throws -> ProjectBundle {
+        let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
+        var segments: [Project.Segment] = []
+        for (index, spec) in specs.enumerated() {
+            let file = ProjectBundle.segmentFileName(index: index)
+            let config = WriterConfig(
+                tracks: spec.tracks, screenSize: PixelSize(width: 320, height: 200), cameraSize: PixelSize(width: 160, height: 90),
+                codec: .h264, fps: 30, videoBitrate: 1_000_000)
+            let writer = try SegmentWriter(url: bundle.segmentURL(file), config: config)
+            let base = 1000.0 * Double(index + 1)
+            for i in 0..<Int(spec.seconds * 30) {
+                let t = Double(i) / 30
+                let pts = Synthetic.seconds(base + t)
+                writer.append(Synthetic.video(width: 320, height: 200, pts: pts, rgb: (255, 0, 0)), as: .screen)
+                if spec.tracks.contains(.camera), t >= spec.cameraFrom {
+                    writer.append(Synthetic.video(width: 160, height: 90, pts: pts, rgb: (0, 255, 0)), as: .camera)
+                }
+                try await Task.sleep(for: .milliseconds(2))
+            }
+            let duration = try #require(try await writer.finish(at: Synthetic.seconds(base + spec.seconds)))
+            segments.append(.init(file: file, duration: duration, tracks: writer.writtenTracks))
+        }
+        try bundle.write(
+            Project(
+                status: .finished,
+                capture: .init(target: .display, pixelSize: PixelSize(width: 320, height: 200), fps: 30, codec: .h264),
+                segments: segments,
+                camera: .init(enabled: cameraEnabled, size: 0.3, keyframes: [BubbleKeyframe(t: 0, x: 0.5, y: 0.5)]),
+                effects: .init(cursorHighlight: false, clickRipples: false)
+            ))
+        return bundle
+    }
+
     func rgb(at seconds: Double, x: Int, y: Int, in url: URL) async throws -> (Int, Int, Int) {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         generator.requestedTimeToleranceBefore = .zero
@@ -151,6 +191,57 @@ import Testing
         )
         let cursor = CursorTrack(clicks: [ClickEvent(t: 0, x: 0.5, y: 0.5)])
         #expect(Exporter.needsCompositing(project: project, cursor: cursor, hasCameraTrack: false))
+    }
+
+    @Test func hiddenCameraIsNotExported() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 1, tracks: [.screen, .camera])], cameraEnabled: false)
+        let url = try await Exporter().export(bundle)
+        let videos = try await AVURLAsset(url: url).loadTracks(withMediaType: .video)
+        #expect(videos.count == 1, "video tracks in output: \(videos.count)")
+    }
+
+    @Test func bubbleDisappearsWhenCameraTrackEnds() async throws {
+        let bundle = try await makeBundle(
+            segments: [SegSpec(seconds: 1, tracks: [.screen, .camera]), SegSpec(seconds: 1, tracks: [.screen])], cameraEnabled: true)
+        let url = try await Exporter().export(bundle)
+        let after = try await rgb(at: 1.5, x: 160, y: 100, in: url)
+        #expect(after.0 > 180 && after.1 < 80, "bubble center after camera track ends \(after)")
+    }
+
+    @Test func emptyRecordingThrowsReadableError() async throws {
+        let bundle = try await makeBundle(segments: [], cameraEnabled: false)
+        do {
+            _ = try await Exporter().export(bundle)
+            Issue.record("expected throw")
+        } catch {
+            #expect(error.localizedDescription.contains("no video"), "description: \(error.localizedDescription)")
+        }
+    }
+
+    @Test func audioNeedsMixingWhenMicVolumeAdjusted() {
+        let project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 1, height: 1), fps: 30, codec: .h264),
+            camera: .init(enabled: false),
+            audio: .init(systemVolume: 1, micVolume: 0.5)
+        )
+        #expect(Exporter.audioNeedsMixing(project: project, presentAudio: [.mic]))
+    }
+
+    @Test func audioNeedsMixingIgnoresAbsentTracks() {
+        let project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 1, height: 1), fps: 30, codec: .h264),
+            camera: .init(enabled: false),
+            audio: .init(systemVolume: 0.5, micVolume: 1)
+        )
+        #expect(!Exporter.audioNeedsMixing(project: project, presentAudio: [.mic]))
+    }
+
+    @Test func audioNeedsMixingFalseAtDefaultVolumes() {
+        let project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 1, height: 1), fps: 30, codec: .h264),
+            camera: .init(enabled: false)
+        )
+        #expect(!Exporter.audioNeedsMixing(project: project, presentAudio: [.system, .mic]))
     }
 }
 

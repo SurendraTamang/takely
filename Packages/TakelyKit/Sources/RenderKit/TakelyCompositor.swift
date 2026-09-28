@@ -11,21 +11,37 @@ final class TakelyInstruction: NSObject, AVVideoCompositionInstructionProtocol, 
     let passthroughTrackID = kCMPersistentTrackID_Invalid
     let screenTrackID: CMPersistentTrackID
     let cameraTrackID: CMPersistentTrackID?
+    /// Time ranges the camera track actually covers; outside these, AVFoundation would otherwise repeat its last frame.
+    let cameraCoverage: [CMTimeRange]
     let renderer: FrameRenderer
 
-    init(timeRange: CMTimeRange, screenTrackID: CMPersistentTrackID, cameraTrackID: CMPersistentTrackID?, renderer: FrameRenderer) {
+    init(
+        timeRange: CMTimeRange, screenTrackID: CMPersistentTrackID, cameraTrackID: CMPersistentTrackID?,
+        cameraCoverage: [CMTimeRange], renderer: FrameRenderer
+    ) {
         self.timeRange = timeRange
         self.screenTrackID = screenTrackID
         self.cameraTrackID = cameraTrackID
+        self.cameraCoverage = cameraCoverage
         self.renderer = renderer
         requiredSourceTrackIDs = ([screenTrackID] + (cameraTrackID.map { [$0] } ?? [])).map { NSNumber(value: $0) }
     }
 }
 
-enum RenderError: Error {
+enum RenderError: Error, LocalizedError {
     case missingFrame
     case exportUnavailable
     case trackMismatch(String)
+    case emptyRecording
+
+    var errorDescription: String? {
+        switch self {
+        case .missingFrame: "A video frame was missing during export."
+        case .exportUnavailable: "This Mac can't export with the chosen settings."
+        case .trackMismatch(let detail): "The recording's files don't match its manifest (\(detail))."
+        case .emptyRecording: "This recording has no video to export."
+        }
+    }
 }
 
 /// `AVVideoCompositing` that delegates to `FrameRenderer`.
@@ -37,7 +53,7 @@ final class TakelyCompositor: NSObject, AVVideoCompositing, @unchecked Sendable 
         kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
     ]
 
-    /// Last screen frame, reused when the screen track has a gap (static screen at a segment end).
+    /// Last screen frame, reused across sub-frame rounding gaps between segments.
     private let lastScreen = Mutex<UncheckedPixelBuffer?>(nil)
 
     func renderContextChanged(_ newRenderContext: AVVideoCompositionRenderContext) {}
@@ -59,9 +75,15 @@ final class TakelyCompositor: NSObject, AVVideoCompositing, @unchecked Sendable 
             request.finish(with: RenderError.missingFrame)
             return
         }
-        let camera = instruction.cameraTrackID
-            .flatMap { request.sourceFrame(byTrackID: $0) }
-            .map { CIImage(cvPixelBuffer: $0) }
+        let camera: CIImage?
+        if let cameraTrackID = instruction.cameraTrackID,
+            instruction.cameraCoverage.contains(where: { $0.containsTime(request.compositionTime) }),
+            let frame = request.sourceFrame(byTrackID: cameraTrackID)
+        {
+            camera = CIImage(cvPixelBuffer: frame)
+        } else {
+            camera = nil
+        }
         let image = instruction.renderer.compose(
             screen: CIImage(cvPixelBuffer: screen), camera: camera, at: request.compositionTime.seconds)
         instruction.renderer.context.render(image, to: output)
