@@ -61,7 +61,6 @@ import Testing
     @Test func disabledCameraShowsScreenOnly() {
         let renderer = FrameRenderer(project: project(camera: false), cursor: CursorTrack(), context: context)
         #expect(pixel(renderer.compose(screen: red, camera: green, at: 0), 200, 125) == [255, 0, 0, 255])
-        #expect(!renderer.hasOverlays)
     }
 
     @Test func cursorHighlightTintsAroundCursor() {

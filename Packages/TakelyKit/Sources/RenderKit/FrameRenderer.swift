@@ -18,11 +18,6 @@ public final class FrameRenderer: Sendable {
         canvas = CGRect(x: 0, y: 0, width: project.capture.pixelSize.width, height: project.capture.pixelSize.height)
     }
 
-    /// `true` when output differs from the raw screen track.
-    public var hasOverlays: Bool {
-        project.camera.enabled || project.effects.cursorHighlight || project.effects.clickRipples
-    }
-
     public func compose(screen: CIImage, camera: CIImage?, at t: Double) -> CIImage {
         var image = screen
         if project.effects.cursorHighlight, let p = cursor.position(at: t) {

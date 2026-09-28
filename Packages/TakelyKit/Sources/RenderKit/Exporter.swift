@@ -82,8 +82,11 @@ public struct Exporter: Sendable {
             session.audioMix = mix
         }
 
-        let output = bundle.exportsURL.appending(path: "\(bundle.name).mp4")
-        try? FileManager.default.removeItem(at: output)
+        // Export under a temporary name and move it into place only when complete, so a crash mid-export
+        // never leaves a partial MP4 that looks finished (recovery keys on `hasExport`).
+        let output = bundle.exportURL
+        let partial = bundle.exportsURL.appending(path: ".\(bundle.name).partial.mp4")
+        try? FileManager.default.removeItem(at: partial)
         let observed = ObservedSession(session: session)
         let observer = Task {
             for await state in observed.session.states(updateInterval: 0.25) {
@@ -91,7 +94,9 @@ public struct Exporter: Sendable {
             }
         }
         defer { observer.cancel() }
-        try await session.export(to: output, as: .mp4)
+        try await session.export(to: partial, as: .mp4)
+        try? FileManager.default.removeItem(at: output)
+        try FileManager.default.moveItem(at: partial, to: output)
         progress(1)
         return output
     }

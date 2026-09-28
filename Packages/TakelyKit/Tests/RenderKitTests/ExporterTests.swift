@@ -250,3 +250,14 @@ final class ProgressLog: Sendable {
     func record(_ value: Double) { values.withLock { $0.append(value) } }
     var last: Double? { values.withLock { $0.last } }
 }
+
+@Suite struct ExportPlacementTests {
+    @Test func exportLandsAtBundleExportURLWithNoPartialLeft() async throws {
+        let bundle = try await ExporterTests().makeBundle(durations: [1], camera: false, audio: false, effects: false)
+        let url = try await Exporter().export(bundle)
+        #expect(url == bundle.exportURL)
+        #expect(bundle.hasExport)
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: bundle.exportsURL.path).filter { $0.contains("partial") }
+        #expect(leftovers.isEmpty)
+    }
+}
