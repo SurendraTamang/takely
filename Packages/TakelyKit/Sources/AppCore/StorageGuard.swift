@@ -27,10 +27,19 @@ public protocol DiskSpace: Sendable {
 public struct SystemDiskSpace: DiskSpace {
     public init() {}
 
-    /// Counts purgeable space macOS frees on demand, so recordings don't stop early.
+    /// Counts purgeable space macOS frees on demand, so recordings don't stop early. Reads fresh values every time:
+    /// `URL` caches resource values, which would freeze the 5 s storage check.
     public func freeBytes(at url: URL) throws -> Int64 {
-        let values = try url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        return values.volumeAvailableCapacityForImportantUsage ?? 0
+        var url = url
+        url.removeAllCachedResourceValues()
+        let values = try url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+        return Self.bestAvailable(importantUsage: values.volumeAvailableCapacityForImportantUsage, plain: values.volumeAvailableCapacity)
+    }
+
+    /// Some file systems (e.g. exFAT) report 0 for "important usage" capacity; use the plain value then.
+    static func bestAvailable(importantUsage: Int64?, plain: Int?) -> Int64 {
+        if let importantUsage, importantUsage > 0 { return importantUsage }
+        return Int64(plain ?? 0)
     }
 
     public func usedBytes(at url: URL) -> Int64 {
