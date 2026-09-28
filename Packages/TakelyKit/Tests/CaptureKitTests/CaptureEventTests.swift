@@ -62,6 +62,15 @@ struct StreamBroke: Error {}
         _ = try await session.stop()
         #expect(second.id == first.id + 1)
     }
+
+    @Test(.timeLimit(.minutes(1))) func eventsEndWhenTheSessionIsReleased() async {
+        var session: CaptureSession? = CaptureSession(cursorLocation: { nil })
+        let events = session!.events
+        session = nil
+        var received = 0
+        for await _ in events { received += 1 }  // must finish, not hang
+        #expect(received == 0)
+    }
 }
 
 @Suite struct CursorDiscardTests {

@@ -24,7 +24,8 @@ public actor CaptureSession {
     private var nextSegmentIndex = 0
     /// Increments on every start; tags `events` so a late event can't affect a newer recording.
     private var recordingID = 0
-    /// Stream failures and writer failures, for whoever runs the app's recording logic.
+    /// Stream failures and writer failures, for whoever runs the app's recording logic. Iterate it from
+    /// exactly one task: each event goes to only one consumer. It finishes when the session is released.
     public nonisolated let events: AsyncStream<CaptureEvent>
     private let eventSink: AsyncStream<CaptureEvent>.Continuation
     /// The tail of the serialized operation queue; each new operation waits for this to finish.
@@ -38,6 +39,10 @@ public actor CaptureSession {
         self.now = now
         self.cursorLocation = cursorLocation
         (events, eventSink) = AsyncStream.makeStream(of: CaptureEvent.self)
+    }
+
+    deinit {
+        eventSink.finish()
     }
 
     /// Runs `op` only after every previously enqueued operation has finished, so public calls
@@ -121,8 +126,15 @@ public actor CaptureSession {
         try bundle.writeSidecar(tracks: config.tracks, for: file)
         let sink = eventSink
         let id = recordingID
-        return try SegmentWriter(url: bundle.segmentURL(file), config: config.writerConfig) { error in
-            sink.yield(CaptureEvent(recordingID: id, kind: .writerFailed, error: error))
+        do {
+            return try SegmentWriter(url: bundle.segmentURL(file), config: config.writerConfig) { error in
+                sink.yield(CaptureEvent(recordingID: id, kind: .writerFailed, error: error))
+            }
+        } catch {
+            // Leave nothing behind, so a later resume can reuse this index.
+            try? FileManager.default.removeItem(at: bundle.sidecarURL(for: file))
+            try? FileManager.default.removeItem(at: bundle.segmentURL(file))
+            throw error
         }
     }
 
