@@ -260,4 +260,14 @@ final class ProgressLog: Sendable {
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: bundle.exportsURL.path).filter { $0.contains("partial") }
         #expect(leftovers.isEmpty)
     }
+
+    @Test func reExportReplacesThePreviousExport() async throws {
+        let bundle = try await ExporterTests().makeBundle(durations: [1], camera: false, audio: false, effects: false)
+        _ = try await Exporter().export(bundle)
+        let url = try await Exporter().export(bundle)  // e.g. Retry, or recovery re-exporting
+        #expect(url == bundle.exportURL)
+        #expect(bundle.hasExport)
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: bundle.exportsURL.path).filter { $0.contains("partial") }
+        #expect(leftovers.isEmpty)
+    }
 }
