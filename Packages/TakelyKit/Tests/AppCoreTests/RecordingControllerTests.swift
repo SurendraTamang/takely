@@ -78,7 +78,9 @@ final class FakeSession: RecordingSession {
 final class FakeExporter: Exporting {
     let failing = Mutex(false)
     let count = Mutex(0)
+    let delay = Mutex(Duration.zero)
     func export(_ bundle: ProjectBundle, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+        try await Task.sleep(for: delay.withLock { $0 })
         count.withLock { $0 += 1 }
         if failing.withLock({ $0 }) { throw Broke() }
         progress(1)
@@ -352,5 +354,30 @@ struct Harness {
         await h.controller.export(bundle)
         #expect(h.exporter.count.withLock { $0 } == 0)
         #expect(h.controller.errorMessage == "Finish the current recording first.")
+    }
+
+    @Test func systemQuitDoesNotWaitForAnExport() async {
+        let h = Harness()
+        h.exporter.delay.withLock { $0 = .milliseconds(300) }
+        await h.controller.start()
+        async let stopped: Void = h.controller.stop()
+        try? await Task.sleep(for: .milliseconds(30))
+        guard case .exporting = h.controller.phase else { Issue.record("expected exporting"); return }
+        let began = ContinuousClock.now
+        await h.controller.stopForQuit(system: true)
+        #expect(ContinuousClock.now - began < .milliseconds(150))  // returned without waiting for the export
+        await stopped
+    }
+
+    @Test func userQuitWaitsForTheExport() async {
+        let h = Harness()
+        h.exporter.delay.withLock { $0 = .milliseconds(150) }
+        await h.controller.start()
+        async let stopped: Void = h.controller.stop()
+        try? await Task.sleep(for: .milliseconds(30))
+        await h.controller.stopForQuit(system: false)
+        #expect(h.controller.phase == .idle)
+        #expect(h.exporter.count.withLock { $0 } == 1)
+        await stopped
     }
 }

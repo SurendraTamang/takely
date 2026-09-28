@@ -167,10 +167,28 @@ public final class RecordingController {
         }
     }
 
-    /// For quitting: waits for any running command (including an export), then stops; a system quit skips the export.
+    private var isExporting: Bool {
+        if case .exporting = phase { return true }
+        return false
+    }
+
+    /// Like `waitUntilIdle`, but an export in progress doesn't count: a system quit mustn't wait minutes for one.
+    private func waitForQuit() async {
+        while (isBusy || !pending.isEmpty || draining > 0) && !isExporting {
+            await withCheckedContinuation { idleWaiters.append($0) }
+        }
+    }
+
+    /// For quitting: waits for any running command, then stops. A user quit also waits for an export; a system
+    /// quit (logout/restart) doesn't, and skips exporting: the bundle is already saved and recovery offers it next launch.
     public func stopForQuit(system: Bool) async {
-        await waitUntilIdle()
-        if system { await stopForSystemQuit() } else { await stop() }
+        if system {
+            await waitForQuit()
+            if !isExporting { await stopForSystemQuit() }
+        } else {
+            await waitUntilIdle()
+            await stop()
+        }
     }
 
     // MARK: Events
@@ -221,6 +239,7 @@ public final class RecordingController {
 
     private func exportAndReport(_ bundle: ProjectBundle) async {
         phase = .exporting(0)
+        wakeWaiters()
         do {
             let url = try await exporter.export(bundle) { progress in
                 Task { @MainActor [weak self] in
@@ -263,7 +282,7 @@ public final class RecordingController {
     private func finishBusy() {
         isBusy = false
         guard !pending.isEmpty else {
-            resumeIdleWaiters()
+            wakeWaiters()
             return
         }
         let events = pending
@@ -272,12 +291,12 @@ public final class RecordingController {
         Task {
             for event in events { await handle(event) }
             draining -= 1
-            resumeIdleWaiters()
+            wakeWaiters()
         }
     }
 
-    private func resumeIdleWaiters() {
-        guard !isBusy, pending.isEmpty, draining == 0 else { return }
+    /// Wakes everyone waiting in `waitUntilIdle`/`waitForQuit`; each re-checks its own condition.
+    private func wakeWaiters() {
         let waiters = idleWaiters
         idleWaiters = []
         waiters.forEach { $0.resume() }
