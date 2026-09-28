@@ -10,20 +10,15 @@ public final class ScreenSource: NSObject, FrameSource, SCStreamOutput, SCStream
     private let filter: SCContentFilter
     private let configuration: SCStreamConfiguration
     private let router: FrameRouter
-    private let onError: @Sendable (any Error) -> Void
     private let videoQueue = DispatchQueue(label: "app.takely.capture.screen", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "app.takely.capture.audio", qos: .userInteractive)
     private var stream: SCStream?
     private let log = Logger(subsystem: "app.takely", category: "capture")
 
-    public init(
-        filter: SCContentFilter, config: RecordingConfig, sourceRect: CGRect?, router: FrameRouter,
-        onError: @escaping @Sendable (any Error) -> Void
-    ) {
+    public init(filter: SCContentFilter, config: RecordingConfig, sourceRect: CGRect?, router: FrameRouter) {
         self.filter = filter
         self.configuration = Self.streamConfiguration(for: config, sourceRect: sourceRect)
         self.router = router
-        self.onError = onError
     }
 
     public static func streamConfiguration(for config: RecordingConfig, sourceRect: CGRect?) -> SCStreamConfiguration {
@@ -85,7 +80,8 @@ public final class ScreenSource: NSObject, FrameSource, SCStreamOutput, SCStream
 
     public func stream(_ stream: SCStream, didStopWithError error: any Error) {
         log.error("stream stopped: \(error.localizedDescription)")
-        onError(error)
+        let userInitiated = (error as? SCStreamError)?.code == .userStopped
+        router.reportStreamStopped(error, userInitiated: userInitiated)
     }
 
     /// Frames with pixels: `.complete`, and `.started` (the first frame). `.idle` etc. carry none.

@@ -17,11 +17,32 @@ public final class FrameRouter: Sendable {
     private let state = Mutex(State())
     private let captureRect: CGRect
     private let cursorLocation: @Sendable () -> CGPoint?
+    private let report: @Sendable (CaptureEvent.Kind, any Error) -> Void
 
-    /// - Parameter cursorLocation: global cursor position in points, origin top-left.
-    public init(captureRect: CGRect, cursorLocation: @escaping @Sendable () -> CGPoint? = { CGEvent(source: nil)?.location }) {
+    /// - Parameters:
+    ///   - cursorLocation: global cursor position in points, origin top-left.
+    ///   - report: forwards stream failures to the owning session's event stream.
+    public init(
+        captureRect: CGRect,
+        cursorLocation: @escaping @Sendable () -> CGPoint? = { CGEvent(source: nil)?.location },
+        report: @escaping @Sendable (CaptureEvent.Kind, any Error) -> Void = { _, _ in }
+    ) {
         self.captureRect = captureRect
         self.cursorLocation = cursorLocation
+        self.report = report
+    }
+
+    /// Called by a source whose stream stopped on its own.
+    public func reportStreamStopped(_ error: any Error, userInitiated: Bool) {
+        report(.streamStopped(userInitiated: userInitiated), error)
+    }
+
+    /// Drops cursor samples and clicks at or after `t`, used when a segment starting at `t` couldn't be saved.
+    func discardCursor(from t: Double) {
+        state.withLock { s in
+            s.cursor.samples.removeAll { $0.t >= t }
+            s.cursor.clicks.removeAll { $0.t >= t }
+        }
     }
 
     func attach(_ writer: SegmentWriter?, offset: Double) {

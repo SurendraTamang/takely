@@ -22,6 +22,11 @@ public actor CaptureSession {
     private var sources: [any FrameSource] = []
     private var writer: SegmentWriter?
     private var nextSegmentIndex = 0
+    /// Increments on every start; tags `events` so a late event can't affect a newer recording.
+    private var recordingID = 0
+    /// Stream failures and writer failures, for whoever runs the app's recording logic.
+    public nonisolated let events: AsyncStream<CaptureEvent>
+    private let eventSink: AsyncStream<CaptureEvent>.Continuation
     /// The tail of the serialized operation queue; each new operation waits for this to finish.
     private var tail: Task<Void, Never>?
     private let log = Logger(subsystem: "app.takely", category: "capture")
@@ -32,6 +37,7 @@ public actor CaptureSession {
     ) {
         self.now = now
         self.cursorLocation = cursorLocation
+        (events, eventSink) = AsyncStream.makeStream(of: CaptureEvent.self)
     }
 
     /// Runs `op` only after every previously enqueued operation has finished, so public calls
@@ -47,9 +53,11 @@ public actor CaptureSession {
     }
 
     /// Creates a bundle in `folder`, opens segment 0 and starts all sources.
-    /// Returns the router so the caller can forward clicks to it.
+    /// The handle's router is for forwarding clicks; its `id` tags this recording's `events`.
     @discardableResult
-    public func start(config: RecordingConfig, in folder: URL, sources makeSources: @escaping SourceFactory) async throws -> FrameRouter {
+    public func start(config: RecordingConfig, in folder: URL, sources makeSources: @escaping SourceFactory) async throws
+        -> RecordingHandle
+    {
         try await serialized { session in try await session.startNow(config: config, in: folder, sources: makeSources) }
     }
 
@@ -67,19 +75,24 @@ public actor CaptureSession {
         try await serialized { session in try await session.stopNow() }
     }
 
-    private func startNow(config: RecordingConfig, in folder: URL, sources makeSources: SourceFactory) async throws -> FrameRouter {
+    private func startNow(config: RecordingConfig, in folder: URL, sources makeSources: SourceFactory) async throws -> RecordingHandle {
         guard state == .idle else { throw CaptureError.invalidState }
         let bundle = try ProjectBundle.create(in: folder)
         let project = Project(
             capture: .init(target: config.target, pixelSize: config.outputSize, fps: config.fps, codec: config.codec),
             camera: .init(enabled: config.camera)
         )
-        let router = FrameRouter(captureRect: config.captureRect, cursorLocation: cursorLocation)
+        recordingID += 1
+        let id = recordingID
+        let sink = eventSink
+        let router = FrameRouter(captureRect: config.captureRect, cursorLocation: cursorLocation) { kind, error in
+            sink.yield(CaptureEvent(recordingID: id, kind: kind, error: error))
+        }
         var writer: SegmentWriter?
         var sources: [any FrameSource] = []
         do {
             try bundle.write(project)
-            let w = try SegmentWriter(url: bundle.segmentURL(ProjectBundle.segmentFileName(index: 0)), config: config.writerConfig)
+            let w = try openSegment(index: 0, in: bundle, config: config)
             writer = w
             router.attach(w, offset: 0)
             sources = try makeSources(router)
@@ -99,7 +112,18 @@ public actor CaptureSession {
         self.writer = writer
         self.nextSegmentIndex = 1
         state = .recording
-        return router
+        return RecordingHandle(id: id, bundle: bundle, router: router)
+    }
+
+    /// Writes the segment's sidecar, then opens its writer; writer failures become `.writerFailed` events.
+    private func openSegment(index: Int, in bundle: ProjectBundle, config: RecordingConfig) throws -> SegmentWriter {
+        let file = ProjectBundle.segmentFileName(index: index)
+        try bundle.writeSidecar(tracks: config.tracks, for: file)
+        let sink = eventSink
+        let id = recordingID
+        return try SegmentWriter(url: bundle.segmentURL(file), config: config.writerConfig) { error in
+            sink.yield(CaptureEvent(recordingID: id, kind: .writerFailed, error: error))
+        }
     }
 
     private func pauseNow() async throws {
@@ -110,8 +134,7 @@ public actor CaptureSession {
 
     private func resumeNow() async throws {
         guard state == .paused, let bundle, let project, let config, let router else { throw CaptureError.invalidState }
-        let index = nextSegmentIndex
-        let writer = try SegmentWriter(url: bundle.segmentURL(ProjectBundle.segmentFileName(index: index)), config: config.writerConfig)
+        let writer = try openSegment(index: nextSegmentIndex, in: bundle, config: config)
         router.attach(writer, offset: project.duration)
         router.prime(at: now())
         self.writer = writer
@@ -135,11 +158,21 @@ public actor CaptureSession {
 
     private func closeSegment() async throws {
         guard let writer, let router, let bundle else { return }
-        router.attach(nil, offset: project?.duration ?? 0)
+        let offset = project?.duration ?? 0
+        router.attach(nil, offset: offset)
         self.writer = nil
-        if let duration = try await writer.finish(at: now()) {
-            project?.segments.append(.init(file: writer.url.lastPathComponent, duration: duration, tracks: writer.writtenTracks))
+        let file = writer.url.lastPathComponent
+        do {
+            if let duration = try await writer.finish(at: now()) {
+                project?.segments.append(.init(file: file, duration: duration, tracks: writer.writtenTracks))
+            }
+        } catch {
+            // The segment isn't in the manifest, so its cursor samples would overlap the next segment's times.
+            router.discardCursor(from: offset)
+            throw error
         }
+        let dropped = writer.droppedFrames
+        if !dropped.isEmpty { log.info("\(file) dropped frames: \(String(describing: dropped))") }
         if let project { try bundle.write(project) }
         try bundle.write(router.cursor)
     }

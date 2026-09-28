@@ -28,6 +28,7 @@ public final class SegmentWriter: @unchecked Sendable {
     private let writer: AVAssetWriter
     private let inputs: [TrackKind: AVAssetWriterInput]
     private let frameDuration: CMTime
+    private let onFailure: @Sendable (any Error) -> Void
 
     private struct State {
         var start: CMTime?
@@ -43,8 +44,10 @@ public final class SegmentWriter: @unchecked Sendable {
     // ponytail: one lock across all tracks; split per input if signposts show contention.
     private let state = Mutex(State())
 
-    public init(url: URL, config: WriterConfig) throws {
+    /// - Parameter onFailure: called once, off the lock, the first time the writer fails.
+    public init(url: URL, config: WriterConfig, onFailure: @escaping @Sendable (any Error) -> Void = { _ in }) throws {
         self.url = url
+        self.onFailure = onFailure
         self.tracks = config.tracks
         self.frameDuration = CMTime(value: 1, timescale: CMTimeScale(config.fps))
         writer = try AVAssetWriter(outputURL: url, fileType: .mov)
@@ -77,28 +80,41 @@ public final class SegmentWriter: @unchecked Sendable {
     /// Appends `buffer`. The session starts at the first screen frame; earlier buffers are discarded.
     @discardableResult
     public func append(_ buffer: CMSampleBuffer, as kind: TrackKind) -> Bool {
-        state.withLock { s in
-            guard !s.finished, s.failure == nil, let input = inputs[kind] else { return false }
+        let outcome = state.withLock { s -> AppendOutcome in
+            guard !s.finished, s.failure == nil, let input = inputs[kind] else { return .rejected }
             if s.start == nil {
-                guard kind == .screen, writer.status == .writing else { return false }
+                guard kind == .screen, writer.status == .writing else { return .rejected }
                 writer.startSession(atSourceTime: buffer.presentationTimeStamp)
                 s.start = buffer.presentationTimeStamp
             }
-            guard let start = s.start, Self.overlapsSession(buffer, kind: kind, start: start) else { return false }
-            if kind.isVideo, let last = s.lastVideoPTS[kind], buffer.presentationTimeStamp <= last { return false }
+            guard let start = s.start, Self.overlapsSession(buffer, kind: kind, start: start) else { return .rejected }
+            if kind.isVideo, let last = s.lastVideoPTS[kind], buffer.presentationTimeStamp <= last { return .rejected }
             guard input.isReadyForMoreMediaData, input.append(buffer) else {
                 if writer.status == .failed {
-                    s.failure = writer.error ?? CaptureError.writerFailed("writer failed")
-                } else {
-                    s.dropped[kind, default: 0] += 1
+                    let error = writer.error ?? CaptureError.writerFailed("writer failed")
+                    s.failure = error
+                    return .failed(error)
                 }
-                return false
+                s.dropped[kind, default: 0] += 1
+                return .rejected
             }
             if kind.isVideo { s.lastVideoPTS[kind] = buffer.presentationTimeStamp }
             s.written.insert(kind)
             if kind == .screen { s.lastScreen = UncheckedBuffer(buffer: buffer) }
-            return true
+            return .appended
         }
+        switch outcome {
+        case .appended: return true
+        case .rejected: return false
+        case .failed(let error):
+            onFailure(error)
+            return false
+        }
+    }
+
+    private enum AppendOutcome {
+        case appended, rejected
+        case failed(any Error)
     }
 
     /// Video must start at or after the session start; audio may straddle it (the writer trims the overlap).

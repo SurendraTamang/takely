@@ -38,7 +38,18 @@ final class RecorderModel {
     private var ticker: Task<Void, Never>?
     private var recordingStart: ContinuousClock.Instant?
     private var pendingFailure: (any Error)?
+    @ObservationIgnored private var eventTask: Task<Void, Never>?
     private let log = Logger(subsystem: "app.takely", category: "app")
+
+    init() {
+        // Stream and writer failures now arrive on the session's event stream.
+        let events = session.events
+        eventTask = Task { [weak self] in
+            for await event in events {
+                await self?.streamFailed(event.error)
+            }
+        }
+    }
 
     /// Runs on every popover open; must never touch `errorMessage`, or a live error/stream-failure
     /// message would vanish the moment the user reopens the menu.
@@ -93,15 +104,14 @@ final class RecorderModel {
                 camera: camera, systemAudio: systemAudio, microphone: microphone
             )
             try FileManager.default.createDirectory(at: Self.saveFolder, withIntermediateDirectories: true)
-            let router = try await session.start(config: config, in: Self.saveFolder) { router in
+            let handle = try await session.start(config: config, in: Self.saveFolder) { router in
                 var sources: [any FrameSource] = [
-                    ScreenSource(filter: filter, config: config, sourceRect: nil, router: router) { error in
-                        Task { @MainActor [weak self] in await self?.streamFailed(error) }
-                    }
+                    ScreenSource(filter: filter, config: config, sourceRect: nil, router: router)
                 ]
                 if config.camera { sources.append(try CameraSource(router: router)) }
                 return sources
             }
+            let router = handle.router
             clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { _ in
                 router.recordClick(at: CMClockGetTime(CMClockGetHostTimeClock()))
             }
