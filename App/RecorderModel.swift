@@ -62,6 +62,7 @@ final class RecorderModel {
         errorMessage = nil
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            screenPermissionDenied = false
             guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else {
                 errorMessage = "No display available."
                 return

@@ -4,7 +4,7 @@ import Testing
 @testable import ProjectKit
 
 @Suite struct ProjectBundleTests {
-    let folder = FileManager.default.temporaryDirectory.appending(path: "takely-tests-\(UUID().uuidString)")
+    let folder = FileManager.default.temporaryDirectory.appending(path: "takely-tests").appending(path: UUID().uuidString)
 
     @Test func createsNamedPackageWithSubfolders() throws {
         let date = Date(timeIntervalSince1970: 0)

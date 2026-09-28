@@ -39,4 +39,14 @@ import Testing
         c.systemAudio = false
         #expect(c.tracks == [.screen, .camera, .mic])
     }
+
+    @Test func h264NativeFitsEncoderLimits() {
+        let size = config(5120, 2880, .native, codec: .h264).outputSize
+        #expect(size.width <= 4096 && size.height <= 2304)
+        #expect(size == PixelSize(width: 4096, height: 2304))
+    }
+
+    @Test func hevcNativeKeepsFullSize() {
+        #expect(config(5120, 2880, .native, codec: .hevc).outputSize == PixelSize(width: 5120, height: 2880))
+    }
 }

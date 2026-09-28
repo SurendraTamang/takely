@@ -12,6 +12,9 @@ if ((${#paths[@]})); then
     xcrun swift-format lint --strict -r "${paths[@]}"
 fi
 
+# Tests write temp bundles under one folder; clear it each run.
+rm -rf "${TMPDIR:-/tmp}/takely-tests"
+
 echo "==> swift test"
 swift test --package-path Packages/TakelyKit --quiet
 

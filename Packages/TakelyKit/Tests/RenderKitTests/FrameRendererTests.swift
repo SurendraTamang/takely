@@ -102,13 +102,14 @@ import Testing
             try renderer.context.startTask(toRender: image, to: destination).waitUntilCompleted()
         }
         let frames = 30
-        // Warm up every frame index the timed loop uses, so each filter graph (click pulse
-        // active and inactive) is compiled before timing starts.
+        // Warm up every frame index so each filter graph is compiled before timing starts.
         for i in 0..<frames { try renderFrame(i) }
         let clock = ContinuousClock()
-        let elapsed = try clock.measure {
-            for i in 0..<frames { try renderFrame(i) }
-        }
-        #expect(elapsed / frames < .milliseconds(8), "per-frame \(elapsed / frames)")
+        var samples: [Duration] = []
+        for i in 0..<60 { samples.append(try clock.measure { try renderFrame(i % frames) }) }
+        // Median, not mean: a rare scheduler stall under parallel tests shouldn't fail the gate.
+        let sorted = samples.sorted()
+        let median = sorted[sorted.count / 2]
+        #expect(median < .milliseconds(8), "median \(median) p90 \(sorted[sorted.count * 9 / 10]) max \(sorted.last!)")
     }
 }

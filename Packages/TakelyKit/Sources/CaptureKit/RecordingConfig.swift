@@ -49,11 +49,22 @@ public struct RecordingConfig: Sendable, Equatable {
     /// Output size: scaled down to the preset height (aspect preserved), never up; both sides even.
     public var outputSize: PixelSize {
         let source = sourcePixelSize
-        guard let target = resolution.targetHeight, source.height > target else {
-            return PixelSize(width: source.width.even, height: source.height.even)
+        var width: Int
+        var height: Int
+        if let target = resolution.targetHeight, source.height > target {
+            width = Int((Double(source.width) * Double(target) / Double(source.height)).rounded())
+            height = target
+        } else {
+            width = source.width
+            height = source.height
         }
-        let width = Int((Double(source.width) * Double(target) / Double(source.height)).rounded())
-        return PixelSize(width: width.even, height: target)
+        // Hardware H.264 tops out at 4096×2304; HEVC handles larger.
+        if codec == .h264, width > 4096 || height > 2304 {
+            let scale = min(4096.0 / Double(width), 2304.0 / Double(height))
+            width = Int((Double(width) * scale).rounded())
+            height = Int((Double(height) * scale).rounded())
+        }
+        return PixelSize(width: width.even, height: height.even)
     }
 
     /// Average video bitrate in bits per second (spec §5.6).
