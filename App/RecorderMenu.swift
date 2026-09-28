@@ -1,113 +1,116 @@
+import AppCore
 import CaptureKit
 import ProjectKit
 import SwiftUI
 
 struct RecorderMenu: View {
-    @Bindable var recorder: RecorderModel
+    let model: RecorderModel
+
+    private var controller: RecordingController { model.controller }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            switch recorder.phase {
-            case .idle:
+            switch controller.phase {
+            case .idle, .starting:
                 setup
-            case .recording, .paused:
+            case .recording, .paused, .stopping:
                 controls
             case .exporting(let progress):
                 ProgressView("Exporting…", value: progress)
             }
-            if recorder.screenPermissionDenied {
-                Label(
-                    "Allow Screen Recording for Takely in System Settings › Privacy & Security, then quit and relaunch Takely. After a rebuild, remove the old entry first (or run `tccutil reset ScreenCapture app.takely.Takely`).",
-                    systemImage: "exclamationmark.triangle.fill"
+            if model.screenPermissionDenied {
+                warning(
+                    "Allow Screen Recording for Takely in System Settings › Privacy & Security, then quit and relaunch Takely. After a rebuild, remove the old entry first (or run `tccutil reset ScreenCapture app.takely.Takely`)."
                 )
-                .foregroundStyle(.orange)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
             }
-            if let error = recorder.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
+            if let error = controller.errorMessage {
+                warning(error)
             }
             Divider()
             HStack {
-                if let url = recorder.lastExport {
+                if let url = controller.lastRecording {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 }
                 Spacer()
-                if recorder.phase == .idle {
-                    Button("Quit Takely") { NSApp.terminate(nil) }
+                if controller.phase == .idle {
+                    Button("Quit") { NSApp.terminate(nil) }
                         .keyboardShortcut("q")
                 }
             }
         }
         .padding(16)
-        .frame(width: 300)
-        .task { await recorder.refreshDisplays() }
+        .frame(width: 320)
+    }
+
+    private func warning(_ text: String) -> some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.orange)
+            .font(.callout)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var setup: some View {
-        Group {
-            Picker("Display", selection: $recorder.displayID) {
-                ForEach(recorder.displays, id: \.displayID) { display in
+        @Bindable var settings = model.settings
+        return Group {
+            Picker("Display", selection: $settings.displayID) {
+                ForEach(model.displays, id: \.displayID) { display in
                     Text("\(display.width) × \(display.height)").tag(Optional(display.displayID))
                 }
             }
-            Toggle("Camera", systemImage: "video", isOn: $recorder.camera)
-            Toggle("System Audio", systemImage: "speaker.wave.2", isOn: $recorder.systemAudio)
-            Toggle("Microphone", systemImage: "mic", isOn: $recorder.microphone)
-            Picker("Quality", selection: $recorder.resolution) {
+            Toggle("Camera", systemImage: "video", isOn: $settings.camera)
+            Toggle("System Audio", systemImage: "speaker.wave.2", isOn: $settings.systemAudio)
+            Toggle("Microphone", systemImage: "mic", isOn: $settings.microphone)
+            Picker("Quality", selection: $settings.resolution) {
                 Text("720p").tag(Resolution.p720)
                 Text("1080p").tag(Resolution.p1080)
                 Text("Native").tag(Resolution.native)
             }
-            Picker("Frame Rate", selection: $recorder.fps) {
+            Picker("Frame Rate", selection: $settings.fps) {
                 Text("30 fps").tag(30)
                 Text("60 fps").tag(60)
             }
-            Picker("Codec", selection: $recorder.codec) {
+            Picker("Codec", selection: $settings.codec) {
                 Text("HEVC").tag(VideoCodec.hevc)
                 Text("H.264").tag(VideoCodec.h264)
             }
             Button {
-                Task { await recorder.start() }
+                Task { await controller.start() }
             } label: {
-                Label("Start Recording", systemImage: "record.circle")
+                Label(controller.phase == .starting ? "Starting…" : "Start Recording", systemImage: "record.circle")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
             .controlSize(.large)
-            .disabled(recorder.displays.isEmpty || recorder.isBusy)
+            .disabled(model.displays.isEmpty || controller.isBusy)
         }
     }
 
     private var controls: some View {
         VStack(spacing: 12) {
-            Text(recorder.elapsed.formatted(.time(pattern: .minuteSecond)))
+            Text(controller.elapsed.formatted(.time(pattern: .minuteSecond)))
                 .font(.system(size: 40, weight: .light, design: .monospaced))
-                .accessibilityLabel("Elapsed time \(recorder.elapsed.formatted(.units(allowed: [.minutes, .seconds])))")
+                .accessibilityLabel("Elapsed time \(controller.elapsed.formatted(.units(allowed: [.minutes, .seconds])))")
             HStack {
                 Button {
-                    Task { await recorder.togglePause() }
+                    Task { await controller.togglePause() }
                 } label: {
                     Label(
-                        recorder.phase == .paused ? "Resume" : "Pause", systemImage: recorder.phase == .paused ? "play.fill" : "pause.fill"
+                        controller.phase == .paused ? "Resume" : "Pause",
+                        systemImage: controller.phase == .paused ? "play.fill" : "pause.fill"
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .disabled(recorder.isBusy)
                 Button {
-                    Task { await recorder.stop() }
+                    Task { await controller.stop() }
                 } label: {
-                    Label("Stop", systemImage: "stop.fill")
+                    Label(controller.phase == .stopping ? "Stopping…" : "Stop", systemImage: "stop.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(recorder.isBusy)
             }
             .controlSize(.large)
+            .disabled(controller.isBusy)
         }
         .frame(maxWidth: .infinity)
     }

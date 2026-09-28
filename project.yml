@@ -27,6 +27,8 @@ targets:
         product: CaptureKit
       - package: TakelyKit
         product: RenderKit
+      - package: TakelyKit
+        product: AppCore
     info:
       path: App/Info.plist
       properties:
