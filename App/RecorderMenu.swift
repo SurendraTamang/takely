@@ -83,6 +83,9 @@ struct RecorderMenu: View {
             .tint(.red)
             .controlSize(.large)
             .disabled(model.displays.isEmpty || controller.isBusy)
+            Text("⌥⇧R records from anywhere · ⌥⇧T opens this panel")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

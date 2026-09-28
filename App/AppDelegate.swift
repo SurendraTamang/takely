@@ -5,7 +5,7 @@ import ProjectKit
 import RenderKit
 import SwiftUI
 
-/// Owns the app's objects and wires up the menu bar item and notifications.
+/// Owns the app's objects and wires up the menu bar item, notifications and hotkeys.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = RecordingSettings()
@@ -23,5 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notifier.activate()
         let statusItem = StatusItemController(model: model)
         self.statusItem = statusItem
+        HotkeyCenter.install(controller: controller, statusItem: statusItem)
     }
 }
