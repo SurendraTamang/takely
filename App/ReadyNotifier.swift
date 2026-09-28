@@ -46,6 +46,7 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
             content.title = "Recording ready"
             content.body = "\(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))) · \(url.lastPathComponent)"
             content.categoryIdentifier = Self.category
+            content.sound = .default
             content.userInfo = ["path": url.path]
             do {
                 try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))

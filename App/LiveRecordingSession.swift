@@ -32,7 +32,10 @@ final class LiveRecordingSession: RecordingSession {
 
     func start(in folder: URL) async throws -> RecordingHandle {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.displayID == settings.displayID }) ?? content.displays.first else {
+        guard
+            let display = content.displays.first(where: { $0.displayID == settings.displayID })
+                ?? content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first
+        else {
             throw LiveSessionError.noDisplay
         }
         if settings.camera, !(await AVCaptureDevice.requestAccess(for: .video)) { throw LiveSessionError.cameraDenied }
