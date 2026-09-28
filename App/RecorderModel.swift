@@ -26,16 +26,22 @@ final class RecorderModel {
     private(set) var elapsed: Duration = .zero
     var errorMessage: String?
     private(set) var lastExport: URL?
+    /// True when `refreshDisplays` couldn't reach ScreenCaptureKit, e.g. Screen Recording isn't granted.
+    private(set) var screenPermissionDenied = false
+    /// True while start/pause/resume/stop is in flight, so a second click (or a stream failure) can't race it.
+    private(set) var isBusy = false
 
     static let saveFolder = URL.moviesDirectory.appending(path: "Takely", directoryHint: .isDirectory)
 
     private let session = CaptureSession()
     private var clickMonitor: Any?
     private var ticker: Task<Void, Never>?
+    private var recordingStart: ContinuousClock.Instant?
+    private var pendingFailure: (any Error)?
     private let log = Logger(subsystem: "app.takely", category: "app")
-    /// True while start/pause/resume/stop is in flight, so a second click (or a stream failure) can't race it.
-    private var isBusy = false
 
+    /// Runs on every popover open; must never touch `errorMessage`, or a live error/stream-failure
+    /// message would vanish the moment the user reopens the menu.
     func refreshDisplays() async {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -43,16 +49,16 @@ final class RecorderModel {
             if !displays.contains(where: { $0.displayID == displayID }) {
                 displayID = displays.first?.displayID
             }
-            errorMessage = nil
+            screenPermissionDenied = false
         } catch {
-            errorMessage = "Allow Screen Recording in System Settings › Privacy & Security, then reopen this menu."
+            screenPermissionDenied = true
         }
     }
 
     func start() async {
         guard phase == .idle, !isBusy else { return }
         isBusy = true
-        defer { isBusy = false }
+        defer { finishBusy() }
         errorMessage = nil
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -68,8 +74,14 @@ final class RecorderModel {
                 errorMessage = "Allow Microphone access in System Settings, or turn the microphone off."
                 return
             }
-            let ownWindows = content.windows.filter { $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier }
-            let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
+            // Exclude the app, not a window snapshot, so windows opened later (the popover) never appear.
+            let ownApps = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            let filter =
+                ownApps.isEmpty
+                ? SCContentFilter(
+                    display: display,
+                    excludingWindows: content.windows.filter { $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier })
+                : SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
             let bounds = CGDisplayBounds(display.displayID)
             let scale = Double(filter.pointPixelScale)
             let config = RecordingConfig(
@@ -104,11 +116,12 @@ final class RecorderModel {
     func togglePause() async {
         guard !isBusy else { return }
         isBusy = true
-        defer { isBusy = false }
+        defer { finishBusy() }
         do {
             switch phase {
             case .recording:
                 try await session.pause()
+                if let start = recordingStart { elapsed = ContinuousClock.now - start }
                 ticker?.cancel()
                 phase = .paused
             case .paused:
@@ -128,22 +141,34 @@ final class RecorderModel {
             case .recording:
                 phase = .recording
             case .idle:
+                ticker?.cancel()
+                if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+                clickMonitor = nil
                 phase = .idle
             }
-            errorMessage = "Couldn't pause: \(error.localizedDescription)"
+            errorMessage = "Couldn't pause or resume: \(error.localizedDescription)"
         }
     }
 
     func stop() async {
         guard phase == .recording || phase == .paused, !isBusy else { return }
         isBusy = true
-        defer { isBusy = false }
+        defer { finishBusy() }
         ticker?.cancel()
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         clickMonitor = nil
+        let bundle: ProjectBundle
         do {
-            let bundle = try await session.stop()
-            phase = .exporting(0)
+            bundle = try await session.stop()
+        } catch {
+            log.error("stop failed: \(error.localizedDescription)")
+            errorMessage = "Couldn't stop recording: \(error.localizedDescription)"
+            phase = .idle
+            elapsed = .zero
+            return
+        }
+        phase = .exporting(0)
+        do {
             let url = try await Exporter().export(bundle) { progress in
                 Task { @MainActor [weak self] in
                     if case .exporting = self?.phase { self?.phase = .exporting(progress) }
@@ -153,31 +178,42 @@ final class RecorderModel {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } catch {
             log.error("stop/export failed: \(error.localizedDescription)")
+            lastExport = bundle.url
             errorMessage = "Recording saved, but export failed: \(error.localizedDescription)"
         }
         phase = .idle
         elapsed = .zero
     }
 
-    /// Display unplugged, permission revoked, …: keep what was recorded.
+    /// Display unplugged, permission revoked, …: keep what was recorded. If an action is running, handle it right after.
     private func streamFailed(_ error: any Error) async {
-        // A user action (start/pause/stop) may already be in flight; wait for it to finish
-        // instead of racing it, so this failure is never silently dropped.
-        var waits = 0
-        while isBusy, waits < 100 {
-            try? await Task.sleep(for: .milliseconds(50))
-            waits += 1
+        if isBusy {
+            pendingFailure = error
+            return
         }
         guard phase == .recording || phase == .paused else { return }
         await stop()
-        errorMessage = "Recording stopped: \(error.localizedDescription)"
+        // The system "Stop Sharing" button routes through here too; that's an intentional stop, not a failure.
+        if let scError = error as? SCStreamError, scError.code == .userStopped { return }
+        if errorMessage == nil { errorMessage = "Recording stopped: \(error.localizedDescription)" }
+    }
+
+    /// Clears the busy flag and, if a stream failure arrived while busy, handles it now instead of dropping it.
+    private func finishBusy() {
+        isBusy = false
+        if let error = pendingFailure {
+            pendingFailure = nil
+            Task { await streamFailed(error) }
+        }
     }
 
     private func startTicker() {
         let start = ContinuousClock.now - elapsed
+        recordingStart = start
         ticker = Task { [weak self] in
             while !Task.isCancelled {
-                self?.elapsed = ContinuousClock.now - start
+                guard let self else { return }
+                self.elapsed = ContinuousClock.now - start
                 try? await Task.sleep(for: .seconds(1))
             }
         }

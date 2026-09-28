@@ -15,6 +15,15 @@ struct RecorderMenu: View {
             case .exporting(let progress):
                 ProgressView("Exporting…", value: progress)
             }
+            if recorder.screenPermissionDenied {
+                Label(
+                    "Allow Screen Recording for Takely in System Settings › Privacy & Security, then quit and relaunch Takely. After a rebuild, remove the old entry first (or run `tccutil reset ScreenCapture app.takely.Takely`).",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .foregroundStyle(.orange)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            }
             if let error = recorder.errorMessage {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
@@ -24,11 +33,13 @@ struct RecorderMenu: View {
             Divider()
             HStack {
                 if let url = recorder.lastExport {
-                    Button("Show Last Recording") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 }
                 Spacer()
-                Button("Quit Takely") { NSApp.terminate(nil) }
-                    .keyboardShortcut("q")
+                if recorder.phase == .idle {
+                    Button("Quit Takely") { NSApp.terminate(nil) }
+                        .keyboardShortcut("q")
+                }
             }
         }
         .padding(16)
@@ -68,7 +79,7 @@ struct RecorderMenu: View {
             .buttonStyle(.borderedProminent)
             .tint(.red)
             .controlSize(.large)
-            .disabled(recorder.displays.isEmpty)
+            .disabled(recorder.displays.isEmpty || recorder.isBusy)
         }
     }
 
@@ -86,6 +97,7 @@ struct RecorderMenu: View {
                     )
                     .frame(maxWidth: .infinity)
                 }
+                .disabled(recorder.isBusy)
                 Button {
                     Task { await recorder.stop() }
                 } label: {
@@ -93,6 +105,7 @@ struct RecorderMenu: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(recorder.isBusy)
             }
             .controlSize(.large)
         }
