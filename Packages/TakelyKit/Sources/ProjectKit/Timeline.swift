@@ -44,13 +44,17 @@ public struct ActiveClick: Sendable, Equatable {
 public struct CursorTrack: Codable, Sendable, Equatable {
     public var samples: [CursorSample]
     public var clicks: [ClickEvent]
+    /// Cursor data ends here (after a crash the recovered tail has none); nothing is reported after it.
+    public var coveredUntil: Double?
 
-    public init(samples: [CursorSample] = [], clicks: [ClickEvent] = []) {
+    public init(samples: [CursorSample] = [], clicks: [ClickEvent] = [], coveredUntil: Double? = nil) {
         self.samples = samples
         self.clicks = clicks
+        self.coveredUntil = coveredUntil
     }
 
     public func position(at t: Double) -> NormalizedPoint? {
+        if let coveredUntil, t > coveredUntil { return nil }
         guard let first = samples.first, let last = samples.last else { return nil }
         var lo = 0
         var hi = samples.count

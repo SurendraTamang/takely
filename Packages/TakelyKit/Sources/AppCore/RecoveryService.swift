@@ -8,6 +8,8 @@ public struct RecoveryCandidate: Sendable, Equatable {
         case crashed
         /// The recording finished (e.g. system quit) but no export exists.
         case unexported
+        /// Finished but holds no video (no screen frame ever arrived); it can only be deleted.
+        case empty
     }
 
     public let bundle: ProjectBundle
@@ -46,35 +48,49 @@ public enum RecoveryService {
                 switch project.status {
                 case .recording: return RecoveryCandidate(bundle: bundle, kind: .crashed, createdAt: project.createdAt)
                 case .finished:
-                    return bundle.hasExport ? nil : RecoveryCandidate(bundle: bundle, kind: .unexported, createdAt: project.createdAt)
+                    if bundle.hasExport { return nil }
+                    return RecoveryCandidate(
+                        bundle: bundle, kind: project.segments.isEmpty ? .empty : .unexported, createdAt: project.createdAt)
                 }
             }
             .sorted { $0.createdAt < $1.createdAt }
     }
 
-    /// Rebuilds a crashed bundle's segment list from the segment files and their sidecars, then marks it finished.
-    ///
-    /// Track kinds come from each sidecar by track ID: the writer numbers tracks 1…n in configured order and
-    /// keeps those IDs when it leaves out empty inputs, so sidecar entry `i` is track ID `i + 1`.
+    /// Recovers a crashed bundle. Segments already in the manifest were closed normally and match `cursor.json`,
+    /// so they're kept as they are; only segment files after the last listed one (the segment open at the crash)
+    /// are rebuilt, from each file and its sidecar by track ID. Marks the bundle finished. Non-crashed bundles are left alone.
     public static func rebuild(_ bundle: ProjectBundle) async throws -> RebuildReport {
         var project = try bundle.readProject()
-        let files = try FileManager.default.contentsOfDirectory(atPath: bundle.segmentsURL.path)
-            .filter { $0.hasPrefix("segment-") && $0.hasSuffix(".mov") }
-            .sorted()
-        var segments: [Project.Segment] = []
+        guard project.status == .recording else { return RebuildReport(project: project, skipped: []) }
+        let lastListed = project.segments.compactMap { segmentIndex($0.file) }.max() ?? -1
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: bundle.segmentsURL.path)) ?? []
+        let tail = names.compactMap { name in segmentIndex(name).map { (name: name, index: $0) } }
+            .filter { $0.index > lastListed }
+            .sorted { $0.index < $1.index }
+            .map(\.name)
+        var recovered: [Project.Segment] = []
         var skipped: [String] = []
-        for file in files {
-            if let segment = await readSegment(file, in: bundle) {
-                segments.append(segment)
-            } else {
-                skipped.append(file)
-            }
+        for file in tail {
+            if let segment = await readSegment(file, in: bundle) { recovered.append(segment) } else { skipped.append(file) }
         }
-        guard !segments.isEmpty else { throw RecoveryError.nothingRecoverable }
-        project.segments = segments
+        let closedDuration = project.duration
+        project.segments += recovered
+        guard !project.segments.isEmpty else { throw RecoveryError.nothingRecoverable }
         project.status = .finished
+        if !recovered.isEmpty {
+            // The recovered tail has no cursor data (it's written when a segment closes): end cursor effects where it stops.
+            var cursor = try bundle.readCursor()
+            cursor.coveredUntil = closedDuration
+            try bundle.write(cursor)
+        }
         try bundle.write(project)
         return RebuildReport(project: project, skipped: skipped)
+    }
+
+    /// `segment-012.mov` → 12 (numeric, so `segment-1000` sorts after `segment-101`); nil for other files.
+    static func segmentIndex(_ file: String) -> Int? {
+        guard file.hasPrefix("segment-"), file.hasSuffix(".mov") else { return nil }
+        return Int(file.dropFirst("segment-".count).dropLast(".mov".count))
     }
 
     private static func readSegment(_ file: String, in bundle: ProjectBundle) async -> Project.Segment? {
@@ -88,7 +104,8 @@ public enum RecoveryService {
             let index = Int(track.trackID) - 1
             return configured.indices.contains(index) ? configured[index] : nil
         }
-        guard kinds.count == tracks.count, kinds.contains(.screen) else { return nil }
+        guard kinds.count == tracks.count, let screenIndex = kinds.firstIndex(of: .screen) else { return nil }
+        guard let screenRange = try? await tracks[screenIndex].load(.timeRange), screenRange.duration.seconds > 0 else { return nil }
         return Project.Segment(file: file, duration: duration, tracks: kinds)
     }
 }

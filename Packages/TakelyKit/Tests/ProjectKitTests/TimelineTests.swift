@@ -28,6 +28,13 @@ import Testing
         #expect(abs((active.first?.progress ?? 0) - 0.5) < 1e-9)
         #expect(track.clicks(activeAt: 2.31).isEmpty)
     }
+
+    @Test func noPositionAfterCoverageEnds() {
+        var covered = track
+        covered.coveredUntil = 0.5
+        #expect(covered.position(at: 0.4) != nil)
+        #expect(covered.position(at: 0.6) == nil)
+    }
 }
 
 @Suite struct BubbleKeyframeTests {

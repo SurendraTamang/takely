@@ -39,25 +39,32 @@ enum RecoveryFixture {
         }
     }
 
-    /// Segment 0 finished normally (1 s); segment 1 copied while still being written (6 s fed → ~4 s readable).
+    /// Segment 0 finished normally (1 s) and is listed in the manifest, like a real closed segment;
+    /// segment 1 copied while still being written (6 s fed → ~4 s readable) and is left for recovery.
     static func crashedBundle(in folder: URL) async throws -> ProjectBundle {
         let bundle = try ProjectBundle.create(in: folder)
-        try bundle.write(project(status: .recording))
-        for index in 0..<2 {
-            let file = ProjectBundle.segmentFileName(index: index)
-            try bundle.writeSidecar(tracks: config.tracks, for: file)
-            let base = 1000.0 * Double(index + 1)
-            let url = index == 0 ? bundle.segmentURL(file) : folder.appending(path: "live-\(UUID()).mov")
-            let writer = try SegmentWriter(url: url, config: config)
-            try await feed(writer, from: base, seconds: index == 0 ? 1 : 6, tracks: config.tracks)
-            if index == 0 {
-                _ = try await writer.finish(at: Synthetic.seconds(base + 1))
-            } else {
-                try await Task.sleep(for: .seconds(1))
-                try FileManager.default.copyItem(at: url, to: bundle.segmentURL(file))  // the "crash"
-                _ = try await writer.finish(at: Synthetic.seconds(base + 6))
-            }
-        }
+        var project = project(status: .recording)
+
+        let file0 = ProjectBundle.segmentFileName(index: 0)
+        try bundle.writeSidecar(tracks: config.tracks, for: file0)
+        let base0 = 1000.0
+        let writer0 = try SegmentWriter(url: bundle.segmentURL(file0), config: config)
+        try await feed(writer0, from: base0, seconds: 1, tracks: config.tracks)
+        let duration0 = try await writer0.finish(at: Synthetic.seconds(base0 + 1)) ?? 0
+        project.segments = [Project.Segment(file: file0, duration: duration0, tracks: config.tracks)]
+        try bundle.write(project)
+        try bundle.write(CursorTrack(samples: [CursorSample(t: 0, x: 0.1, y: 0.1), CursorSample(t: 0.9, x: 0.2, y: 0.2)]))
+
+        let file1 = ProjectBundle.segmentFileName(index: 1)
+        try bundle.writeSidecar(tracks: config.tracks, for: file1)
+        let base1 = 2000.0
+        let url1 = folder.appending(path: "live-\(UUID()).mov")
+        let writer1 = try SegmentWriter(url: url1, config: config)
+        try await feed(writer1, from: base1, seconds: 6, tracks: config.tracks)
+        try await Task.sleep(for: .seconds(1))
+        try FileManager.default.copyItem(at: url1, to: bundle.segmentURL(file1))  // the "crash"
+        _ = try await writer1.finish(at: Synthetic.seconds(base1 + 6))
+
         return bundle
     }
 }
@@ -70,18 +77,20 @@ enum RecoveryFixture {
         #expect(report.project.status == .finished)
         #expect(report.project.segments.map(\.file) == ["segment-000.mov", "segment-001.mov"])
         #expect(report.project.segments.allSatisfy { $0.tracks == [.screen, .camera, .system, .mic] })
-        #expect(report.project.segments[1].duration > 1.5)
+        #expect(abs(report.project.segments[0].duration - 1.0) < 0.01)
+        #expect(abs(report.project.segments[1].duration - 4.0) < 0.15)
         #expect(try bundle.readProject() == report.project)
+        #expect(try bundle.readCursor().coveredUntil == report.project.segments[0].duration)
         let url = try await Exporter().export(bundle)
-        #expect(try await AVURLAsset(url: url).load(.duration).seconds > 2.5)
+        #expect(abs(try await AVURLAsset(url: url).load(.duration).seconds - 5.0) < 0.15)
     }
 
     @Test func segmentWithoutSidecarIsSkippedNotGuessed() async throws {
         let bundle = try await RecoveryFixture.crashedBundle(in: Synthetic.temporaryFolder())
-        try FileManager.default.removeItem(at: bundle.sidecarURL(for: "segment-000.mov"))
+        try FileManager.default.removeItem(at: bundle.sidecarURL(for: "segment-001.mov"))
         let report = try await RecoveryService.rebuild(bundle)
-        #expect(report.skipped == ["segment-000.mov"])
-        #expect(report.project.segments.map(\.file) == ["segment-001.mov"])
+        #expect(report.skipped == ["segment-001.mov"])
+        #expect(report.project.segments.map(\.file) == ["segment-000.mov"])
     }
 
     @Test func nothingUsableThrows() async throws {
@@ -92,22 +101,34 @@ enum RecoveryFixture {
         await #expect(throws: RecoveryError.nothingRecoverable) { try await RecoveryService.rebuild(bundle) }
     }
 
+    @Test func finishedBundleIsLeftAlone() async throws {
+        let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
+        try bundle.write(RecoveryFixture.project(status: .finished))
+        let written = try bundle.readProject()
+        let report = try await RecoveryService.rebuild(bundle)
+        #expect(report.project == written)
+        #expect(report.skipped.isEmpty)
+        #expect(try bundle.readProject() == written)
+    }
+
     @Test func scanFindsCrashedAndUnexportedButNotExported() async throws {
         let folder = Synthetic.temporaryFolder()
-        func make(_ status: Project.Status, at seconds: Double) throws -> ProjectBundle {
+        func make(_ status: Project.Status, at seconds: Double, segments: [Project.Segment] = []) throws -> ProjectBundle {
             let bundle = try ProjectBundle.create(in: folder, date: Date(timeIntervalSince1970: seconds))
             var project = RecoveryFixture.project(status: status)
             project.createdAt = Date(timeIntervalSince1970: seconds)
+            project.segments = segments
             try bundle.write(project)
             return bundle
         }
-        let unexported = try make(.finished, at: 2)
+        let unexported = try make(.finished, at: 2, segments: [Project.Segment(file: "segment-000.mov", duration: 1, tracks: [.screen])])
         let crashed = try make(.recording, at: 1)
-        let exported = try make(.finished, at: 3)
+        let exported = try make(.finished, at: 3, segments: [Project.Segment(file: "segment-000.mov", duration: 1, tracks: [.screen])])
         try Data().write(to: exported.exportURL)
+        let empty = try make(.finished, at: 4)
 
         let found = RecoveryService.scan(folder)
-        #expect(found.map(\.bundle) == [crashed, unexported])  // oldest first
-        #expect(found.map(\.kind) == [.crashed, .unexported])
+        #expect(found.map(\.bundle) == [crashed, unexported, empty])  // oldest first
+        #expect(found.map(\.kind) == [.crashed, .unexported, .empty])
     }
 }
