@@ -16,7 +16,8 @@ fi
 rm -rf "${TMPDIR:-/tmp}/takely-tests"
 
 echo "==> swift test"
-swift test --package-path Packages/TakelyKit --quiet
+# Serial: parallel suites that encode/decode video can exhaust hardware video sessions ("Cannot Decode").
+swift test --package-path Packages/TakelyKit --quiet --no-parallel
 
 if [[ -f project.yml ]]; then
     echo "==> xcodebuild"
