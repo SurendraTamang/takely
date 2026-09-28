@@ -4,8 +4,8 @@ import ProjectKit
 
 /// Composes one output frame: screen → cursor halo → click pulses → camera bubble.
 ///
-/// `@unchecked Sendable`: immutable after init; `CIContext` is thread-safe.
-public final class FrameRenderer: @unchecked Sendable {
+/// Immutable after init, so safe to share across concurrent compositor requests.
+public final class FrameRenderer: Sendable {
     public let context: CIContext
     private let project: Project
     private let cursor: CursorTrack

@@ -4,7 +4,7 @@ import Testing
 
 @testable import RenderKit
 
-@Suite struct FrameRendererTests {
+@Suite(.serialized) struct FrameRendererTests {
     /// Unmanaged color so sampled bytes equal the input colors exactly.
     let context = CIContext(options: [.workingColorSpace: NSNull(), .outputColorSpace: NSNull()])
     let canvas = CGRect(x: 0, y: 0, width: 400, height: 250)
@@ -46,6 +46,16 @@ import Testing
         #expect(corner[0] > 150 && corner[1] < 100)
         let square = FrameRenderer(project: project(camera: true, shape: .square), cursor: CursorTrack(), context: context)
         #expect(pixel(square.compose(screen: red, camera: green, at: 0), 152, 77) == [0, 255, 0, 255])
+    }
+
+    @Test func bubbleFollowsKeyframeVertically() {
+        // Keyframe at normalized y = 0.2 (near the top) → Core Image y = (1 - 0.2) × 250 = 200.
+        var p = project(camera: true)
+        p.camera.keyframes = [BubbleKeyframe(t: 0, x: 0.5, y: 0.2)]
+        let renderer = FrameRenderer(project: p, cursor: CursorTrack(), context: context)
+        let image = renderer.compose(screen: red, camera: green, at: 0)
+        #expect(pixel(image, 200, 200) == [0, 255, 0, 255])
+        #expect(pixel(image, 200, 50) == [255, 0, 0, 255])
     }
 
     @Test func disabledCameraShowsScreenOnly() {
@@ -91,9 +101,11 @@ import Testing
             let image = renderer.compose(screen: screen, camera: camera, at: Double(i) / 30)
             try renderer.context.startTask(toRender: image, to: destination).waitUntilCompleted()
         }
-        for i in 0..<5 { try renderFrame(i) }
-        let clock = ContinuousClock()
         let frames = 30
+        // Warm up every frame index the timed loop uses, so each filter graph (click pulse
+        // active and inactive) is compiled before timing starts.
+        for i in 0..<frames { try renderFrame(i) }
+        let clock = ContinuousClock()
         let elapsed = try clock.measure {
             for i in 0..<frames { try renderFrame(i) }
         }
