@@ -303,4 +303,54 @@ struct Harness {
         #expect(h.controller.lastRecording == bundle.exportURL)
         #expect(h.controller.phase == .idle)
     }
+
+    @Test func staleErrorDoesNotHideALaterFailure() async {
+        let h = Harness()
+        await h.controller.start()
+        h.session.pauseError = Broke()
+        h.session.engineState = .recording  // the engine stayed recording, so togglePause resyncs to it
+        await h.controller.togglePause()
+        #expect(h.controller.errorMessage?.hasPrefix("Couldn't pause or resume") == true)
+        h.session.emit(.writerFailed, for: 1)
+        await h.settle()
+        #expect(h.controller.phase == .idle)
+        #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected. Saved up to 1:23.")
+    }
+
+    @Test func diskFullStopKeepsAnExportFailureVisible() async {
+        let h = Harness()
+        h.exporter.failing.withLock { $0 = true }
+        await h.controller.start()
+        h.disk.used.withLock { $0 = 3_000_000_000 }
+        h.disk.free.withLock { $0 = 3_400_000_000 }
+        await h.controller.checkStorage()
+        #expect(h.controller.errorMessage?.hasPrefix("Stopped: disk almost full.") == true)
+        #expect(h.controller.errorMessage?.contains("export failed") == true)
+    }
+
+    @Test func quitWaitsForARunningCommandThenStops() async {
+        let h = Harness()
+        await h.controller.start()
+        h.session.pauseDelay = .milliseconds(100)
+        async let p: Void = h.controller.togglePause()
+        try? await Task.sleep(for: .milliseconds(30))
+        await h.controller.stopForQuit(system: true)
+        await p
+        #expect(h.session.calls == ["start", "pause", "stop"])
+        #expect(h.controller.phase == .idle)
+        #expect(h.exporter.count.withLock { $0 } == 0)
+    }
+
+    @Test func exportWhileRecordingIsRefusedWithAMessage() async throws {
+        let h = Harness()
+        await h.controller.start()
+        let bundle = try ProjectBundle.create(in: h.folder)
+        try bundle.write(
+            Project(
+                status: .finished, capture: .init(target: .display, pixelSize: PixelSize(width: 64, height: 40), fps: 30, codec: .h264),
+                camera: .init(enabled: false)))
+        await h.controller.export(bundle)
+        #expect(h.exporter.count.withLock { $0 } == 0)
+        #expect(h.controller.errorMessage == "Finish the current recording first.")
+    }
 }

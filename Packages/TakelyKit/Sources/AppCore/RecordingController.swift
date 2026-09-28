@@ -32,14 +32,16 @@ public final class RecordingController {
     private let now: @Sendable () -> ContinuousClock.Instant
     private let sleep: @Sendable (Duration) async throws -> Void
 
-    private var current: RecordingHandle?
-    /// Events that arrived while a command ran, in order; their recording IDs are checked when handled.
-    private var pending: [CaptureEvent] = []
-    private var accumulated: Duration = .zero
-    private var runningSince: ContinuousClock.Instant?
+    @ObservationIgnored private var current: RecordingHandle?
+    /// Events that arrived while a command ran; handled after the command, each re-checked against the current recording.
+    @ObservationIgnored private var pending: [CaptureEvent] = []
+    @ObservationIgnored private var accumulated: Duration = .zero
+    @ObservationIgnored private var runningSince: ContinuousClock.Instant?
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var storageLoop: Task<Void, Never>?
     @ObservationIgnored private var eventLoop: Task<Void, Never>?
+    @ObservationIgnored private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var draining = 0
     private let log = Logger(subsystem: "app.takely", category: "controller")
 
     public init(
@@ -136,7 +138,11 @@ public final class RecordingController {
 
     /// Exports a recovered or unexported bundle, reporting like a normal stop.
     public func export(_ bundle: ProjectBundle) async {
-        guard phase == .idle, !isBusy else { return }
+        guard !isBusy else { return }
+        guard phase == .idle else {
+            errorMessage = "Finish the current recording first."
+            return
+        }
         isBusy = true
         defer { finishBusy() }
         await exportAndReport(bundle)
@@ -151,7 +157,20 @@ public final class RecordingController {
         isBusy = true
         defer { finishBusy() }
         _ = await performStop(export: true)
-        errorMessage = "Stopped: disk almost full — recording saved."
+        errorMessage = errorMessage.map { "Stopped: disk almost full. \($0)" } ?? "Stopped: disk almost full — recording saved."
+    }
+
+    /// Returns once no command is running and queued events are handled. Quit uses this so it never skips a stop.
+    public func waitUntilIdle() async {
+        while isBusy || !pending.isEmpty || draining > 0 {
+            await withCheckedContinuation { idleWaiters.append($0) }
+        }
+    }
+
+    /// For quitting: waits for any running command (including an export), then stops; a system quit skips the export.
+    public func stopForQuit(system: Bool) async {
+        await waitUntilIdle()
+        if system { await stopForSystemQuit() } else { await stop() }
     }
 
     // MARK: Events
@@ -181,6 +200,7 @@ public final class RecordingController {
     // MARK: Internals
 
     private func performStop(export: Bool) async -> ProjectBundle? {
+        errorMessage = nil  // a stop supersedes older messages; what follows describes this stop
         phase = .stopping
         stopTicking()
         storageLoop?.cancel()
@@ -242,12 +262,25 @@ public final class RecordingController {
 
     private func finishBusy() {
         isBusy = false
-        guard !pending.isEmpty else { return }
+        guard !pending.isEmpty else {
+            resumeIdleWaiters()
+            return
+        }
         let events = pending
         pending = []
+        draining += 1
         Task {
             for event in events { await handle(event) }
+            draining -= 1
+            resumeIdleWaiters()
         }
+    }
+
+    private func resumeIdleWaiters() {
+        guard !isBusy, pending.isEmpty, draining == 0 else { return }
+        let waiters = idleWaiters
+        idleWaiters = []
+        waiters.forEach { $0.resume() }
     }
 
     private func startTicking() {
