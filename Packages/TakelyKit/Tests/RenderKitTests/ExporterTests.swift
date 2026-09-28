@@ -9,8 +9,12 @@ import Testing
 @testable import RenderKit
 
 @Suite struct ExporterTests {
-    /// Writes a bundle with red screen (+ green camera, + both audio tracks) segments of `durations` seconds.
-    func makeBundle(durations: [Double], camera: Bool, audio: Bool, effects: Bool) async throws -> ProjectBundle {
+    /// Writes a bundle with `screen`-colored screen (+ green camera, + both audio tracks) segments of `durations` seconds.
+    /// `cameraEnabled` overrides `project.camera.enabled` independently of whether a camera track was written; nil means "same as `camera`".
+    func makeBundle(
+        durations: [Double], camera: Bool, audio: Bool, effects: Bool, screen: (UInt8, UInt8, UInt8) = (255, 0, 0),
+        cameraEnabled: Bool? = nil
+    ) async throws -> ProjectBundle {
         let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
         let tracks: [TrackKind] = [.screen] + (camera ? [.camera] : []) + (audio ? [.system, .mic] : [])
         let config = WriterConfig(
@@ -23,7 +27,7 @@ import Testing
             let base = 1000.0 * Double(index + 1)
             for i in 0..<Int(seconds * 30) {
                 let pts = Synthetic.seconds(base + Double(i) / 30)
-                writer.append(Synthetic.video(width: 320, height: 200, pts: pts, rgb: (255, 0, 0)), as: .screen)
+                writer.append(Synthetic.video(width: 320, height: 200, pts: pts, rgb: screen), as: .screen)
                 if camera { writer.append(Synthetic.video(width: 160, height: 90, pts: pts, rgb: (0, 255, 0)), as: .camera) }
                 try await Task.sleep(for: .milliseconds(2))
             }
@@ -42,7 +46,7 @@ import Testing
                 status: .finished,
                 capture: .init(target: .display, pixelSize: PixelSize(width: 320, height: 200), fps: 30, codec: .h264),
                 segments: segments,
-                camera: .init(enabled: camera, size: 0.3, keyframes: [BubbleKeyframe(t: 0, x: 0.5, y: 0.5)]),
+                camera: .init(enabled: cameraEnabled ?? camera, size: 0.3, keyframes: [BubbleKeyframe(t: 0, x: 0.5, y: 0.5)]),
                 effects: .init(cursorHighlight: effects, clickRipples: effects)
             ))
         return bundle
@@ -90,6 +94,63 @@ import Testing
         let duration = try await AVURLAsset(url: url).load(.duration).seconds
         #expect(abs(duration - 2) < 0.1, "duration \(duration)")
         #expect(progress.last == 1)
+    }
+
+    @Test func exportPreservesMidtones() async throws {
+        let bundle = try await makeBundle(durations: [1], camera: true, audio: false, effects: false, screen: (200, 128, 60))
+        let sourceURL = bundle.segmentURL(ProjectBundle.segmentFileName(index: 0))
+        let exportedURL = try await Exporter().export(bundle)
+
+        let source = try await rgb(at: 0.5, x: 5, y: 5, in: sourceURL)
+        let exported = try await rgb(at: 0.5, x: 5, y: 5, in: exportedURL)
+        #expect(abs(source.0 - exported.0) <= 3, "R source \(source) export \(exported)")
+        #expect(abs(source.1 - exported.1) <= 3, "G source \(source) export \(exported)")
+        #expect(abs(source.2 - exported.2) <= 3, "B source \(source) export \(exported)")
+    }
+
+    @Test func cameraEnabledWithoutCameraTrackExports() async throws {
+        let bundle = try await makeBundle(durations: [1], camera: false, audio: false, effects: false, cameraEnabled: true)
+        let url = try await Exporter().export(bundle)
+        let duration = try await AVURLAsset(url: url).load(.duration).seconds
+        #expect(abs(duration - 1) < 0.1, "duration \(duration)")
+    }
+
+    @Test func needsCompositingFalseWhenDataAbsent() {
+        let project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 1, height: 1), fps: 30, codec: .h264),
+            camera: .init(enabled: true),
+            effects: .init(cursorHighlight: true, clickRipples: true)
+        )
+        #expect(!Exporter.needsCompositing(project: project, cursor: CursorTrack(), hasCameraTrack: false))
+    }
+
+    @Test func needsCompositingTrueWithCameraTrack() {
+        let project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 1, height: 1), fps: 30, codec: .h264),
+            camera: .init(enabled: true),
+            effects: .init(cursorHighlight: false, clickRipples: false)
+        )
+        #expect(Exporter.needsCompositing(project: project, cursor: CursorTrack(), hasCameraTrack: true))
+    }
+
+    @Test func needsCompositingTrueWithCursorSample() {
+        let project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 1, height: 1), fps: 30, codec: .h264),
+            camera: .init(enabled: false),
+            effects: .init(cursorHighlight: true, clickRipples: false)
+        )
+        let cursor = CursorTrack(samples: [CursorSample(t: 0, x: 0.5, y: 0.5)])
+        #expect(Exporter.needsCompositing(project: project, cursor: cursor, hasCameraTrack: false))
+    }
+
+    @Test func needsCompositingTrueWithClicks() {
+        let project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 1, height: 1), fps: 30, codec: .h264),
+            camera: .init(enabled: false),
+            effects: .init(cursorHighlight: false, clickRipples: true)
+        )
+        let cursor = CursorTrack(clicks: [ClickEvent(t: 0, x: 0.5, y: 0.5)])
+        #expect(Exporter.needsCompositing(project: project, cursor: cursor, hasCameraTrack: false))
     }
 }
 

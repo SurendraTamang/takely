@@ -7,7 +7,8 @@ public struct Exporter: Sendable {
 
     public func export(_ bundle: ProjectBundle, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
         let project = try bundle.readProject()
-        let renderer = FrameRenderer(project: project, cursor: try bundle.readCursor())
+        let cursorTrack = try bundle.readCursor()
+        let renderer = FrameRenderer(project: project, cursor: cursorTrack)
         let composition = AVMutableComposition()
         var tracks: [TrackKind: AVMutableCompositionTrack] = [:]
         var cursor = CMTime.zero
@@ -32,7 +33,9 @@ public struct Exporter: Sendable {
         guard let screenTrack = tracks[.screen] else { throw RenderError.trackMismatch("no screen track") }
 
         let audioTracks = [TrackKind.system, .mic].compactMap { tracks[$0] }
-        let passthrough = !renderer.hasOverlays && audioTracks.count <= 1
+        let passthrough =
+            !Exporter.needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
+            && audioTracks.count <= 1
         let preset =
             passthrough
             ? AVAssetExportPresetPassthrough
@@ -49,13 +52,17 @@ public struct Exporter: Sendable {
                 cameraTrackID: project.camera.enabled ? tracks[.camera]?.trackID : nil,
                 renderer: renderer
             )
-            session.videoComposition = AVVideoComposition(
-                configuration: .init(
-                    customVideoCompositorClass: TakelyCompositor.self,
-                    frameDuration: CMTime(value: 1, timescale: CMTimeScale(project.capture.fps)),
-                    instructions: [instruction],
-                    renderSize: CGSize(width: project.capture.pixelSize.width, height: project.capture.pixelSize.height)
-                ))
+            var configuration = AVVideoComposition.Configuration(
+                customVideoCompositorClass: TakelyCompositor.self,
+                frameDuration: CMTime(value: 1, timescale: CMTimeScale(project.capture.fps)),
+                instructions: [instruction],
+                renderSize: CGSize(width: project.capture.pixelSize.width, height: project.capture.pixelSize.height)
+            )
+            // Match the capture path (Rec. 709) explicitly instead of relying on a default.
+            configuration.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+            configuration.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
+            configuration.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
+            session.videoComposition = AVVideoComposition(configuration: configuration)
 
             let mix = AVMutableAudioMix()
             mix.inputParameters = [(TrackKind.system, project.audio.systemVolume), (.mic, project.audio.micVolume)]
@@ -81,6 +88,13 @@ public struct Exporter: Sendable {
         try await session.export(to: output, as: .mp4)
         progress(1)
         return output
+    }
+
+    /// Whether frames must go through the compositor, judged by the data actually present.
+    static func needsCompositing(project: Project, cursor: CursorTrack, hasCameraTrack: Bool) -> Bool {
+        (project.camera.enabled && hasCameraTrack)
+            || (project.effects.cursorHighlight && !cursor.samples.isEmpty)
+            || (project.effects.clickRipples && !cursor.clicks.isEmpty)
     }
 
     private func addTrack(_ kind: TrackKind, to composition: AVMutableComposition) throws -> AVMutableCompositionTrack {
