@@ -42,3 +42,25 @@ import Testing
         #expect(ProjectBundle.segmentFileName(index: 7) == "segment-007.mov")
     }
 }
+
+@Suite struct SegmentSidecarTests {
+    let folder = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID().uuidString)")
+
+    @Test func roundTripsTrackKinds() throws {
+        let bundle = try ProjectBundle.create(in: folder)
+        try bundle.writeSidecar(tracks: [.screen, .camera, .mic], for: "segment-000.mov")
+        #expect(bundle.sidecarURL(for: "segment-000.mov").lastPathComponent == "segment-000.json")
+        #expect(try bundle.readSidecar(for: "segment-000.mov") == [.screen, .camera, .mic])
+    }
+
+    @Test func missingSidecarReadsNil() throws {
+        let bundle = try ProjectBundle.create(in: folder)
+        #expect(try bundle.readSidecar(for: "segment-004.mov") == nil)
+    }
+
+    @Test func exportURLUsesBundleName() throws {
+        let bundle = try ProjectBundle.create(in: folder)
+        #expect(bundle.exportURL == bundle.exportsURL.appending(path: "\(bundle.name).mp4"))
+        #expect(!bundle.hasExport)
+    }
+}

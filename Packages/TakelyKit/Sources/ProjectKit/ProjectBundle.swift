@@ -18,6 +18,16 @@ public struct ProjectBundle: Sendable, Hashable {
 
     public func segmentURL(_ file: String) -> URL { segmentsURL.appending(path: file) }
 
+    /// `segment-NNN.json` next to `segment-NNN.mov`: the configured track kinds, written when the segment opens.
+    public func sidecarURL(for file: String) -> URL {
+        segmentURL(file).deletingPathExtension().appendingPathExtension("json")
+    }
+
+    /// Where the finished export lives. Only a completed export is ever moved here.
+    public var exportURL: URL { exportsURL.appending(path: "\(name).mp4") }
+
+    public var hasExport: Bool { FileManager.default.fileExists(atPath: exportURL.path) }
+
     public static func segmentFileName(index: Int) -> String {
         "segment-" + String(format: "%03d", index) + ".mov"
     }
@@ -58,7 +68,23 @@ public struct ProjectBundle: Sendable, Hashable {
         return try JSONDecoder().decode(CursorTrack.self, from: Data(contentsOf: cursorURL))
     }
 
+    public func writeSidecar(tracks: [TrackKind], for file: String) throws {
+        try JSONEncoder().encode(SegmentSidecar(tracks: tracks)).write(to: sidecarURL(for: file), options: .atomic)
+    }
+
+    /// Track kinds in track-ID order (entry `i` is track ID `i + 1`), or `nil` if the sidecar is missing.
+    public func readSidecar(for file: String) throws -> [TrackKind]? {
+        let url = sidecarURL(for: file)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(SegmentSidecar.self, from: Data(contentsOf: url)).tracks
+    }
+
     public func write(_ cursor: CursorTrack) throws {
         try JSONEncoder().encode(cursor).write(to: cursorURL, options: .atomic)
     }
+}
+
+/// What a segment was configured to record, saved before any media so a crashed segment can be recovered.
+struct SegmentSidecar: Codable {
+    var tracks: [TrackKind]
 }
