@@ -8,6 +8,16 @@ public enum CaptureError: Error {
     case invalidState
 }
 
+extension CaptureError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .writerFailed(let detail): "Couldn't write the recording (\(detail))."
+        case .noCamera: "The camera isn't available. Close other apps using it, or turn the camera off."
+        case .invalidState: "That action isn't possible right now."
+        }
+    }
+}
+
 /// Writes one segment `.mov` with one track per `TrackKind`. Thread-safe: sources append from their own queues.
 ///
 /// `@unchecked Sendable`: `writer` and `inputs` are only touched inside `state`'s lock, or by the single

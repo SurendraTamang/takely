@@ -33,6 +33,8 @@ final class RecorderModel {
     private var clickMonitor: Any?
     private var ticker: Task<Void, Never>?
     private let log = Logger(subsystem: "app.takely", category: "app")
+    /// True while start/pause/resume/stop is in flight, so a second click (or a stream failure) can't race it.
+    private var isBusy = false
 
     func refreshDisplays() async {
         do {
@@ -48,7 +50,9 @@ final class RecorderModel {
     }
 
     func start() async {
-        guard phase == .idle else { return }
+        guard phase == .idle, !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
         errorMessage = nil
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -98,6 +102,9 @@ final class RecorderModel {
     }
 
     func togglePause() async {
+        guard !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
         do {
             switch phase {
             case .recording:
@@ -112,12 +119,25 @@ final class RecorderModel {
                 break
             }
         } catch {
+            // The engine call is serialized but may still have failed after partially applying;
+            // trust its actual state rather than assuming our attempted transition took effect.
+            switch await session.state {
+            case .paused:
+                ticker?.cancel()
+                phase = .paused
+            case .recording:
+                phase = .recording
+            case .idle:
+                phase = .idle
+            }
             errorMessage = "Couldn't pause: \(error.localizedDescription)"
         }
     }
 
     func stop() async {
-        guard phase == .recording || phase == .paused else { return }
+        guard phase == .recording || phase == .paused, !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
         ticker?.cancel()
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         clickMonitor = nil
@@ -141,6 +161,13 @@ final class RecorderModel {
 
     /// Display unplugged, permission revoked, …: keep what was recorded.
     private func streamFailed(_ error: any Error) async {
+        // A user action (start/pause/stop) may already be in flight; wait for it to finish
+        // instead of racing it, so this failure is never silently dropped.
+        var waits = 0
+        while isBusy, waits < 100 {
+            try? await Task.sleep(for: .milliseconds(50))
+            waits += 1
+        }
         guard phase == .recording || phase == .paused else { return }
         await stop()
         errorMessage = "Recording stopped: \(error.localizedDescription)"
