@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Owns the app's objects and handles launch (recovery, onboarding) and quit.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let settings = RecordingSettings()
     let permissions = Permissions()
     private let notifier = ReadyNotifier()
@@ -37,8 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.powerOffNoticedAt = .now }
         }
-        if !settings.hasOnboarded { showOnboarding() }
-        Task { await offerRecovery() }
+        Task {
+            await offerRecovery()
+            if !settings.hasOnboarded { showOnboarding() }  // after recovery, so its alerts don't stack on the welcome
+        }
     }
 
     // MARK: Quit
@@ -171,10 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onboardingWindow
             ?? makeWindow(
                 title: "Welcome to Takely",
-                content: OnboardingView(permissions: permissions) { [weak self] in
-                    self?.settings.hasOnboarded = true
-                    self?.onboardingWindow?.close()
-                })
+                content: OnboardingView(permissions: permissions) { [weak self] in self?.onboardingWindow?.close() })
         onboardingWindow = window
         present(window)
     }
@@ -184,13 +183,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = title
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
         return window
     }
 
     /// Menu-bar apps must activate themselves, or the window opens behind other apps.
     private func present(_ window: NSWindow) {
         NSApp.activate()
-        window.center()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Drops closed windows so their polling stops and the next open shows fresh state.
+    func windowWillClose(_ notification: Notification) {
+        let window = notification.object as? NSWindow
+        if window === onboardingWindow {
+            settings.hasOnboarded = true  // closing the welcome counts as Done
+            onboardingWindow = nil
+        } else if window === settingsWindow {
+            settingsWindow = nil
+        }
     }
 }

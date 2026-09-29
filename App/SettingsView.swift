@@ -88,20 +88,29 @@ struct SettingsView: View {
 
 /// Registers Takely as a login item. Ad-hoc builds may need a one-time approval in System Settings › Login Items.
 private struct LaunchAtLoginToggle: View {
-    @State private var enabled = SMAppService.mainApp.status == .enabled
+    @State private var status = SMAppService.mainApp.status
     @State private var error: String?
 
     var body: some View {
-        Toggle("Launch at login", isOn: $enabled)
-            .onChange(of: enabled) { _, on in
-                do {
-                    if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-                    error = nil
-                } catch {
-                    self.error = error.localizedDescription
-                    enabled = SMAppService.mainApp.status == .enabled
-                }
+        Toggle(
+            "Launch at login",
+            isOn: Binding(
+                get: { status == .enabled || status == .requiresApproval },
+                set: { on in
+                    do {
+                        if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+                        error = nil
+                    } catch {
+                        self.error = error.localizedDescription
+                    }
+                    status = SMAppService.mainApp.status
+                }))
+        if status == .requiresApproval {
+            HStack {
+                Text("Allow Takely in System Settings › Login Items.").font(.caption).foregroundStyle(.secondary)
+                Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
             }
+        }
         if let error { Text(error).font(.caption).foregroundStyle(.orange) }
     }
 }
