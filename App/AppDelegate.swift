@@ -17,8 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         saveFolder: { [settings] in settings.saveFolder })
     private lazy var model = RecorderModel(controller: controller, settings: settings)
     private var statusItem: StatusItemController?
-    /// Set when macOS announces a power-off, as a backup to the quit event's reason.
-    private var powerOffNoticed = false
+    /// When macOS last announced a power-off, as a backup to the quit event's reason.
+    /// Trusted only briefly: another app can cancel the restart, and later quits are the user's.
+    private var powerOffNoticedAt: ContinuousClock.Instant?
     /// True while a quit waits for the recording to stop (and, for a user quit, export).
     private var quitInProgress = false
     private let log = Logger(subsystem: "app.takely", category: "app")
@@ -31,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.powerOffNoticed = true }
+            MainActor.assumeIsolated { self?.powerOffNoticedAt = .now }
         }
         Task { await offerRecovery() }
     }
@@ -42,12 +43,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if quitInProgress { return .terminateCancel }  // a repeated ⌘Q; the pending quit finishes on its own
         guard controller.phase != .idle || controller.isBusy else { return .terminateNow }
         let system = isSystemQuit()
-        if !system && controller.isRecording {
+        if !system && (controller.isRecording || controller.phase == .starting) {
             let alert = NSAlert()
             alert.messageText = "Stop recording and quit?"
             alert.informativeText = "Takely will save and export your recording before quitting."
             alert.addButton(withTitle: "Stop & Save")
             alert.addButton(withTitle: "Keep Recording")
+            alert.window.level = .floating  // a menu bar app's activation can be refused
             NSApp.activate()
             guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
         }
@@ -75,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Logout, restart and shutdown send a quit event with a reason; a user ⌘Q has none.
     private func isSystemQuit() -> Bool {
-        if powerOffNoticed { return true }
+        if let noticed = powerOffNoticedAt, ContinuousClock.now - noticed < .seconds(60) { return true }
         guard let event = NSAppleEventManager.shared().currentAppleEvent,
             let reason = event.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue
         else { return false }
@@ -109,7 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let report = try await RecoveryService.rebuild(candidate.bundle)
                         if !report.skipped.isEmpty { log.info("recovery skipped \(report.skipped)") }
                     }
-                    await controller.waitUntilIdle()  // e.g. a hotkey started a recording meanwhile
+                    await controller.waitUntilIdle()
+                    // A hotkey may have started a recording while the alert was open: keep the bundle for next launch.
+                    guard controller.phase == .idle else {
+                        log.info("recovery export deferred: a recording is in progress")
+                        continue
+                    }
                     await controller.export(candidate.bundle)
                 } catch {
                     // Nothing usable: offer the Trash so it isn't offered again on every launch.
@@ -129,6 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = title
         alert.informativeText = message
         buttons.forEach { alert.addButton(withTitle: $0) }
+        alert.window.level = .floating  // stays visible when launched at login, before the app is active
         NSApp.activate()
         return alert.runModal()
     }
