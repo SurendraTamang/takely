@@ -5,6 +5,7 @@ import SwiftUI
 
 struct RecorderMenu: View {
     let model: RecorderModel
+    let openSettings: () -> Void
 
     private var controller: RecordingController { model.controller }
 
@@ -32,6 +33,8 @@ struct RecorderMenu: View {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 }
                 Spacer()
+                Button("Settings…", action: openSettings)
+                    .keyboardShortcut(",")
                 if controller.phase == .idle {
                     Button("Quit") { NSApp.terminate(nil) }
                         .keyboardShortcut("q")

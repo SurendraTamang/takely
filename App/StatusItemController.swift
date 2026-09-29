@@ -20,10 +20,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         return panel
     }()
 
-    init(model: RecorderModel) {
+    init(model: RecorderModel, openSettings: @escaping () -> Void) {
         self.model = model
         super.init()
-        let host = NSHostingController(rootView: RecorderMenu(model: model))
+        let host = NSHostingController(rootView: RecorderMenu(model: model, openSettings: openSettings))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         popover.behavior = .transient

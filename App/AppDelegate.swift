@@ -5,10 +5,11 @@ import ProjectKit
 import RenderKit
 import SwiftUI
 
-/// Owns the app's objects and handles launch (recovery) and quit.
+/// Owns the app's objects and handles launch (recovery, onboarding) and quit.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = RecordingSettings()
+    let permissions = Permissions()
     private let notifier = ReadyNotifier()
     private(set) lazy var controller = RecordingController(
         session: LiveRecordingSession(settings: settings),
@@ -17,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         saveFolder: { [settings] in settings.saveFolder })
     private lazy var model = RecorderModel(controller: controller, settings: settings)
     private var statusItem: StatusItemController?
+    private var settingsWindow: NSWindow?
+    private var onboardingWindow: NSWindow?
     /// When macOS last announced a power-off, as a backup to the quit event's reason.
     /// Trusted only briefly: another app can cancel the restart, and later quits are the user's.
     private var powerOffNoticedAt: ContinuousClock.Instant?
@@ -26,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         notifier.activate()
-        let statusItem = StatusItemController(model: model)
+        let statusItem = StatusItemController(model: model) { [weak self] in self?.showSettings() }
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, statusItem: statusItem)
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -34,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.powerOffNoticedAt = .now }
         }
+        if !settings.hasOnboarded { showOnboarding() }
         Task { await offerRecovery() }
     }
 
@@ -147,5 +151,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             log.error("moving \(bundle.url.lastPathComponent) to Trash failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: Windows
+
+    func showSettings() {
+        statusItem?.closePanel()
+        let window =
+            settingsWindow
+            ?? makeWindow(
+                title: "Takely Settings",
+                content: SettingsView(settings: settings, permissions: permissions) { [weak self] in self?.showOnboarding() })
+        settingsWindow = window
+        present(window)
+    }
+
+    func showOnboarding() {
+        let window =
+            onboardingWindow
+            ?? makeWindow(
+                title: "Welcome to Takely",
+                content: OnboardingView(permissions: permissions) { [weak self] in
+                    self?.settings.hasOnboarded = true
+                    self?.onboardingWindow?.close()
+                })
+        onboardingWindow = window
+        present(window)
+    }
+
+    private func makeWindow(title: String, content: some View) -> NSWindow {
+        let window = NSWindow(contentViewController: NSHostingController(rootView: content))
+        window.title = title
+        window.styleMask = [.titled, .closable]
+        window.isReleasedWhenClosed = false
+        return window
+    }
+
+    /// Menu-bar apps must activate themselves, or the window opens behind other apps.
+    private func present(_ window: NSWindow) {
+        NSApp.activate()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
     }
 }
