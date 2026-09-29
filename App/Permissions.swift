@@ -58,12 +58,13 @@ final class Permissions {
     func request(_ kind: Kind) async {
         switch kind {
         case .screenRecording:
-            // CGRequestScreenCaptureAccess returns at once, before the user answers: prompt once, then open Settings.
+            // Returns at once, before the user answers. It prompts again after a permission reset (e.g. a rebuild),
+            // so always call it; from the second click on also open Settings, where an earlier "Deny" is undone.
+            _ = CGRequestScreenCaptureAccess()
             if UserDefaults.standard.bool(forKey: "askedScreenRecording") {
                 open(kind)
             } else {
                 UserDefaults.standard.set(true, forKey: "askedScreenRecording")
-                _ = CGRequestScreenCaptureAccess()
             }
         case .camera, .microphone:
             let media: AVMediaType = kind == .camera ? .video : .audio
