@@ -101,6 +101,18 @@ public struct Exporter: Sendable {
             try? FileManager.default.removeItem(at: partial)  // don't leave hidden partial files behind
             throw error
         }
+        let markers = (try? bundle.readMarkers()) ?? []
+        if !markers.isEmpty {
+            let chaptered = bundle.exportsURL.appending(path: ".\(bundle.name).chapters.mp4")
+            try? FileManager.default.removeItem(at: chaptered)
+            do {
+                try await ChapterWriter.write(partial, to: chaptered, markers: markers)
+                _ = try FileManager.default.replaceItemAt(partial, withItemAt: chaptered)  // the export survives a failed swap
+            } catch {
+                // Chapters are a nicety: keep the export without them rather than failing it.
+                try? FileManager.default.removeItem(at: chaptered)
+            }
+        }
         // Swaps atomically: a failed replace keeps the previous export.
         _ = try FileManager.default.replaceItemAt(output, withItemAt: partial)
         progress(1)

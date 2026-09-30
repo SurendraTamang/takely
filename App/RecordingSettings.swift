@@ -34,6 +34,13 @@ final class RecordingSettings {
     var bubbleDiameter: Double { didSet { defaults.set(bubbleDiameter, forKey: Key.bubbleDiameter) } }
     /// Bubble and control bar positions (AppKit screen coordinates), nil until moved.
     var bubbleOrigin: CGPoint? { didSet { defaults.set(bubbleOrigin.map { [$0.x, $0.y] }, forKey: Key.bubbleOrigin) } }
+    var prompterScript: String { didSet { defaults.set(prompterScript, forKey: Key.prompterScript) } }
+    var prompterWordsPerMinute: Double { didSet { defaults.set(prompterWordsPerMinute, forKey: Key.prompterWordsPerMinute) } }
+    var prompterFontSize: Double { didSet { defaults.set(prompterFontSize, forKey: Key.prompterFontSize) } }
+    var prompterOpacity: Double { didSet { defaults.set(prompterOpacity, forKey: Key.prompterOpacity) } }
+    var prompterMirrored: Bool { didSet { defaults.set(prompterMirrored, forKey: Key.prompterMirrored) } }
+    /// The prompter scrolls while recording and stops when paused or stopped.
+    var prompterFollowsRecording: Bool { didSet { defaults.set(prompterFollowsRecording, forKey: Key.prompterFollowsRecording) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
     static let defaultSaveFolder = URL.moviesDirectory.appending(path: "Takely", directoryHint: .isDirectory)
@@ -62,6 +69,12 @@ final class RecordingSettings {
         bubbleShape = defaults.string(forKey: Key.bubbleShape).flatMap(BubbleShape.init(rawValue:)) ?? .circle
         bubbleDiameter = defaults.object(forKey: Key.bubbleDiameter) as? Double ?? 180
         bubbleOrigin = (defaults.array(forKey: Key.bubbleOrigin) as? [Double]).flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
+        prompterScript = defaults.string(forKey: Key.prompterScript) ?? ""
+        prompterWordsPerMinute = defaults.object(forKey: Key.prompterWordsPerMinute) as? Double ?? 140
+        prompterFontSize = defaults.object(forKey: Key.prompterFontSize) as? Double ?? 32
+        prompterOpacity = defaults.object(forKey: Key.prompterOpacity) as? Double ?? 0.75
+        prompterMirrored = defaults.bool(forKey: Key.prompterMirrored)
+        prompterFollowsRecording = defaults.object(forKey: Key.prompterFollowsRecording) as? Bool ?? true
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
         }
@@ -87,6 +100,12 @@ final class RecordingSettings {
         static let bubbleDiameter = "bubbleDiameter"
         static let bubbleOrigin = "bubbleOrigin"
         static let controlsOrigin = "controlsOrigin"
+        static let prompterScript = "prompterScript"
+        static let prompterWordsPerMinute = "prompterWordsPerMinute"
+        static let prompterFontSize = "prompterFontSize"
+        static let prompterOpacity = "prompterOpacity"
+        static let prompterMirrored = "prompterMirrored"
+        static let prompterFollowsRecording = "prompterFollowsRecording"
         static let hasOnboarded = "hasOnboarded"
     }
 }

@@ -216,6 +216,62 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(await session.state == .idle)
     }
 
+    /// Speaks into the router's microphone input: `pattern` of (seconds, speaking?) from host time `from`.
+    func speak(_ router: FrameRouter, from: Double, _ pattern: [(Double, Bool)]) {
+        let samples = SilenceDetectorTests.audio(pattern)
+        for chunk in stride(from: 0, to: samples.count, by: 1024) {
+            let part = Array(samples[chunk..<min(chunk + 1024, samples.count)])
+            router.receive(Synthetic.audio(pts: Synthetic.seconds(from + Double(chunk) / 48_000), samples: part, channels: 1), kind: .mic)
+        }
+    }
+
+    @Test func retakeCutsBackToThePauseAndKeepsRecording() async throws {
+        let (session, clock) = makeSession()
+        let fake = Mutex<FakeSource?>(nil)
+        let handle = try await session.start(config: config, in: Synthetic.temporaryFolder()) { router in
+            let source = FakeSource(router: router)
+            fake.withLock { $0 = source }
+            return [source]
+        }
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 100, seconds: 3)
+        speak(handle.router, from: 100, [(1, true), (0.6, false), (1.4, true)])
+        handle.router.addMarker(at: Synthetic.seconds(100.5))
+        handle.router.addMarker(at: Synthetic.seconds(102.5))
+        handle.router.recordBubble(center: CGPoint(x: 50, y: 50), visible: true, at: Synthetic.seconds(102.8))
+        clock.set(103)
+        let duration = try await session.retake()
+        #expect(abs(duration - 1.2) < 0.03, "kept \(duration) s")
+        try await source.emitScreen(from: 103, seconds: 1)
+        clock.set(104)
+        let bundle = try await session.stop().bundle
+        let project = try bundle.readProject()
+        #expect(project.segments.count == 2)
+        #expect(abs(project.segments[0].duration - 1.2) < 0.03)
+        #expect(try bundle.readMarkers().map(\.t) == [0.5])
+        #expect(!project.camera.keyframes.contains { $0.t > 1.25 && $0.t < 2.5 }, "keyframes after the cut are dropped")
+    }
+
+    @Test func retakeWithoutAPauseDropsTheWholeSegment() async throws {
+        let (session, clock) = makeSession()
+        let fake = Mutex<FakeSource?>(nil)
+        let handle = try await session.start(config: config, in: Synthetic.temporaryFolder()) { router in
+            let source = FakeSource(router: router)
+            fake.withLock { $0 = source }
+            return [source]
+        }
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 100, seconds: 2)
+        speak(handle.router, from: 100, [(2, true)])
+        clock.set(102)
+        #expect(try await session.retake() == 0)
+        #expect(!FileManager.default.fileExists(atPath: handle.bundle.segmentURL("segment-000.mov").path))
+        try await source.emitScreen(from: 102, seconds: 1)
+        clock.set(103)
+        let project = try await session.stop().bundle.readProject()
+        #expect(project.segments.map(\.file) == ["segment-001.mov"])
+    }
+
     @Test func bubbleKeyframesAndStyleReachTheManifest() async throws {
         var withCamera = config
         withCamera.camera = true
@@ -506,13 +562,5 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(
             abs(click(in: segment.mic) - click(in: segment.raw)) <= 48, "click at \(click(in: segment.mic)) vs \(click(in: segment.raw))")
         #expect(erle(segment, from: 48_000 * 3) >= 15, "echo removed after the switch: \(erle(segment, from: 48_000 * 3)) dB")
-    }
-}
-
-extension Array {
-    func asyncMap<T>(_ transform: (Element) async throws -> T) async rethrows -> [T] {
-        var result: [T] = []
-        for element in self { result.append(try await transform(element)) }
-        return result
     }
 }

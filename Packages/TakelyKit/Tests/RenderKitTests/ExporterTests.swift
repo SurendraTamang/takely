@@ -205,6 +205,29 @@ import Testing
         #expect(videos.count == 1, "video tracks in output: \(videos.count)")
     }
 
+    @Test func markersBecomeChapters() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 3, tracks: [.screen, .mic])], cameraEnabled: false)
+        try bundle.write([Marker(t: 1), Marker(t: 2.2)])
+        let url = try await Exporter().export(bundle)
+        let asset = AVURLAsset(url: url)
+        let chapters = try await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: ["en"])
+        let titles = try await chapters.asyncMap { group in
+            try await group.items.first?.load(.stringValue)
+        }
+        #expect(titles == ["Start", "Chapter 1", "Chapter 2"])
+        #expect(chapters.map { $0.timeRange.start.seconds.rounded() } == [0, 1, 2])
+        #expect(try await asset.loadTracks(withMediaType: .video).count == 1)
+        #expect(try await asset.loadTracks(withMediaType: .audio).count == 1)
+        let duration = try await asset.load(.duration).seconds
+        #expect(abs(duration - 3) < 0.1, "duration \(duration)")
+    }
+
+    @Test func withoutMarkersThereAreNoChapters() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 1, tracks: [.screen])], cameraEnabled: false)
+        let url = try await Exporter().export(bundle)
+        #expect(try await AVURLAsset(url: url).loadChapterMetadataGroups(bestMatchingPreferredLanguages: ["en"]).isEmpty)
+    }
+
     @Test func rawMicIsNotExported() async throws {
         let bundle = try await makeBundle(segments: [SegSpec(seconds: 1, tracks: [.screen, .mic, .micRaw])], cameraEnabled: false)
         let url = try await Exporter().export(bundle)

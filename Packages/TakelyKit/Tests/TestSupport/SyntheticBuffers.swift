@@ -79,3 +79,11 @@ public enum Synthetic {
         return url
     }
 }
+
+extension Array {
+    public func asyncMap<T>(_ transform: (Element) async throws -> T) async rethrows -> [T] {
+        var result: [T] = []
+        for element in self { result.append(try await transform(element)) }
+        return result
+    }
+}

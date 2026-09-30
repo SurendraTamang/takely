@@ -13,12 +13,21 @@ public final class FrameRouter: Sendable {
         var offset: Double = 0
         var cursor = CursorTrack()
         var camera: Project.Camera
+        var markers: [Marker] = []
         var lastScreen: UncheckedBuffer?
+
+        /// `hostTime` on the edited timeline, in the running segment; nil before its first frame.
+        func editedTime(at hostTime: CMTime) -> Double? {
+            guard let start = writer?.startTime, hostTime >= start else { return nil }
+            return offset + (hostTime - start).seconds
+        }
     }
 
     private let state: Mutex<State>
     /// Nil when cancellation is off or AEC3 couldn't start: then `mic` gets the raw microphone.
     private let echo: Mutex<EchoCanceller?>
+    /// Pauses in the microphone, for the oops-retake; fed from the audio queue.
+    private let silence = Mutex<(detector: SilenceDetector, downmixer: Downmixer?)>((SilenceDetector(), nil))
     private let cancelsEcho: Bool
     private let captureRect: CGRect
     private let cursorLocation: @Sendable () -> CGPoint?
@@ -53,11 +62,44 @@ public final class FrameRouter: Sendable {
         report(.streamStopped(userInitiated: userInitiated), error)
     }
 
-    /// Drops cursor samples and clicks at or after `t`, used when a segment starting at `t` couldn't be saved.
-    func discardCursor(from t: Double) {
+    /// Drops everything recorded at or after edited time `t` (cursor, clicks, bubble moves, markers, pauses):
+    /// a segment starting at `t` couldn't be saved, or a retake cut there.
+    func discard(from t: Double) {
         state.withLock { s in
             s.cursor.samples.removeAll { $0.t >= t }
             s.cursor.clicks.removeAll { $0.t >= t }
+            s.camera.keyframes.removeAll { $0.t > t }
+            s.markers.removeAll { $0.t >= t }
+        }
+        silence.withLock { $0.detector.discard(from: t) }
+    }
+
+    public var markers: [Marker] { state.withLock { $0.markers } }
+
+    /// Marks the current moment (host time) on the edited timeline; false before the segment's first frame.
+    @discardableResult
+    public func addMarker(at hostTime: CMTime) -> Bool {
+        state.withLock { s in
+            guard let t = s.editedTime(at: hostTime) else { return false }
+            s.markers.append(Marker(t: t))
+            return true
+        }
+    }
+
+    /// Where an oops-retake requested at `hostTime` should cut (edited time): see `SilenceDetector.cutPoint`.
+    func retakePoint(at hostTime: CMTime) -> Double {
+        let (segmentStart, now) = state.withLock { ($0.offset, $0.editedTime(at: hostTime) ?? $0.offset) }
+        return silence.withLock { $0.detector.cutPoint(segmentStart: segmentStart, now: now) }
+    }
+
+    /// Measures the microphone for pauses, on the edited timeline of the running segment.
+    private func trackSilence(_ buffer: CMSampleBuffer) {
+        guard let t = state.withLock({ $0.editedTime(at: buffer.presentationTimeStamp) }) else { return }
+        silence.withLock { s in
+            // A new format (e.g. a headset connected) gets a new converter instead of failing from then on.
+            if let format = buffer.formatDescription, s.downmixer?.handles(format) == false { s.downmixer = nil }
+            guard let samples = try? Downmixer.convert(buffer, with: &s.downmixer) else { return }
+            s.detector.add(samples, at: t)
         }
     }
 
@@ -70,6 +112,8 @@ public final class FrameRouter: Sendable {
             $0.writer = writer
             $0.offset = offset
         }
+        // A new segment's audio starts fresh frame alignment (pauses found so far are kept).
+        if writer != nil { silence.withLock { $0.detector.discard(from: offset) } }
     }
 
     public var cursor: CursorTrack { state.withLock { $0.cursor } }
@@ -97,6 +141,7 @@ public final class FrameRouter: Sendable {
     }
 
     public func receive(_ buffer: CMSampleBuffer, kind: TrackKind) {
+        if kind == .mic { trackSilence(buffer) }
         if cancelsEcho, kind == .system || kind == .mic { return receiveWithEchoCancellation(buffer, kind: kind) }
         let (writer, offset) = state.withLock { s -> (SegmentWriter?, Double) in
             // Only keep the newest screen frame, so `prime`'s retimed copy can't clobber a newer live one.

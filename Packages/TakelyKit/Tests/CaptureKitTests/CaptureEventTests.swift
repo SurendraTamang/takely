@@ -85,7 +85,7 @@ struct StreamBroke: Error {}
         router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
         router.recordClick(at: Synthetic.seconds(50.1))
         #expect(router.cursor.samples.count == 1)
-        router.discardCursor(from: 5)
+        router.discard(from: 5)
         #expect(router.cursor.samples.isEmpty)
         #expect(router.cursor.clicks.isEmpty)
     }
