@@ -138,6 +138,30 @@ import Testing
         #expect(abs(out.samples.count - Self.rate) <= 64, "1 s of 44.1 kHz became \(out.samples.count) samples at 48 kHz")
     }
 
+    @Test func overlappingMicrophoneBuffersDontRepeatAudio() throws {
+        // The second buffer claims to start 200 samples before the first one ends.
+        let canceller = try #require(EchoCanceller())
+        var out = Collected()
+        try out.add(canceller.clean(Synthetic.audio(pts: Self.pts(0), samples: [Float](repeating: 0.01, count: 4800), channels: 1)))
+        try out.add(canceller.clean(Synthetic.audio(pts: Self.pts(4600), samples: [Float](repeating: 0.01, count: 4800), channels: 1)))
+        try out.add(canceller.flush())
+        #expect(out.contiguous)
+        #expect(out.samples.count == 9400)
+    }
+
+    @Test func largeBuffersKeepExactSampleCounts() throws {
+        // 8192-frame buffers (seen when reading recordings back) must not lose or gain samples.
+        let canceller = try #require(EchoCanceller())
+        var out = Collected()
+        for step in 0..<20 {
+            let samples = [Float](repeating: 0.01, count: 8192 * 2)
+            try out.add(canceller.clean(Synthetic.audio(pts: Self.pts(step * 8192), samples: samples, channels: 2)))
+        }
+        try out.add(canceller.flush())
+        #expect(out.contiguous)
+        #expect(out.samples.count == 8192 * 20)
+    }
+
     @Test func aChangedMicrophoneFormatThrows() throws {
         let canceller = try #require(EchoCanceller())
         _ = try canceller.clean(Synthetic.audio(pts: Self.pts(0), samples: [Float](repeating: 0, count: 2048), channels: 2))

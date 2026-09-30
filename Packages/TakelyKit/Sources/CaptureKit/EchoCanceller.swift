@@ -20,6 +20,8 @@ final class EchoCanceller {
     static let maxWait = Int64(sampleRate * 150 / 1000)
     /// Timestamp jitter absorbed without treating it as a gap.
     static let tolerance = Int64(sampleRate / 1000)
+    /// For resampled streams, whose converter holds samples back: only a jump this big is a real gap.
+    static let resampledTolerance = Int64(sampleRate / 5)
     /// System audio kept when the microphone stalls, so the reference can't grow without bound.
     static let maxReference = sampleRate * 2
     /// AEC3's output lags its input by this many samples (its band-splitting filter bank; measured, constant).
@@ -46,25 +48,41 @@ final class EchoCanceller {
     func addReference(_ buffer: CMSampleBuffer) throws {
         let samples = try Downmixer.convert(buffer, with: &referenceConverter)
         let index = Self.index(of: buffer.presentationTimeStamp)
+        let tolerance = Self.tolerance(referenceConverter)
         if reference.samples.isEmpty || index < reference.start {
             reference = Timeline(start: index)
-        } else if index > reference.end + Self.tolerance {
+        } else if index > reference.end + tolerance {
             reference.samples += [Float](repeating: 0, count: Int(index - reference.end))  // a gap in the playback is silence
+        } else if index < reference.end - tolerance {
+            reference.samples += samples.dropFirst(Int(reference.end - index))  // already have this part
+            return trimReference()
         }
-        let overlap = max(0, Int(min(reference.end, index + Int64(samples.count)) - index) - Int(Self.tolerance))
-        reference.samples += samples.dropFirst(overlap)
+        reference.samples += samples
+        trimReference()
+    }
+
+    private func trimReference() {
         if reference.samples.count > Self.maxReference { reference.removeFirst(reference.samples.count - Self.maxReference) }
+    }
+
+    private static func tolerance(_ downmixer: Downmixer?) -> Int64 {
+        downmixer?.exact == false ? resampledTolerance : tolerance
     }
 
     /// Adds microphone audio and returns whatever is ready: 48 kHz mono, echo removed, at the microphone's timestamps.
     func clean(_ buffer: CMSampleBuffer) throws -> CMSampleBuffer? {
-        let samples = try Downmixer.convert(buffer, with: &micConverter)
+        var samples = try Downmixer.convert(buffer, with: &micConverter)
         let index = Self.index(of: buffer.presentationTimeStamp)
         var output = Output()
-        if !mic.samples.isEmpty, abs(index - mic.end) > Self.tolerance {
-            try drain(force: true, into: &output)  // a gap in the microphone (e.g. after a pause) starts a new run
+        let tolerance = Self.tolerance(micConverter)
+        if run != nil || !mic.samples.isEmpty {
+            if index > mic.end + tolerance {
+                try drain(force: true, into: &output)  // a gap in the microphone (e.g. after a pause) starts a new run
+            } else if index < mic.end - tolerance {
+                samples.removeFirst(min(Int(mic.end - index), samples.count))  // audio already queued: don't repeat it
+            }
         }
-        if mic.samples.isEmpty { mic = Timeline(start: index) }
+        if run == nil && mic.samples.isEmpty { mic = Timeline(start: index) }
         mic.samples += samples
         try drain(force: false, into: &output)
         return output.buffer(format: outputFormat)
@@ -176,6 +194,12 @@ private struct Output {
     var runs: [(start: Int64, samples: [Float])] = []
 
     mutating func append(_ frame: ArraySlice<Float>, at index: Int64) {
+        if let last = runs.last, last.start + Int64(last.samples.count) > index {
+            // Never emit a sample position twice; runs stay in order.
+            let overlap = Int(last.start + Int64(last.samples.count) - index)
+            if overlap < frame.count { append(frame.dropFirst(overlap), at: index + Int64(overlap)) }
+            return
+        }
         if let last = runs.last, last.start + Int64(last.samples.count) == index {
             runs[runs.count - 1].samples += frame
         } else {
@@ -214,18 +238,26 @@ private struct Output {
 }
 
 /// Converts one stream's buffers to 48 kHz mono Float32. The stream's format must not change.
+/// 48 kHz input is downmixed directly, so every buffer's samples stay with its timestamp. Other rates go through
+/// `AVAudioConverter`, which keeps up to a chunk of samples until more input arrives (`exact` is false).
 private final class Downmixer {
     private let source: CMAudioFormatDescription
     private let input: AVAudioFormat
-    private let converter: AVAudioConverter
+    private let converter: AVAudioConverter?
+    let exact: Bool
     private static let output = AVAudioFormat(standardFormatWithSampleRate: Double(EchoCanceller.sampleRate), channels: 1)!
 
     private init?(_ source: CMAudioFormatDescription) {
         let input = AVAudioFormat(cmAudioFormatDescription: source)
-        guard let converter = AVAudioConverter(from: input, to: Self.output) else { return nil }
+        let direct =
+            input.sampleRate == Self.output.sampleRate
+            && [.pcmFormatFloat32, .pcmFormatInt16, .pcmFormatInt32].contains(input.commonFormat)
+        let converter = direct ? nil : AVAudioConverter(from: input, to: Self.output)
+        guard direct || converter != nil else { return nil }
         self.source = source
         self.input = input
         self.converter = converter
+        self.exact = direct
     }
 
     static func convert(_ buffer: CMSampleBuffer, with downmixer: inout Downmixer?) throws -> [Float] {
@@ -244,7 +276,8 @@ private final class Downmixer {
             CMSampleBufferCopyPCMDataIntoAudioBufferList(buffer, at: 0, frameCount: Int32(frames), into: pcm.mutableAudioBufferList)
                 == noErr
         else { throw EchoCanceller.Failure.conversion }
-        let capacity = AVAudioFrameCount((Double(frames) * Self.output.sampleRate / input.sampleRate).rounded(.up)) + 64
+        guard let converter else { return try Self.downmix(pcm) }
+        let capacity = AVAudioFrameCount((Double(frames) * Self.output.sampleRate / input.sampleRate).rounded(.up)) + 4096
         guard let converted = AVAudioPCMBuffer(pcmFormat: Self.output, frameCapacity: capacity) else {
             throw EchoCanceller.Failure.conversion
         }
@@ -261,5 +294,23 @@ private final class Downmixer {
         }
         guard status != .error, let channel = converted.floatChannelData else { throw EchoCanceller.Failure.conversion }
         return Array(UnsafeBufferPointer(start: channel[0], count: Int(converted.frameLength)))
+    }
+
+    /// Averages the channels of 48 kHz linear PCM (interleaved or not).
+    private static func downmix(_ pcm: AVAudioPCMBuffer) throws -> [Float] {
+        let frames = Int(pcm.frameLength)
+        let channels = Int(pcm.format.channelCount)
+        let interleaved = pcm.format.isInterleaved
+        func mix<T>(_ data: UnsafePointer<UnsafeMutablePointer<T>>, scale: Float, _ value: (T) -> Float) -> [Float] {
+            (0..<frames).map { frame in
+                var sum: Float = 0
+                for channel in 0..<channels { sum += value(interleaved ? data[0][frame * channels + channel] : data[channel][frame]) }
+                return sum * scale / Float(channels)
+            }
+        }
+        if let data = pcm.floatChannelData { return mix(data, scale: 1) { $0 } }
+        if let data = pcm.int16ChannelData { return mix(data, scale: 1 / 32_768) { Float($0) } }
+        if let data = pcm.int32ChannelData { return mix(data, scale: 1 / 2_147_483_648) { Float($0) } }
+        throw EchoCanceller.Failure.conversion
     }
 }
