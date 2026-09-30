@@ -18,6 +18,8 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     MACOSX_DEPLOYMENT_TARGET: "26.0"
+    # Apple silicon only: the prebuilt WebRTC AEC3 library (and the app's requirements) are arm64.
+    ARCHS: arm64
 targets:
   Takely:
     type: application

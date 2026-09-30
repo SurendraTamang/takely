@@ -90,7 +90,8 @@ public actor CaptureSession {
         recordingID += 1
         let id = recordingID
         let sink = eventSink
-        let router = FrameRouter(captureRect: config.captureRect, cursorLocation: cursorLocation) { kind, error in
+        let router = FrameRouter(captureRect: config.captureRect, cancelsEcho: config.cancelsEcho, cursorLocation: cursorLocation) {
+            kind, error in
             sink.yield(CaptureEvent(recordingID: id, kind: kind, error: error))
         }
         var writer: SegmentWriter?

@@ -55,7 +55,8 @@ final class LiveRecordingSession: RecordingSession {
             captureRect: bounds,
             sourcePixelSize: PixelSize(width: Int(bounds.width * scale), height: Int(bounds.height * scale)),
             resolution: settings.resolution, fps: settings.fps, codec: settings.codec,
-            camera: settings.camera, systemAudio: settings.systemAudio, microphone: settings.microphone
+            camera: settings.camera, systemAudio: settings.systemAudio, microphone: settings.microphone,
+            echoCancellation: settings.removeEcho
         )
         let handle = try await engine.start(config: config, in: folder) { router in
             var sources: [any FrameSource] = [ScreenSource(filter: filter, config: config, sourceRect: nil, router: router)]

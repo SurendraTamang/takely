@@ -25,7 +25,8 @@ public struct Exporter: Sendable {
             for (kind, source) in zip(segment.tracks, sources) {
                 let range = try await source.load(.timeRange)
                 let end = CMTimeMinimum(range.end, segmentEnd)
-                guard end > range.start, kind != .camera || project.camera.enabled else { continue }
+                // The raw microphone is kept for re-processing only: exporting it would bring the echo back.
+                guard kind != .micRaw, end > range.start, kind != .camera || project.camera.enabled else { continue }
                 let track = try tracks[kind] ?? addTrack(kind, to: composition)
                 tracks[kind] = track
                 try track.insertTimeRange(CMTimeRange(start: range.start, end: end), of: source, at: cursor + range.start)
@@ -118,7 +119,7 @@ public struct Exporter: Sendable {
         switch kind {
         case .system: project.audio.systemVolume
         case .mic: project.audio.micVolume
-        case .screen, .camera: 1
+        case .screen, .camera, .micRaw: 1
         }
     }
 

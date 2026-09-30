@@ -40,6 +40,18 @@ import Testing
         #expect(c.tracks == [.screen, .camera, .mic])
     }
 
+    @Test func echoCancellationAddsRawMicOnlyWithBothAudioSources() {
+        var c = config(100, 100, .native)
+        #expect(!c.cancelsEcho)
+        #expect(c.tracks == [.screen, .system, .mic])
+        c.echoCancellation = true
+        #expect(c.cancelsEcho)
+        #expect(c.tracks == [.screen, .system, .mic, .micRaw])
+        c.systemAudio = false
+        #expect(!c.cancelsEcho)
+        #expect(c.tracks == [.screen, .mic])
+    }
+
     @Test func h264NativeFitsEncoderLimits() {
         let size = config(5120, 2880, .native, codec: .h264).outputSize
         #expect(size.width <= 4096 && size.height <= 2304)

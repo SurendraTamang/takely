@@ -78,6 +78,11 @@ import Testing
                 }
                 try await Task.sleep(for: .milliseconds(2))
             }
+            for kind in spec.tracks where !kind.isVideo {
+                for i in 0..<Int(spec.seconds * 48_000 / 1024) {
+                    writer.append(Synthetic.audio(pts: Synthetic.seconds(base + Double(i) * 1024 / 48_000)), as: kind)
+                }
+            }
             let duration = try #require(try await writer.finish(at: Synthetic.seconds(base + spec.seconds)))
             segments.append(.init(file: file, duration: duration, tracks: writer.writtenTracks))
         }
@@ -198,6 +203,13 @@ import Testing
         let url = try await Exporter().export(bundle)
         let videos = try await AVURLAsset(url: url).loadTracks(withMediaType: .video)
         #expect(videos.count == 1, "video tracks in output: \(videos.count)")
+    }
+
+    @Test func rawMicIsNotExported() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 1, tracks: [.screen, .mic, .micRaw])], cameraEnabled: false)
+        let url = try await Exporter().export(bundle)
+        let audio = try await AVURLAsset(url: url).loadTracks(withMediaType: .audio)
+        #expect(audio.count == 1, "audio tracks in output: \(audio.count)")
     }
 
     @Test func bubbleDisappearsWhenCameraTrackEnds() async throws {

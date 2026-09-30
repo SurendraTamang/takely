@@ -38,6 +38,14 @@ struct SettingsView: View {
             Toggle("Camera", isOn: $settings.camera)
             Toggle("System audio", isOn: $settings.systemAudio)
             Toggle("Microphone", isOn: $settings.microphone)
+            Toggle(isOn: $settings.removeEcho) {
+                Text("Remove speaker echo")
+                Text(
+                    settings.systemAudio && settings.microphone
+                        ? "Keeps sound from your speakers out of the microphone. The original is kept in the recording."
+                        : "Needs System audio and Microphone.")
+            }
+            .disabled(!(settings.systemAudio && settings.microphone))
             Picker("Quality", selection: $settings.resolution) {
                 Text("720p").tag(Resolution.p720)
                 Text("1080p").tag(Resolution.p1080)
