@@ -92,7 +92,12 @@ final class FakeExporter: Exporting {
 final class FakeFeedback: RecordingFeedback {
     var ready: [(URL, Double)] = []
     var announcements: [String] = []
-    func recordingReady(_ url: URL, duration: Double) { ready.append((url, duration)) }
+    /// Makes posting the Ready notification take a while, like the real one checking notification settings.
+    var readyDelay: Duration = .zero
+    func recordingReady(_ url: URL, duration: Double) async {
+        try? await Task.sleep(for: readyDelay)
+        ready.append((url, duration))
+    }
     func announce(_ message: String) { announcements.append(message) }
 }
 
@@ -378,6 +383,26 @@ struct Harness {
         await h.controller.stopForQuit(system: false)
         #expect(h.controller.phase == .idle)
         #expect(h.exporter.count.withLock { $0 } == 1)
+        await stopped
+    }
+
+    @Test func stopReturnsOnlyAfterTheReadyNotificationIsPosted() async {
+        let h = Harness()
+        h.feedback.readyDelay = .milliseconds(100)
+        await h.controller.start()
+        await h.controller.stop()
+        #expect(h.feedback.ready.count == 1)
+    }
+
+    @Test func userQuitWaitsForTheReadyNotification() async {
+        let h = Harness()
+        h.exporter.delay.withLock { $0 = .milliseconds(100) }
+        h.feedback.readyDelay = .milliseconds(100)
+        await h.controller.start()
+        async let stopped: Void = h.controller.stop()
+        try? await Task.sleep(for: .milliseconds(30))
+        await h.controller.stopForQuit(system: false)
+        #expect(h.feedback.ready.count == 1)  // the app replies to terminate right after this
         await stopped
     }
 }

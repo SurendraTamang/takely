@@ -26,6 +26,7 @@ extension Exporter: Exporting {}
 /// How the controller tells the user what happened: the Ready notification and VoiceOver announcements.
 @MainActor
 public protocol RecordingFeedback: AnyObject {
-    func recordingReady(_ url: URL, duration: Double)
+    /// Returns once the notification is posted (or its fallback shown), so a quit can wait for it.
+    func recordingReady(_ url: URL, duration: Double) async
     func announce(_ message: String)
 }

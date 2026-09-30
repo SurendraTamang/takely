@@ -247,7 +247,7 @@ public final class RecordingController {
                 }
             }
             lastRecording = url
-            feedback.recordingReady(url, duration: (try? bundle.readProject().duration) ?? 0)
+            await feedback.recordingReady(url, duration: (try? bundle.readProject().duration) ?? 0)
         } catch {
             log.error("export failed: \(error.localizedDescription)")
             lastRecording = bundle.url

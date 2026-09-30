@@ -30,29 +30,27 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
     }
 
-    func recordingReady(_ url: URL, duration: Double) {
+    func recordingReady(_ url: URL, duration: Double) async {
         announce("Recording ready")
-        Task {
-            var status = await center.notificationSettings().authorizationStatus
-            if status == .notDetermined {
-                // First recording ever: ask now, rather than silently falling back to Finder.
-                _ = await requestAuthorization()
-                status = await center.notificationSettings().authorizationStatus
-            }
-            guard status == .authorized || status == .provisional else {
-                return reveal(url)
-            }
-            let content = UNMutableNotificationContent()
-            content.title = "Recording ready"
-            content.body = "\(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))) · \(url.lastPathComponent)"
-            content.categoryIdentifier = Self.category
-            content.sound = .default
-            content.userInfo = ["path": url.path]
-            do {
-                try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
-            } catch {
-                reveal(url)
-            }
+        var status = await center.notificationSettings().authorizationStatus
+        if status == .notDetermined {
+            // First recording ever: ask now, rather than silently falling back to Finder.
+            _ = await requestAuthorization()
+            status = await center.notificationSettings().authorizationStatus
+        }
+        guard status == .authorized || status == .provisional else {
+            return reveal(url)
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Recording ready"
+        content.body = "\(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))) · \(url.lastPathComponent)"
+        content.categoryIdentifier = Self.category
+        content.sound = .default
+        content.userInfo = ["path": url.path]
+        do {
+            try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        } catch {
+            reveal(url)
         }
     }
 
