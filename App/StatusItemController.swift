@@ -60,11 +60,13 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     /// An NSPopover keeps its SwiftUI view alive, so refresh here rather than in the view's `.task`.
     func popoverWillShow(_ notification: Notification) {
-        Task { await model.refreshDisplays() }
+        model.coordinator.panelDidOpen()
+        Task { await model.refresh() }
     }
 
     func popoverDidClose(_ notification: Notification) {
         fallbackAnchor.orderOut(nil)
+        model.coordinator.panelDidClose()
     }
 
     /// When the icon can't anchor the panel (hidden behind the notch), anchor it to an invisible point at the top right.

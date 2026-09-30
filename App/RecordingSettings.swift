@@ -21,6 +21,20 @@ final class RecordingSettings {
     var codec: VideoCodec { didSet { defaults.set(codec.rawValue, forKey: Key.codec) } }
     var saveFolder: URL { didSet { defaults.set(saveFolder.path, forKey: Key.saveFolder) } }
     var hasOnboarded: Bool { didSet { defaults.set(hasOnboarded, forKey: Key.hasOnboarded) } }
+    var target: CaptureTarget { didSet { defaults.set(target.rawValue, forKey: Key.target) } }
+    /// The last region, in global points (origin top-left); offered again by the region picker.
+    var region: CGRect? { didSet { defaults.set(region.map { [$0.minX, $0.minY, $0.width, $0.height] }, forKey: Key.region) } }
+    /// `AVCaptureDevice.uniqueID`s; nil means the system default.
+    var microphoneID: String? { didSet { defaults.set(microphoneID, forKey: Key.microphoneID) } }
+    var cameraID: String? { didSet { defaults.set(cameraID, forKey: Key.cameraID) } }
+    var countdown: Bool { didSet { defaults.set(countdown, forKey: Key.countdown) } }
+    var showControls: Bool { didSet { defaults.set(showControls, forKey: Key.showControls) } }
+    var bubbleShape: BubbleShape { didSet { defaults.set(bubbleShape.rawValue, forKey: Key.bubbleShape) } }
+    /// Bubble diameter in points on screen.
+    var bubbleDiameter: Double { didSet { defaults.set(bubbleDiameter, forKey: Key.bubbleDiameter) } }
+    /// Bubble and control bar positions (AppKit screen coordinates), nil until moved.
+    var bubbleOrigin: CGPoint? { didSet { defaults.set(bubbleOrigin.map { [$0.x, $0.y] }, forKey: Key.bubbleOrigin) } }
+    var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
     static let defaultSaveFolder = URL.moviesDirectory.appending(path: "Takely", directoryHint: .isDirectory)
 
@@ -37,6 +51,20 @@ final class RecordingSettings {
         saveFolder =
             defaults.string(forKey: Key.saveFolder).map { URL(filePath: $0, directoryHint: .isDirectory) } ?? Self.defaultSaveFolder
         hasOnboarded = defaults.bool(forKey: Key.hasOnboarded)
+        target = defaults.string(forKey: Key.target).flatMap(CaptureTarget.init(rawValue:)) ?? .display
+        region = (defaults.array(forKey: Key.region) as? [Double]).flatMap {
+            $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil
+        }
+        microphoneID = defaults.string(forKey: Key.microphoneID)
+        cameraID = defaults.string(forKey: Key.cameraID)
+        countdown = defaults.object(forKey: Key.countdown) as? Bool ?? true
+        showControls = defaults.object(forKey: Key.showControls) as? Bool ?? true
+        bubbleShape = defaults.string(forKey: Key.bubbleShape).flatMap(BubbleShape.init(rawValue:)) ?? .circle
+        bubbleDiameter = defaults.object(forKey: Key.bubbleDiameter) as? Double ?? 180
+        bubbleOrigin = (defaults.array(forKey: Key.bubbleOrigin) as? [Double]).flatMap { $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil }
+        controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
+            $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
+        }
     }
 
     private enum Key {
@@ -49,6 +77,16 @@ final class RecordingSettings {
         static let fps = "fps"
         static let codec = "codec"
         static let saveFolder = "saveFolder"
+        static let target = "target"
+        static let region = "region"
+        static let microphoneID = "microphoneID"
+        static let cameraID = "cameraID"
+        static let countdown = "countdown"
+        static let showControls = "showControls"
+        static let bubbleShape = "bubbleShape"
+        static let bubbleDiameter = "bubbleDiameter"
+        static let bubbleOrigin = "bubbleOrigin"
+        static let controlsOrigin = "controlsOrigin"
         static let hasOnboarded = "hasOnboarded"
     }
 }

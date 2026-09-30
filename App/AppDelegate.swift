@@ -11,12 +11,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let settings = RecordingSettings()
     let permissions = Permissions()
     private let notifier = ReadyNotifier()
+    private let camera = CameraController()
+    private lazy var session = LiveRecordingSession(settings: settings, camera: camera)
     private(set) lazy var controller = RecordingController(
-        session: LiveRecordingSession(settings: settings),
+        session: session,
         exporter: Exporter(),
         feedback: notifier,
         saveFolder: { [settings] in settings.saveFolder })
-    private lazy var model = RecorderModel(controller: controller, settings: settings)
+    private lazy var coordinator = RecordingCoordinator(controller: controller, settings: settings, session: session, camera: camera)
+    private lazy var model = RecorderModel(controller: controller, settings: settings, coordinator: coordinator)
     private var statusItem: StatusItemController?
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
@@ -31,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         notifier.activate()
         let statusItem = StatusItemController(model: model) { [weak self] in self?.showSettings() }
         self.statusItem = statusItem
-        HotkeyCenter.install(controller: controller, statusItem: statusItem)
+        HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
         ) { [weak self] _ in
