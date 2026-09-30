@@ -3,8 +3,8 @@ import AppKit
 import SwiftUI
 @preconcurrency import UserNotifications
 
-/// The "Recording ready" notification (Copy / Reveal; click opens QuickTime) and VoiceOver announcements.
-/// Falls back to revealing in Finder when notifications are denied or can't be posted.
+/// The "Recording ready" notification (Copy / Reveal; click opens QuickTime), failure notifications and
+/// VoiceOver announcements. Ready falls back to revealing in Finder when notifications are denied or can't be posted.
 @MainActor
 final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenterDelegate {
     private let center = UNUserNotificationCenter.current()
@@ -52,6 +52,18 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         } catch {
             reveal(url)
         }
+    }
+
+    /// A plain notification (no actions; clicking does nothing). Never asks for permission: a system quit waits for this.
+    func recordingFailed(_ message: String) async {
+        announce(message)
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Takely"
+        content.body = message
+        content.sound = .default
+        try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
     func announce(_ message: String) {

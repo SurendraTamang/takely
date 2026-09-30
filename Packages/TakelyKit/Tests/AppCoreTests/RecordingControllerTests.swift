@@ -94,12 +94,14 @@ final class FakeExporter: Exporting {
 final class FakeFeedback: RecordingFeedback {
     var ready: [(URL, Double)] = []
     var announcements: [String] = []
+    var failures: [String] = []
     /// Makes posting the Ready notification take a while, like the real one checking notification settings.
     var readyDelay: Duration = .zero
     func recordingReady(_ url: URL, duration: Double) async {
         try? await Task.sleep(for: readyDelay)
         ready.append((url, duration))
     }
+    func recordingFailed(_ message: String) async { failures.append(message) }
     func announce(_ message: String) { announcements.append(message) }
 }
 
@@ -154,6 +156,15 @@ struct Harness {
         #expect(h.feedback.ready.first?.1 == 83)
         #expect(h.controller.lastRecording == h.session.handles[0].bundle.exportURL)
         #expect(h.feedback.announcements == ["Recording started", "Recording stopped"])
+        #expect(h.feedback.failures.isEmpty)
+    }
+
+    @Test func failedStartIsSentAsFeedback() async {
+        let h = Harness()
+        h.session.startError = Broke()
+        await h.controller.start()
+        #expect(h.controller.phase == .idle)
+        #expect(h.feedback.failures == ["Couldn't start recording: The display was disconnected."])
     }
 
     @Test func refusesToStartWithLessThanTwoGigabytes() async {
@@ -178,6 +189,8 @@ struct Harness {
         #expect(h.session.calls == ["start", "stop"])
         #expect(h.exporter.count.withLock { $0 } == 1)
         #expect(h.controller.errorMessage == "Stopped: disk almost full — recording saved.")
+        #expect(h.feedback.failures == ["Stopped: disk almost full — recording saved."])
+        #expect(h.feedback.ready.isEmpty)
     }
 
     @Test func writerFailureStopsSavesAndExplains() async {
@@ -187,7 +200,10 @@ struct Harness {
         await h.settle()
         #expect(h.controller.phase == .idle)
         #expect(h.session.calls == ["start", "stop"])
+        #expect(h.exporter.count.withLock { $0 } == 1)
         #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected. Saved up to 1:23.")
+        #expect(h.feedback.failures == ["Recording stopped: The display was disconnected. Saved up to 1:23."])
+        #expect(h.feedback.ready.isEmpty)  // the failure is sent instead of "Recording ready"
     }
 
     @Test func lastSegmentCloseFailureIsExplainedAndTheRestExported() async {
@@ -198,6 +214,17 @@ struct Harness {
         #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected. Saved up to 1:23.")
         #expect(h.exporter.count.withLock { $0 } == 1)
         #expect(h.controller.lastRecording == h.session.handles[0].bundle.exportURL)
+        #expect(h.feedback.failures == ["Recording stopped: The display was disconnected. Saved up to 1:23."])
+        #expect(h.feedback.ready.isEmpty)
+    }
+
+    @Test func writerFailureMessageWinsOverTheCloseFailureItCauses() async {
+        let h = Harness()
+        await h.controller.start()
+        h.session.closeFailure = CaptureError.writerFailed("finishWriting failed")
+        h.session.emit(.writerFailed, for: 1)
+        await h.settle()
+        #expect(h.feedback.failures == ["Recording stopped: The display was disconnected. Saved up to 1:23."])
     }
 
     @Test func systemStopSharingStopsWithoutAnError() async {
@@ -284,6 +311,7 @@ struct Harness {
         await h.controller.stop()
         #expect(h.controller.lastRecording == h.session.handles[0].bundle.url)
         #expect(h.controller.errorMessage?.hasPrefix("Recording saved, but export failed") == true)
+        #expect(h.feedback.failures == [h.controller.errorMessage])
         #expect(h.feedback.ready.isEmpty)
     }
 

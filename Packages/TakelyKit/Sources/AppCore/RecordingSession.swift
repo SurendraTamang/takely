@@ -24,10 +24,12 @@ public protocol Exporting: Sendable {
 
 extension Exporter: Exporting {}
 
-/// How the controller tells the user what happened: the Ready notification and VoiceOver announcements.
+/// How the controller tells the user what happened, even with the panel closed: notifications and VoiceOver announcements.
 @MainActor
 public protocol RecordingFeedback: AnyObject {
     /// Returns once the notification is posted (or its fallback shown), so a quit can wait for it.
     func recordingReady(_ url: URL, duration: Double) async
+    /// A start, stop or export failed, or a recording ended early; sent instead of `recordingReady`.
+    func recordingFailed(_ message: String) async
     func announce(_ message: String)
 }

@@ -81,7 +81,7 @@ public final class RecordingController {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             // A failed space check shouldn't block recording; the writer still reports a full disk.
             if let free = try? disk.freeBytes(at: folder), !StorageGuard.canStart(freeBytes: free) {
-                errorMessage = "Not enough space: \(Self.size(free)) free, \(Self.size(StorageGuard.minimumFreeToStart)) needed."
+                await report("Not enough space: \(Self.size(free)) free, \(Self.size(StorageGuard.minimumFreeToStart)) needed.")
                 return
             }
             phase = .starting
@@ -94,7 +94,7 @@ public final class RecordingController {
         } catch {
             log.error("start failed: \(error.localizedDescription)")
             phase = .idle
-            errorMessage = "Couldn't start recording: \(error.localizedDescription)"
+            await report("Couldn't start recording: \(error.localizedDescription)")
         }
     }
 
@@ -125,7 +125,7 @@ public final class RecordingController {
         guard isRecording, !isBusy else { return }
         isBusy = true
         defer { finishBusy() }
-        _ = await performStop(export: true)
+        await performStop(export: true)
     }
 
     /// For logout/restart/update: saves the recording but skips the export, which recovery offers next launch.
@@ -133,7 +133,7 @@ public final class RecordingController {
         guard isRecording, !isBusy else { return }
         isBusy = true
         defer { finishBusy() }
-        _ = await performStop(export: false)
+        await performStop(export: false)
     }
 
     /// Exports a recovered or unexported bundle, reporting like a normal stop.
@@ -156,8 +156,7 @@ public final class RecordingController {
         guard StorageGuard.mustStop(freeBytes: free, recordedBytes: disk.usedBytes(at: bundle.segmentsURL)) else { return }
         isBusy = true
         defer { finishBusy() }
-        _ = await performStop(export: true)
-        errorMessage = errorMessage.map { "Stopped: disk almost full. \($0)" } ?? "Stopped: disk almost full — recording saved."
+        await performStop(export: true, cause: .diskFull)
     }
 
     /// Returns once no command is running and queued events are handled. Quit uses this so it never skips a stop.
@@ -202,21 +201,18 @@ public final class RecordingController {
         guard event.recordingID == current?.id, isRecording else { return }  // e.g. a late event from an earlier recording
         isBusy = true
         defer { finishBusy() }
-        let bundle = await performStop(export: true)
-        guard errorMessage == nil else { return }
-        switch event.kind {
-        case .streamStopped(userInitiated: true):
-            break  // the system "Stop sharing" control: an intentional stop
-        case .streamStopped:
-            errorMessage = "Recording stopped: \(event.error.localizedDescription)"
-        case .writerFailed:
-            errorMessage = bundle.map { Self.stoppedMessage(event.error, savedIn: $0) }
-        }
+        await performStop(export: true, cause: .event(event))
     }
 
     // MARK: Internals
 
-    private func performStop(export: Bool) async -> ProjectBundle? {
+    /// Why a recording ended without the user pressing Stop.
+    private enum StopCause {
+        case diskFull
+        case event(CaptureEvent)
+    }
+
+    private func performStop(export: Bool, cause: StopCause? = nil) async {
         errorMessage = nil  // a stop supersedes older messages; what follows describes this stop
         phase = .stopping
         stopTicking()
@@ -226,17 +222,41 @@ public final class RecordingController {
             stopped = try await session.stop()
         } catch {
             log.error("stop failed: \(error.localizedDescription)")
-            errorMessage = "Couldn't stop recording: \(error.localizedDescription)"
             finishRecording()
-            return nil
+            await report("Couldn't stop recording: \(error.localizedDescription)")
+            return
         }
         feedback.announce("Recording stopped")
-        if export { await exportAndReport(stopped.bundle) }
-        if let failure = stopped.failure, errorMessage == nil {
-            errorMessage = Self.stoppedMessage(failure, savedIn: stopped.bundle)
+        let failure = Self.failureMessage(cause, closeFailure: stopped.failure, bundle: stopped.bundle)
+        if export {
+            var diskFull = false
+            if case .diskFull = cause { diskFull = true }
+            await exportAndReport(stopped.bundle, failure: failure, diskFull: diskFull)
+        } else if let failure {
+            await report(failure)
         }
         finishRecording()
-        return stopped.bundle
+    }
+
+    /// What to tell the user instead of "Recording ready", or `nil` for a clean stop. The cause wins over a
+    /// failed last-segment close, which a writer failure usually brings along.
+    private static func failureMessage(_ cause: StopCause?, closeFailure: (any Error)?, bundle: ProjectBundle) -> String? {
+        switch cause {
+        case .diskFull:
+            return "Stopped: disk almost full — recording saved."
+        case .event(let event):
+            switch event.kind {
+            case .streamStopped(userInitiated: true):
+                break  // the system "Stop sharing" control: an intentional stop
+            case .streamStopped:
+                return "Recording stopped: \(event.error.localizedDescription)"
+            case .writerFailed:
+                return stoppedMessage(event.error, savedIn: bundle)
+            }
+        case nil:
+            break
+        }
+        return closeFailure.map { stoppedMessage($0, savedIn: bundle) }
     }
 
     /// For a recording cut short by a write failure: what went wrong and how much was kept.
@@ -245,7 +265,14 @@ public final class RecordingController {
         return "Recording stopped: \(error.localizedDescription) Saved up to \(clock(saved))."
     }
 
-    private func exportAndReport(_ bundle: ProjectBundle) async {
+    /// Shows `message` in the panel and sends it as a notification, for when the panel is closed.
+    private func report(_ message: String) async {
+        errorMessage = message
+        await feedback.recordingFailed(message)
+    }
+
+    /// Exports, then sends Ready, or `failure` instead when the recording ended badly.
+    private func exportAndReport(_ bundle: ProjectBundle, failure: String? = nil, diskFull: Bool = false) async {
         phase = .exporting(0)
         wakeWaiters()
         do {
@@ -255,11 +282,16 @@ public final class RecordingController {
                 }
             }
             lastRecording = url
-            await feedback.recordingReady(url, duration: (try? bundle.readProject().duration) ?? 0)
+            if let failure {
+                await report(failure)
+            } else {
+                await feedback.recordingReady(url, duration: (try? bundle.readProject().duration) ?? 0)
+            }
         } catch {
             log.error("export failed: \(error.localizedDescription)")
             lastRecording = bundle.url
-            errorMessage = "Recording saved, but export failed: \(error.localizedDescription)"
+            let message = "Recording saved, but export failed: \(error.localizedDescription)"
+            await report(diskFull ? "Stopped: disk almost full. \(message)" : message)
         }
         phase = .idle
     }
