@@ -12,3 +12,4 @@ All notable changes to this project are documented here. The format follows [Kee
 - Crash recovery on launch (Recover / Delete / Later), a quit confirmation while recording, and a silent save on logout/restart.
 - Storage guard that refuses to start below 2 GB free and stops before the export can't fit.
 - Settings (save folder, launch at login, defaults, shortcuts, permissions) and a first-launch welcome.
+- Live speaker-echo removal (WebRTC AEC3) when recording system audio and the microphone together; the original microphone is kept in the recording as `micRaw`.

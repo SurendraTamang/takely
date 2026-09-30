@@ -7,6 +7,7 @@ A native macOS screen recorder for async video: record your screen with a camera
 ## Features
 
 - Record a display with system audio, microphone and an optional camera bubble
+- Removes speaker echo from the microphone live (WebRTC AEC3), so you can record without headphones
 - Pause and resume; cursor highlight and click pulses
 - 720p / 1080p / native, 30 or 60 fps, HEVC or H.264
 - Global hotkeys: ⌥⇧R start/stop, ⌥⇧P pause/resume, ⌥⇧T open the panel (rebindable)

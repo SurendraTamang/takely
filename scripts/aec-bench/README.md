@@ -1,5 +1,9 @@
 # Offline echo-cancellation benchmark
 
+To check Takely's own canceller on a local recording, run the opt-in test instead:
+`TAKELY_AEC_SEGMENT=~/Movies/Takely/<recording>.takely/segments/segment-000.mov swift test --package-path Packages/TakelyKit --filter EchoRecordingTests`.
+The steps below reproduce the engine comparison with the plain AEC3 library.
+
 Measures how much speaker echo AEC3 removes from a local Takely recording. Used to choose the engine for P1b-2 (see `docs/superpowers/specs/2026-09-30-takely-p1b2-echo-cancellation-design.md`). Recordings stay local; don't commit them.
 
 1. Build `webrtc-audio-processing` with `scripts/build-webrtc-apm.sh` (it leaves an install prefix in `build/webrtc-apm/install`).
