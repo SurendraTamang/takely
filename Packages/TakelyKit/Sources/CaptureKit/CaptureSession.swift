@@ -79,6 +79,12 @@ public actor CaptureSession {
         try await serialized { session in try await session.resumeNow() }
     }
 
+    /// Oops-retake: cuts the recording back to the last pause in the microphone (the segment's start if there is
+    /// none) and keeps recording in a new segment. Returns the recording's new duration.
+    public func retake() async throws -> Double {
+        try await serialized { session in try await session.retakeNow() }
+    }
+
     /// Stops sources, finalizes the manifest and returns the bundle.
     /// A failure closing the last segment is returned in `failure`; earlier segments are kept.
     public func stop() async throws -> StoppedRecording {
@@ -156,6 +162,37 @@ public actor CaptureSession {
         try await closeSegment()
     }
 
+    private func retakeNow() async throws -> Double {
+        guard state == .recording, let router, let bundle else { throw CaptureError.invalidState }
+        let segmentStart = project?.duration ?? 0
+        let cut = max(segmentStart, router.retakePoint())
+        do {
+            try await closeSegment()
+        } catch {
+            state = .paused  // like a failed pause: the user can resume or stop
+            throw error
+        }
+        if var project, project.duration > segmentStart, let last = project.segments.last {
+            let keep = cut - segmentStart
+            if keep < 0.05 {
+                project.segments.removeLast()
+                try? FileManager.default.removeItem(at: bundle.segmentURL(last.file))
+                try? FileManager.default.removeItem(at: bundle.sidecarURL(for: last.file))
+            } else {
+                project.segments[project.segments.count - 1].duration = min(last.duration, keep)
+            }
+            self.project = project
+        }
+        router.discard(from: cut)
+        project?.camera = router.camera
+        if let project { try bundle.write(project) }
+        try bundle.write(router.cursor)
+        try bundle.write(router.markers)
+        state = .paused
+        try await resumeNow()
+        return project?.duration ?? 0
+    }
+
     private func resumeNow() async throws {
         guard state == .paused, let bundle, let project, let config, let router else { throw CaptureError.invalidState }
         let writer = try openSegment(index: nextSegmentIndex, in: bundle, config: config)
@@ -199,7 +236,7 @@ public actor CaptureSession {
             }
         } catch {
             // The segment isn't in the manifest, so its cursor samples would overlap the next segment's times.
-            router.discardCursor(from: offset)
+            router.discard(from: offset)
             throw error
         }
         let dropped = writer.droppedFrames
@@ -207,6 +244,7 @@ public actor CaptureSession {
         project?.camera = router.camera
         if let project { try bundle.write(project) }
         try bundle.write(router.cursor)
+        try bundle.write(router.markers)
     }
 
     private func reset() {

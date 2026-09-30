@@ -133,6 +133,25 @@ public final class RecordingController {
         await performStop(export: true)
     }
 
+    /// Oops-retake: removes the last words (back to the previous pause) and keeps recording.
+    public func retake() async {
+        guard phase == .recording, !isBusy else { return }
+        isBusy = true
+        defer { finishBusy() }
+        do {
+            let duration = try await session.retake()
+            stopTicking()
+            accumulated = .seconds(duration)
+            elapsed = accumulated
+            startTicking()
+            feedback.announce("Retake")
+        } catch {
+            log.error("retake failed: \(error.localizedDescription)")
+            await resyncWithEngine()
+            errorMessage = "Couldn't retake: \(error.localizedDescription)"
+        }
+    }
+
     /// Stops without exporting and moves the recording to the Trash.
     public func discard() async {
         guard isRecording, !isBusy else { return }

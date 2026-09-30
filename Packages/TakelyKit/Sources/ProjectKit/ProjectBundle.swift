@@ -13,6 +13,7 @@ public struct ProjectBundle: Sendable, Hashable {
     public var name: String { url.deletingPathExtension().lastPathComponent }
     public var manifestURL: URL { url.appending(path: "project.json") }
     public var cursorURL: URL { url.appending(path: "cursor.json") }
+    public var markersURL: URL { url.appending(path: "markers.json") }
     public var segmentsURL: URL { url.appending(path: "segments", directoryHint: .isDirectory) }
     public var exportsURL: URL { url.appending(path: "exports", directoryHint: .isDirectory) }
 
@@ -77,6 +78,15 @@ public struct ProjectBundle: Sendable, Hashable {
         let url = sidecarURL(for: file)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try JSONDecoder().decode(SegmentSidecar.self, from: Data(contentsOf: url)).tracks
+    }
+
+    public func readMarkers() throws -> [Marker] {
+        guard FileManager.default.fileExists(atPath: markersURL.path) else { return [] }
+        return try JSONDecoder().decode([Marker].self, from: Data(contentsOf: markersURL))
+    }
+
+    public func write(_ markers: [Marker]) throws {
+        try JSONEncoder().encode(markers).write(to: markersURL, options: .atomic)
     }
 
     public func write(_ cursor: CursorTrack) throws {

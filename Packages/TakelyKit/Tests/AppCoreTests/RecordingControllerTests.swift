@@ -59,6 +59,13 @@ final class FakeSession: RecordingSession {
         engineState = .recording
     }
 
+    /// What `retake` reports as the recording's new duration.
+    var retakeDuration = 0.0
+    func retake() async throws -> Double {
+        calls.append("retake")
+        return retakeDuration
+    }
+
     func stop() async throws -> StoppedRecording {
         calls.append("stop")
         try await Task.sleep(for: delay)
@@ -190,6 +197,26 @@ struct Harness {
         #expect(h.session.calls == ["start", "stop", "start"])
         #expect(!FileManager.default.fileExists(atPath: first.url.path))
         #expect(h.exporter.count.withLock { $0 } == 0)
+    }
+
+    @Test func retakeResetsTheTimerToWhatIsKept() async {
+        let h = Harness()
+        await h.controller.start()
+        h.time.advance(.seconds(30))
+        h.session.retakeDuration = 12.5
+        await h.controller.retake()
+        #expect(h.session.calls == ["start", "retake"])
+        #expect(h.controller.elapsed == .seconds(12.5))
+        #expect(h.controller.phase == .recording)
+        #expect(h.feedback.announcements.last == "Retake")
+    }
+
+    @Test func retakeIsIgnoredWhilePaused() async {
+        let h = Harness()
+        await h.controller.start()
+        await h.controller.togglePause()
+        await h.controller.retake()
+        #expect(!h.session.calls.contains("retake"))
     }
 
     @Test func discardWhileIdleDoesNothing() async {

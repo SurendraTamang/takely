@@ -24,6 +24,13 @@ public struct ClickEvent: Codable, Sendable, Equatable {
     }
 }
 
+/// A moment the user marked while recording (edited timeline); becomes a chapter at export.
+public struct Marker: Codable, Sendable, Equatable {
+    public var t: Double
+
+    public init(t: Double) { self.t = t }
+}
+
 public struct NormalizedPoint: Sendable, Equatable {
     public var x: Double
     public var y: Double
