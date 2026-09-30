@@ -15,6 +15,7 @@ final class RecordingSettings {
     var camera: Bool { didSet { defaults.set(camera, forKey: Key.camera) } }
     var systemAudio: Bool { didSet { defaults.set(systemAudio, forKey: Key.systemAudio) } }
     var microphone: Bool { didSet { defaults.set(microphone, forKey: Key.microphone) } }
+    var removeEcho: Bool { didSet { defaults.set(removeEcho, forKey: Key.removeEcho) } }
     var resolution: Resolution { didSet { defaults.set(resolution.rawValue, forKey: Key.resolution) } }
     var fps: Int { didSet { defaults.set(fps, forKey: Key.fps) } }
     var codec: VideoCodec { didSet { defaults.set(codec.rawValue, forKey: Key.codec) } }
@@ -29,6 +30,7 @@ final class RecordingSettings {
         camera = defaults.object(forKey: Key.camera) as? Bool ?? false
         systemAudio = defaults.object(forKey: Key.systemAudio) as? Bool ?? true
         microphone = defaults.object(forKey: Key.microphone) as? Bool ?? true
+        removeEcho = defaults.object(forKey: Key.removeEcho) as? Bool ?? true
         resolution = defaults.string(forKey: Key.resolution).flatMap(Resolution.init(rawValue:)) ?? .p1080
         fps = defaults.object(forKey: Key.fps) as? Int ?? 30
         codec = defaults.string(forKey: Key.codec).flatMap(VideoCodec.init(rawValue:)) ?? .hevc
@@ -42,6 +44,7 @@ final class RecordingSettings {
         static let camera = "camera"
         static let systemAudio = "systemAudio"
         static let microphone = "microphone"
+        static let removeEcho = "removeEcho"
         static let resolution = "resolution"
         static let fps = "fps"
         static let codec = "codec"

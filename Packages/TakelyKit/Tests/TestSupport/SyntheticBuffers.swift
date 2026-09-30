@@ -32,26 +32,34 @@ public enum Synthetic {
 
     /// 1024 frames of 48 kHz stereo Float32 silence.
     public static func audio(pts: CMTime, frames: Int = 1024) -> CMSampleBuffer {
+        audio(pts: pts, samples: [Float](repeating: 0, count: frames * 2), channels: 2)
+    }
+
+    /// Interleaved Float32 LPCM with the given samples (`samples.count` must be a multiple of `channels`).
+    public static func audio(pts: CMTime, samples: [Float], channels: Int, sampleRate: Double = 48_000) -> CMSampleBuffer {
+        let bytesPerFrame = UInt32(4 * channels)
         var asbd = AudioStreamBasicDescription(
-            mSampleRate: 48_000, mFormatID: kAudioFormatLinearPCM,
+            mSampleRate: sampleRate, mFormatID: kAudioFormatLinearPCM,
             mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
-            mBytesPerPacket: 8, mFramesPerPacket: 1, mBytesPerFrame: 8,
-            mChannelsPerFrame: 2, mBitsPerChannel: 32, mReserved: 0
+            mBytesPerPacket: bytesPerFrame, mFramesPerPacket: 1, mBytesPerFrame: bytesPerFrame,
+            mChannelsPerFrame: UInt32(channels), mBitsPerChannel: 32, mReserved: 0
         )
         var format: CMAudioFormatDescription?
         CMAudioFormatDescriptionCreate(
             allocator: nil, asbd: &asbd, layoutSize: 0, layout: nil, magicCookieSize: 0, magicCookie: nil, extensions: nil,
             formatDescriptionOut: &format)
-        let byteCount = frames * 8
+        let byteCount = samples.count * 4
         var block: CMBlockBuffer?
         CMBlockBufferCreateWithMemoryBlock(
             allocator: nil, memoryBlock: nil, blockLength: byteCount, blockAllocator: nil, customBlockSource: nil, offsetToData: 0,
             dataLength: byteCount, flags: kCMBlockBufferAssureMemoryNowFlag, blockBufferOut: &block)
-        CMBlockBufferFillDataBytes(with: 0, blockBuffer: block!, offsetIntoDestination: 0, dataLength: byteCount)
+        _ = samples.withUnsafeBytes {
+            CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block!, offsetIntoDestination: 0, dataLength: byteCount)
+        }
         var sample: CMSampleBuffer?
         CMAudioSampleBufferCreateReadyWithPacketDescriptions(
-            allocator: nil, dataBuffer: block!, formatDescription: format!, sampleCount: frames, presentationTimeStamp: pts,
-            packetDescriptions: nil, sampleBufferOut: &sample)
+            allocator: nil, dataBuffer: block!, formatDescription: format!, sampleCount: samples.count / channels,
+            presentationTimeStamp: pts, packetDescriptions: nil, sampleBufferOut: &sample)
         return sample!
     }
 

@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreGraphics
 import CoreMedia
 import Foundation
@@ -313,5 +314,61 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         router.attach(writer, offset: 0)
         router.prime(at: Synthetic.seconds(60))
         #expect(writer.startTime == Synthetic.seconds(60))
+    }
+
+    /// Records ~2 s of echo through a router with cancellation on and returns the mic and raw mic track durations.
+    func recordEcho(micFormatChangesAt change: Int? = nil) async throws -> (tracks: [TrackKind], mic: Double, raw: Double) {
+        let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100), cancelsEcho: true) { CGPoint(x: 50, y: 50) }
+        let url = Synthetic.temporaryFolder().appending(path: "s.mov")
+        let writer = try SegmentWriter(
+            url: url,
+            config: WriterConfig(
+                tracks: [.screen, .system, .mic, .micRaw], screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30,
+                videoBitrate: 500_000))
+        router.attach(writer, offset: 0)
+        let chunks = 94
+        let far = EchoCancellerTests.noise(count: chunks * 1024)
+        let mic = EchoCancellerTests.echoOf(far)
+        router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
+        for i in 0..<chunks {
+            let range = i * 1024..<(i + 1) * 1024
+            let pts = Synthetic.seconds(50 + Double(range.lowerBound) / 48_000)
+            router.receive(Synthetic.audio(pts: pts, samples: EchoCancellerTests.stereo(far[range]), channels: 2), kind: .system)
+            let micBuffer =
+                i >= (change ?? .max)
+                ? Synthetic.audio(pts: pts, samples: Array(mic[range]), channels: 1)
+                : Synthetic.audio(pts: pts, samples: EchoCancellerTests.stereo(mic[range]), channels: 2)
+            router.receive(micBuffer, kind: .mic)
+            if i % 3 == 0 {
+                router.receive(Synthetic.video(width: 64, height: 40, pts: pts, rgb: (0, 0, 0)), kind: .screen)
+                try await Task.sleep(for: .milliseconds(2))
+            }
+        }
+        router.attach(nil, offset: 0)
+        _ = try await writer.finish(at: Synthetic.seconds(50 + Double(chunks * 1024) / 48_000))
+        let tracks = try await AVURLAsset(url: url).load(.tracks).sorted { $0.trackID < $1.trackID }
+        let durations = try await tracks.asyncMap { try await $0.load(.timeRange).duration.seconds }
+        return (writer.writtenTracks, durations[2], durations[3])
+    }
+
+    @Test func echoCancellationWritesCleanedAndRawMicrophone() async throws {
+        let result = try await recordEcho()
+        #expect(result.tracks == [.screen, .system, .mic, .micRaw])
+        #expect(abs(result.mic - result.raw) < 0.05, "mic \(result.mic) s, raw \(result.raw) s")
+    }
+
+    @Test func aFailingCancellerFallsBackToTheRawMicrophone() async throws {
+        // The microphone switches from stereo to mono halfway (e.g. a headset connects): the canceller gives up.
+        let result = try await recordEcho(micFormatChangesAt: 47)
+        #expect(result.tracks == [.screen, .system, .mic, .micRaw])
+        #expect(abs(result.mic - result.raw) < 0.05, "mic \(result.mic) s, raw \(result.raw) s")
+    }
+}
+
+extension Array {
+    func asyncMap<T>(_ transform: (Element) async throws -> T) async rethrows -> [T] {
+        var result: [T] = []
+        for element in self { result.append(try await transform(element)) }
+        return result
     }
 }

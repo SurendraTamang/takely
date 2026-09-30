@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreMedia
+import OSLog
 import ProjectKit
 import Synchronization
 
@@ -15,22 +16,33 @@ public final class FrameRouter: Sendable {
     }
 
     private let state = Mutex(State())
+    /// Nil when cancellation is off, AEC3 couldn't start, or it failed: then `mic` gets the raw microphone.
+    private let echo: Mutex<EchoCanceller?>
+    private let cancelsEcho: Bool
     private let captureRect: CGRect
     private let cursorLocation: @Sendable () -> CGPoint?
     private let report: @Sendable (CaptureEvent.Kind, any Error) -> Void
 
     /// - Parameters:
+    ///   - cancelsEcho: write the echo-cancelled microphone to `mic` and the original to `micRaw`.
     ///   - cursorLocation: global cursor position in points, origin top-left.
     ///   - report: forwards stream failures to the owning session's event stream.
     public init(
         captureRect: CGRect,
+        cancelsEcho: Bool = false,
         cursorLocation: @escaping @Sendable () -> CGPoint? = { CGEvent(source: nil)?.location },
         report: @escaping @Sendable (CaptureEvent.Kind, any Error) -> Void = { _, _ in }
     ) {
         self.captureRect = captureRect
         self.cursorLocation = cursorLocation
         self.report = report
+        self.cancelsEcho = cancelsEcho
+        let canceller = cancelsEcho ? EchoCanceller() : nil
+        if cancelsEcho && canceller == nil { Self.log.error("echo cancellation unavailable; recording the raw microphone") }
+        self.echo = Mutex(canceller)
     }
+
+    private static let log = Logger(subsystem: "app.takely", category: "capture")
 
     /// Called by a source whose stream stopped on its own.
     public func reportStreamStopped(_ error: any Error, userInitiated: Bool) {
@@ -46,6 +58,10 @@ public final class FrameRouter: Sendable {
     }
 
     func attach(_ writer: SegmentWriter?, offset: Double) {
+        // Cleaned microphone audio still waiting for its reference belongs to the segment being detached.
+        if let detached = state.withLock({ $0.writer }), let pending = echoed({ try $0.flush() }) {
+            detached.append(pending, as: .mic)
+        }
         state.withLock {
             $0.writer = writer
             $0.offset = offset
@@ -55,6 +71,7 @@ public final class FrameRouter: Sendable {
     public var cursor: CursorTrack { state.withLock { $0.cursor } }
 
     public func receive(_ buffer: CMSampleBuffer, kind: TrackKind) {
+        if cancelsEcho, kind == .system || kind == .mic { return receiveWithEchoCancellation(buffer, kind: kind) }
         let (writer, offset) = state.withLock { s -> (SegmentWriter?, Double) in
             // Only keep the newest screen frame, so `prime`'s retimed copy can't clobber a newer live one.
             if kind == .screen, s.lastScreen.map({ buffer.presentationTimeStamp > $0.buffer.presentationTimeStamp }) ?? true {
@@ -67,6 +84,41 @@ public final class FrameRouter: Sendable {
         else { return }
         let t = offset + (buffer.presentationTimeStamp - start).seconds
         state.withLock { $0.cursor.samples.append(CursorSample(t: t, x: point.x, y: point.y)) }
+    }
+
+    /// System audio is written and becomes the echo reference; the microphone goes to `micRaw` as captured and to
+    /// `mic` cleaned. Both streams arrive on one ScreenCaptureKit queue, so the canceller's lock isn't contended.
+    private func receiveWithEchoCancellation(_ buffer: CMSampleBuffer, kind: TrackKind) {
+        let writer = state.withLock { $0.writer }
+        guard kind == .mic else {
+            writer?.append(buffer, as: .system)
+            _ = echoed {
+                try $0.addReference(buffer)
+                return nil
+            }
+            return
+        }
+        writer?.append(buffer, as: .micRaw)
+        let active = echo.withLock { $0 != nil }
+        guard active else {
+            writer?.append(buffer, as: .mic)
+            return
+        }
+        if let cleaned = echoed({ try $0.clean(buffer) }) { writer?.append(cleaned, as: .mic) }
+    }
+
+    /// Runs `body` on the canceller; on failure logs once and turns cancellation off for the rest of the recording.
+    private func echoed(_ body: (EchoCanceller) throws -> CMSampleBuffer?) -> CMSampleBuffer? {
+        echo.withLock { canceller -> UncheckedBuffer? in
+            guard let current = canceller else { return nil }
+            do {
+                return try body(current).map { UncheckedBuffer(buffer: $0) }
+            } catch {
+                Self.log.error("echo cancellation stopped: \(String(describing: error)); recording the raw microphone")
+                canceller = nil
+                return nil
+            }
+        }?.buffer
     }
 
     /// Starts the attached segment at `hostTime` with the last screen frame, so a static screen doesn't delay it.
