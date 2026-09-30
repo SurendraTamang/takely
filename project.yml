@@ -1,0 +1,62 @@
+name: Takely
+options:
+  bundleIdPrefix: app.takely
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Takely.xcconfig
+  Release: Config/Takely.xcconfig
+packages:
+  TakelyKit:
+    path: Packages/TakelyKit
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    exactVersion: 3.1.0
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+targets:
+  Takely:
+    type: application
+    platform: macOS
+    sources: [App]
+    dependencies:
+      - package: TakelyKit
+        product: ProjectKit
+      - package: TakelyKit
+        product: CaptureKit
+      - package: TakelyKit
+        product: RenderKit
+      - package: TakelyKit
+        product: AppCore
+      - package: KeyboardShortcuts
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Takely
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.productivity
+        LSUIElement: true
+        NSScreenCaptureUsageDescription: Takely records your screen when you start a recording.
+        NSCameraUsageDescription: Takely shows your camera in a bubble on your recordings.
+        NSMicrophoneUsageDescription: Takely records your voice with your recordings.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: app.takely.recording
+            UTTypeDescription: Takely Recording
+            UTTypeConformsTo: [com.apple.package, public.composite-content]
+            UTTypeTagSpecification:
+              public.filename-extension: [takely]
+    entitlements:
+      path: App/Takely.entitlements
+      properties:
+        com.apple.security.device.camera: true
+        com.apple.security.device.audio-input: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.takely.Takely
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic

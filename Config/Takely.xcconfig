@@ -1,0 +1,6 @@
+// Ad-hoc signing by default. macOS ties Screen Recording permission to the signature,
+// so re-grant it after rebuilds. To keep permissions, put `DEVELOPMENT_TEAM = <id>` and
+// `CODE_SIGN_IDENTITY = Apple Development` in Config/Local.xcconfig (gitignored).
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+#include? "Local.xcconfig"

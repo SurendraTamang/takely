@@ -1,0 +1,160 @@
+import Foundation
+
+public enum TrackKind: String, Codable, Sendable, CaseIterable {
+    case screen, camera, system, mic
+
+    public var isVideo: Bool { self == .screen || self == .camera }
+}
+
+public enum CaptureTarget: String, Codable, Sendable {
+    case display, window, region
+}
+
+public enum VideoCodec: String, Codable, Sendable {
+    case h264, hevc
+}
+
+public enum BubbleShape: String, Codable, Sendable, CaseIterable {
+    case circle, rounded, square
+}
+
+public struct PixelSize: Codable, Sendable, Hashable {
+    public var width: Int
+    public var height: Int
+
+    public init(width: Int, height: Int) {
+        self.width = width
+        self.height = height
+    }
+}
+
+public struct BubbleKeyframe: Codable, Sendable, Equatable {
+    public var t: Double
+    public var x: Double
+    public var y: Double
+
+    public init(t: Double, x: Double, y: Double) {
+        self.t = t
+        self.x = x
+        self.y = y
+    }
+}
+
+public enum ProjectError: Error, Equatable {
+    case unsupportedSchemaVersion(Int)
+}
+
+public struct Project: Codable, Sendable, Equatable {
+    public static let currentSchemaVersion = 1
+
+    public enum Status: String, Codable, Sendable {
+        case recording, finished
+    }
+
+    public struct Capture: Codable, Sendable, Equatable {
+        public var target: CaptureTarget
+        public var pixelSize: PixelSize
+        public var fps: Int
+        public var codec: VideoCodec
+
+        public init(target: CaptureTarget, pixelSize: PixelSize, fps: Int, codec: VideoCodec) {
+            self.target = target
+            self.pixelSize = pixelSize
+            self.fps = fps
+            self.codec = codec
+        }
+    }
+
+    public struct Segment: Codable, Sendable, Equatable {
+        public var file: String
+        public var duration: Double
+        /// Track kinds actually written, in track-ID order (empty inputs are omitted from the file).
+        public var tracks: [TrackKind]
+
+        public init(file: String, duration: Double, tracks: [TrackKind]) {
+            self.file = file
+            self.duration = duration
+            self.tracks = tracks
+        }
+    }
+
+    public struct Camera: Codable, Sendable, Equatable {
+        public var enabled: Bool
+        public var shape: BubbleShape
+        /// Bubble diameter as a fraction of output width.
+        public var size: Double
+        public var keyframes: [BubbleKeyframe]
+
+        public init(
+            enabled: Bool, shape: BubbleShape = .circle, size: Double = 0.18,
+            keyframes: [BubbleKeyframe] = [BubbleKeyframe(t: 0, x: 0.88, y: 0.82)]
+        ) {
+            self.enabled = enabled
+            self.shape = shape
+            self.size = size
+            self.keyframes = keyframes
+        }
+    }
+
+    public struct Effects: Codable, Sendable, Equatable {
+        public var cursorHighlight: Bool
+        public var clickRipples: Bool
+
+        public init(cursorHighlight: Bool = true, clickRipples: Bool = true) {
+            self.cursorHighlight = cursorHighlight
+            self.clickRipples = clickRipples
+        }
+    }
+
+    public struct Audio: Codable, Sendable, Equatable {
+        public var systemVolume: Float
+        public var micVolume: Float
+
+        public init(systemVolume: Float = 1, micVolume: Float = 1) {
+            self.systemVolume = systemVolume
+            self.micVolume = micVolume
+        }
+    }
+
+    public var schemaVersion: Int
+    public var status: Status
+    public var createdAt: Date
+    public var capture: Capture
+    public var segments: [Segment]
+    public var camera: Camera
+    public var effects: Effects
+    public var audio: Audio
+
+    public init(
+        status: Status = .recording, createdAt: Date = .now, capture: Capture, segments: [Segment] = [], camera: Camera,
+        effects: Effects = Effects(), audio: Audio = Audio()
+    ) {
+        self.schemaVersion = Self.currentSchemaVersion
+        self.status = status
+        self.createdAt = createdAt
+        self.capture = capture
+        self.segments = segments
+        self.camera = camera
+        self.effects = effects
+        self.audio = audio
+    }
+
+    public var duration: Double { segments.reduce(0) { $0 + $1.duration } }
+
+    public static func decode(_ data: Data) throws -> Project {
+        struct Header: Decodable { let schemaVersion: Int }
+        let version = try JSONDecoder().decode(Header.self, from: data).schemaVersion
+        guard version <= currentSchemaVersion else { throw ProjectError.unsupportedSchemaVersion(version) }
+        // ponytail: v1 is the only schema; add stepwise `migrate(from:)` cases when v2 lands.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(Project.self, from: data)
+    }
+
+    public func encoded() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(self)
+    }
+}
