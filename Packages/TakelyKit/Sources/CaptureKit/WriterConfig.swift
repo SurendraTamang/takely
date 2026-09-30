@@ -32,7 +32,7 @@ public struct WriterConfig: Sendable, Equatable {
                 .merging([AVVideoScalingModeKey: AVVideoScalingModeResizeAspectFill]) { $1 }
         case .system:
             audioSettings(channels: 2)
-        case .mic:
+        case .mic, .micRaw:
             audioSettings(channels: 1)
         }
     }

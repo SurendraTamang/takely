@@ -1,7 +1,8 @@
 import Foundation
 
 public enum TrackKind: String, Codable, Sendable, CaseIterable {
-    case screen, camera, system, mic
+    /// `mic` is echo-cancelled when `micRaw` (the microphone exactly as captured) is present; only `mic` is exported.
+    case screen, camera, system, mic, micRaw
 
     public var isVideo: Bool { self == .screen || self == .camera }
 }

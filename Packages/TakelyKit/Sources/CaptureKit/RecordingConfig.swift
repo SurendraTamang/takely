@@ -25,10 +25,13 @@ public struct RecordingConfig: Sendable, Equatable {
     public var camera: Bool
     public var systemAudio: Bool
     public var microphone: Bool
+    /// Removes speaker playback from the microphone; only takes effect with both audio sources (`cancelsEcho`).
+    public var echoCancellation: Bool
 
     public init(
         target: CaptureTarget, captureRect: CGRect, sourcePixelSize: PixelSize, resolution: Resolution = .p1080, fps: Int = 30,
-        codec: VideoCodec = .hevc, camera: Bool = false, systemAudio: Bool = true, microphone: Bool = true
+        codec: VideoCodec = .hevc, camera: Bool = false, systemAudio: Bool = true, microphone: Bool = true,
+        echoCancellation: Bool = false
     ) {
         self.target = target
         self.captureRect = captureRect
@@ -39,11 +42,15 @@ public struct RecordingConfig: Sendable, Equatable {
         self.camera = camera
         self.systemAudio = systemAudio
         self.microphone = microphone
+        self.echoCancellation = echoCancellation
     }
+
+    /// The system audio is the echo reference, so cancellation needs both sources.
+    public var cancelsEcho: Bool { echoCancellation && systemAudio && microphone }
 
     /// Writer tracks in the order their inputs are added (= track-ID order).
     public var tracks: [TrackKind] {
-        [.screen] + (camera ? [.camera] : []) + (systemAudio ? [.system] : []) + (microphone ? [.mic] : [])
+        [.screen] + (camera ? [.camera] : []) + (systemAudio ? [.system] : []) + (microphone ? [.mic] : []) + (cancelsEcho ? [.micRaw] : [])
     }
 
     /// Output size: scaled down to the preset height (aspect preserved), never up; both sides even.
