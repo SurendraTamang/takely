@@ -57,13 +57,18 @@ public actor CaptureSession {
         return try await task.value
     }
 
-    /// Creates a bundle in `folder`, opens segment 0 and starts all sources.
+    /// Creates a bundle in `folder`, starts all sources, awaits `armed` (e.g. a countdown, while the devices warm
+    /// up; nothing is written yet), then opens segment 0 primed with the latest screen frame. If `armed` throws,
+    /// the sources stop, the bundle is removed and the error is rethrown.
     /// The handle's router is for forwarding clicks; its `id` tags this recording's `events`.
     @discardableResult
-    public func start(config: RecordingConfig, in folder: URL, sources makeSources: @escaping SourceFactory) async throws
-        -> RecordingHandle
-    {
-        try await serialized { session in try await session.startNow(config: config, in: folder, sources: makeSources) }
+    public func start(
+        config: RecordingConfig, in folder: URL, sources makeSources: @escaping SourceFactory,
+        armed: @escaping @Sendable () async throws -> Void = {}
+    ) async throws -> RecordingHandle {
+        try await serialized { session in
+            try await session.startNow(config: config, in: folder, sources: makeSources, armed: armed)
+        }
     }
 
     public func pause() async throws {
@@ -80,7 +85,9 @@ public actor CaptureSession {
         try await serialized { session in try await session.stopNow() }
     }
 
-    private func startNow(config: RecordingConfig, in folder: URL, sources makeSources: SourceFactory) async throws -> RecordingHandle {
+    private func startNow(
+        config: RecordingConfig, in folder: URL, sources makeSources: SourceFactory, armed: @Sendable () async throws -> Void
+    ) async throws -> RecordingHandle {
         guard state == .idle else { throw CaptureError.invalidState }
         let bundle = try ProjectBundle.create(in: folder)
         let project = Project(
@@ -90,7 +97,9 @@ public actor CaptureSession {
         recordingID += 1
         let id = recordingID
         let sink = eventSink
-        let router = FrameRouter(captureRect: config.captureRect, cancelsEcho: config.cancelsEcho, cursorLocation: cursorLocation) {
+        let router = FrameRouter(
+            captureRect: config.captureRect, cancelsEcho: config.cancelsEcho, camera: project.camera, cursorLocation: cursorLocation
+        ) {
             kind, error in
             sink.yield(CaptureEvent(recordingID: id, kind: kind, error: error))
         }
@@ -98,11 +107,13 @@ public actor CaptureSession {
         var sources: [any FrameSource] = []
         do {
             try bundle.write(project)
+            sources = try makeSources(router)
+            for source in sources { try await source.start() }
+            try await armed()
             let w = try openSegment(index: 0, in: bundle, config: config)
             writer = w
             router.attach(w, offset: 0)
-            sources = try makeSources(router)
-            for source in sources { try await source.start() }
+            router.prime(at: now())
         } catch {
             for source in sources { await source.stop() }
             router.attach(nil, offset: 0)
@@ -168,6 +179,7 @@ public actor CaptureSession {
         }
         for source in sources { await source.stop() }
         project?.status = .finished
+        if let camera = router?.camera { project?.camera = camera }
         if let project {
             do { try bundle.write(project) } catch { log.error("writing final manifest failed: \(error.localizedDescription)") }
         }
@@ -192,6 +204,7 @@ public actor CaptureSession {
         }
         let dropped = writer.droppedFrames
         if !dropped.isEmpty { log.info("\(file) dropped frames: \(String(describing: dropped))") }
+        project?.camera = router.camera
         if let project { try bundle.write(project) }
         try bundle.write(router.cursor)
     }

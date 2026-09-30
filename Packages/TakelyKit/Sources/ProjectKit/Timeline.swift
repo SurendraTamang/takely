@@ -80,7 +80,22 @@ public struct CursorTrack: Codable, Sendable, Equatable {
 }
 
 extension Project.Camera {
-    /// Bubble center at time `t`. Each keyframe starts a move from the previous
+    /// Adds a keyframe, moved so the whole bubble stays inside a frame `aspect` (width / height) wide. One within
+    /// `coalescing` seconds of the last replaces it (a drag's updates, or the duplicate around a pause).
+    public mutating func record(_ keyframe: BubbleKeyframe, aspect: Double, coalescing: Double = 0.15) {
+        var k = keyframe
+        let halfWidth = size / 2
+        let halfHeight = size * aspect / 2
+        k.x = min(max(k.x, halfWidth), 1 - halfWidth)
+        k.y = min(max(k.y, halfHeight), 1 - halfHeight)
+        if let last = keyframes.last, k.t - last.t < coalescing {
+            keyframes[keyframes.count - 1] = k
+        } else {
+            keyframes.append(k)
+        }
+    }
+
+    /// Bubble center at time `t`, nil while hidden. Each keyframe starts a move from the previous
     /// position that completes over `transition` seconds.
     public func bubbleCenter(at t: Double, transition: Double = 0.15) -> NormalizedPoint? {
         guard let first = keyframes.first else { return nil }
@@ -88,7 +103,9 @@ extension Project.Camera {
             return NormalizedPoint(x: first.x, y: first.y)
         }
         let target = keyframes[index]
-        let from = index > 0 ? keyframes[index - 1] : target
+        guard target.visible else { return nil }
+        // After a hidden stretch the bubble appears in place rather than sliding in from where it was hidden.
+        let from = index > 0 && keyframes[index - 1].visible ? keyframes[index - 1] : target
         let f = min(1, (t - target.t) / transition)
         return NormalizedPoint(x: from.x + (target.x - from.x) * f, y: from.y + (target.y - from.y) * f)
     }

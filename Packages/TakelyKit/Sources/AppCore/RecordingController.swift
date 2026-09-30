@@ -29,6 +29,7 @@ public final class RecordingController {
     private let feedback: any RecordingFeedback
     private let disk: any DiskSpace
     private let saveFolder: @MainActor () -> URL
+    private let trash: (URL) throws -> Void
     private let now: @Sendable () -> ContinuousClock.Instant
     private let sleep: @Sendable (Duration) async throws -> Void
 
@@ -50,6 +51,7 @@ public final class RecordingController {
         feedback: any RecordingFeedback,
         disk: any DiskSpace = SystemDiskSpace(),
         saveFolder: @escaping @MainActor () -> URL,
+        trash: @escaping (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) },
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now },
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
@@ -60,6 +62,7 @@ public final class RecordingController {
         self.saveFolder = saveFolder
         self.now = now
         self.sleep = sleep
+        self.trash = trash
         let events = session.events
         eventLoop = Task { [weak self] in
             for await event in events {
@@ -91,6 +94,8 @@ public final class RecordingController {
             startTicking()
             startStorageLoop()
             feedback.announce("Recording started")
+        } catch is CancellationError {
+            phase = .idle  // the countdown was cancelled: nothing was recorded, nothing to report
         } catch {
             log.error("start failed: \(error.localizedDescription)")
             phase = .idle
@@ -126,6 +131,23 @@ public final class RecordingController {
         isBusy = true
         defer { finishBusy() }
         await performStop(export: true)
+    }
+
+    /// Stops without exporting and moves the recording to the Trash.
+    public func discard() async {
+        guard isRecording, !isBusy else { return }
+        isBusy = true
+        defer { finishBusy() }
+        await performDiscard()
+    }
+
+    /// Discards the current take and starts a new one (with the countdown).
+    public func restart() async {
+        guard isRecording, !isBusy else { return }
+        isBusy = true
+        await performDiscard()
+        finishBusy()
+        await start()
     }
 
     /// For logout/restart/update: saves the recording but skips the export, which recovery offers next launch.
@@ -292,6 +314,22 @@ public final class RecordingController {
             await report(diskFull ? "Stopped: disk almost full. \(message)" : message)
         }
         phase = .idle
+    }
+
+    private func performDiscard() async {
+        errorMessage = nil
+        phase = .stopping
+        stopTicking()
+        storageLoop?.cancel()
+        do {
+            let stopped = try await session.stop()
+            try trash(stopped.bundle.url)
+            feedback.announce("Recording discarded")
+        } catch {
+            log.error("discard failed: \(error.localizedDescription)")
+            await report("Couldn't discard the recording: \(error.localizedDescription)")
+        }
+        finishRecording()
     }
 
     private func finishRecording() {

@@ -55,14 +55,28 @@ struct RecorderMenu: View {
     private var setup: some View {
         @Bindable var settings = model.settings
         return Group {
-            Picker("Display", selection: $settings.displayID) {
-                ForEach(model.displays, id: \.displayID) { display in
-                    Text("\(display.width) × \(display.height)").tag(Optional(display.displayID))
+            Picker("Record", selection: $settings.target) {
+                Text("Display").tag(CaptureTarget.display)
+                Text("Window").tag(CaptureTarget.window)
+                Text("Area").tag(CaptureTarget.region)
+            }
+            .pickerStyle(.segmented)
+            if settings.target == .display {
+                Picker("Display", selection: $settings.displayID) {
+                    ForEach(model.displays) { display in
+                        Text(display.name).tag(Optional(display.id))
+                    }
                 }
             }
             Toggle("Camera", systemImage: "video", isOn: $settings.camera)
+            if settings.camera, model.cameras.count > 1 {
+                devicePicker("Camera", selection: $settings.cameraID, devices: model.cameras)
+            }
             Toggle("System Audio", systemImage: "speaker.wave.2", isOn: $settings.systemAudio)
             Toggle("Microphone", systemImage: "mic", isOn: $settings.microphone)
+            if settings.microphone, model.microphones.count > 1 {
+                devicePicker("Microphone", selection: $settings.microphoneID, devices: model.microphones)
+            }
             Picker("Quality", selection: $settings.resolution) {
                 Text("720p").tag(Resolution.p720)
                 Text("1080p").tag(Resolution.p1080)
@@ -77,18 +91,40 @@ struct RecorderMenu: View {
                 Text("H.264").tag(VideoCodec.h264)
             }
             Button {
-                Task { await controller.start() }
+                Task { await model.coordinator.record() }
             } label: {
-                Label(controller.phase == .starting ? "Starting…" : "Start Recording", systemImage: "record.circle")
+                Label(startTitle, systemImage: "record.circle")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
             .controlSize(.large)
             .disabled(model.displays.isEmpty || controller.isBusy)
-            Text("⌥⇧R records from anywhere · ⌥⇧T opens this panel")
+            Text("⌥⇧R records from anywhere · ⌥⇧T opens this panel · ⌥⇧C shows the camera")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var startTitle: String {
+        if controller.phase == .starting { return "Starting…" }
+        switch model.settings.target {
+        case .display: return "Start Recording"
+        case .window: return "Choose Window…"
+        case .region: return "Choose Area…"
+        }
+    }
+
+    /// "System default" first, then the connected devices; a saved device that's gone shows as the default.
+    private func devicePicker(_ title: String, selection: Binding<String?>, devices: [RecorderModel.Device]) -> some View {
+        let shown = Binding<String?>(
+            get: { selection.wrappedValue.flatMap { id in devices.contains { $0.id == id } ? id : nil } },
+            set: { selection.wrappedValue = $0 })
+        return Picker(title, selection: shown) {
+            Text("System Default").tag(String?.none)
+            ForEach(devices) { device in
+                Text(device.name).tag(Optional(device.id))
+            }
         }
     }
 

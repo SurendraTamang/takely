@@ -46,6 +46,8 @@ struct SettingsView: View {
                         : "Needs System audio and Microphone.")
             }
             .disabled(!(settings.systemAudio && settings.microphone))
+            Toggle("Countdown before recording", isOn: $settings.countdown)
+            Toggle("Show recording controls", isOn: $settings.showControls)
             Picker("Quality", selection: $settings.resolution) {
                 Text("720p").tag(Resolution.p720)
                 Text("1080p").tag(Resolution.p1080)

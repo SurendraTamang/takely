@@ -27,6 +27,8 @@ public struct RecordingConfig: Sendable, Equatable {
     public var microphone: Bool
     /// Removes speaker playback from the microphone; only takes effect with both audio sources (`cancelsEcho`).
     public var echoCancellation: Bool
+    /// `AVCaptureDevice.uniqueID` of the microphone; nil records the system default.
+    public var microphoneDeviceID: String?
 
     public init(
         target: CaptureTarget, captureRect: CGRect, sourcePixelSize: PixelSize, resolution: Resolution = .p1080, fps: Int = 30,
