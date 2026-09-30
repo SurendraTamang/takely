@@ -90,7 +90,9 @@ public actor CaptureSession {
         recordingID += 1
         let id = recordingID
         let sink = eventSink
-        let router = FrameRouter(captureRect: config.captureRect, cancelsEcho: config.cancelsEcho, cursorLocation: cursorLocation) {
+        let router = FrameRouter(
+            captureRect: config.captureRect, cancelsEcho: config.cancelsEcho, camera: project.camera, cursorLocation: cursorLocation
+        ) {
             kind, error in
             sink.yield(CaptureEvent(recordingID: id, kind: kind, error: error))
         }
@@ -168,6 +170,7 @@ public actor CaptureSession {
         }
         for source in sources { await source.stop() }
         project?.status = .finished
+        if let camera = router?.camera { project?.camera = camera }
         if let project {
             do { try bundle.write(project) } catch { log.error("writing final manifest failed: \(error.localizedDescription)") }
         }
@@ -192,6 +195,7 @@ public actor CaptureSession {
         }
         let dropped = writer.droppedFrames
         if !dropped.isEmpty { log.info("\(file) dropped frames: \(String(describing: dropped))") }
+        project?.camera = router.camera
         if let project { try bundle.write(project) }
         try bundle.write(router.cursor)
     }

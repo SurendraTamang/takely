@@ -12,10 +12,11 @@ public final class FrameRouter: Sendable {
         /// Edited-timeline time at which the current segment starts.
         var offset: Double = 0
         var cursor = CursorTrack()
+        var camera: Project.Camera
         var lastScreen: UncheckedBuffer?
     }
 
-    private let state = Mutex(State())
+    private let state: Mutex<State>
     /// Nil when cancellation is off or AEC3 couldn't start: then `mic` gets the raw microphone.
     private let echo: Mutex<EchoCanceller?>
     private let cancelsEcho: Bool
@@ -25,14 +26,17 @@ public final class FrameRouter: Sendable {
 
     /// - Parameters:
     ///   - cancelsEcho: write the echo-cancelled microphone to `mic` and the original to `micRaw`.
+    ///   - camera: the bubble's starting shape, size and keyframes; moves are added by `recordBubble`.
     ///   - cursorLocation: global cursor position in points, origin top-left.
     ///   - report: forwards stream failures to the owning session's event stream.
     public init(
         captureRect: CGRect,
         cancelsEcho: Bool = false,
+        camera: Project.Camera = Project.Camera(enabled: false),
         cursorLocation: @escaping @Sendable () -> CGPoint? = { CGEvent(source: nil)?.location },
         report: @escaping @Sendable (CaptureEvent.Kind, any Error) -> Void = { _, _ in }
     ) {
+        self.state = Mutex(State(camera: camera))
         self.captureRect = captureRect
         self.cursorLocation = cursorLocation
         self.report = report
@@ -69,6 +73,28 @@ public final class FrameRouter: Sendable {
     }
 
     public var cursor: CursorTrack { state.withLock { $0.cursor } }
+    public var camera: Project.Camera { state.withLock { $0.camera } }
+
+    /// Records where the camera bubble is (`center` in global points, origin top-left) on the edited timeline.
+    /// Before the first frame of a segment (or while paused) it lands at the current edited time.
+    public func recordBubble(center: CGPoint, visible: Bool, at hostTime: CMTime) {
+        guard captureRect.width > 0, captureRect.height > 0 else { return }
+        let x = (center.x - captureRect.minX) / captureRect.width
+        let y = (center.y - captureRect.minY) / captureRect.height
+        let aspect = captureRect.width / captureRect.height
+        state.withLock { s in
+            let t = s.writer?.startTime.map { hostTime >= $0 ? s.offset + (hostTime - $0).seconds : s.offset } ?? s.offset
+            s.camera.record(BubbleKeyframe(t: t, x: x, y: y, visible: visible), aspect: aspect)
+        }
+    }
+
+    /// The bubble's size (fraction of the output width) and shape apply to the whole recording.
+    public func setBubble(size: Double, shape: BubbleShape) {
+        state.withLock {
+            $0.camera.size = size
+            $0.camera.shape = shape
+        }
+    }
 
     public func receive(_ buffer: CMSampleBuffer, kind: TrackKind) {
         if cancelsEcho, kind == .system || kind == .mic { return receiveWithEchoCancellation(buffer, kind: kind) }

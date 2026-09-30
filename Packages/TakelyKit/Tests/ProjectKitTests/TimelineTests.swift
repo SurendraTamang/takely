@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import ProjectKit
@@ -58,5 +59,41 @@ import Testing
 
     @Test func noKeyframesMeansNoBubble() {
         #expect(Project.Camera(enabled: true, keyframes: []).bubbleCenter(at: 0) == nil)
+    }
+
+    @Test func hiddenKeyframesHideTheBubbleAndItReappearsWhereItWasShown() throws {
+        let camera = Project.Camera(
+            enabled: true,
+            keyframes: [
+                BubbleKeyframe(t: 0, x: 0.8, y: 0.8),
+                BubbleKeyframe(t: 5, x: 0.8, y: 0.8, visible: false),
+                BubbleKeyframe(t: 8, x: 0.3, y: 0.3),
+            ])
+        #expect(camera.bubbleCenter(at: 3) != nil)
+        #expect(camera.bubbleCenter(at: 6) == nil)
+        // No slide in from the hidden position: it appears at its new place.
+        #expect(camera.bubbleCenter(at: 8.01) == NormalizedPoint(x: 0.3, y: 0.3))
+    }
+
+    @Test func manifestsWithoutVisibilityDecodeAsVisible() throws {
+        let decoded = try JSONDecoder().decode(BubbleKeyframe.self, from: Data(#"{"t":1,"x":0.5,"y":0.25}"#.utf8))
+        #expect(decoded == BubbleKeyframe(t: 1, x: 0.5, y: 0.25, visible: true))
+    }
+
+    @Test func keyframesWithin150msReplaceThePreviousOne() {
+        var camera = Project.Camera(enabled: true, size: 0.2, keyframes: [])
+        camera.record(BubbleKeyframe(t: 0, x: 0.5, y: 0.5), aspect: 1)
+        camera.record(BubbleKeyframe(t: 0.1, x: 0.6, y: 0.5), aspect: 1)
+        camera.record(BubbleKeyframe(t: 2, x: 0.4, y: 0.5), aspect: 1)
+        #expect(camera.keyframes == [BubbleKeyframe(t: 0.1, x: 0.6, y: 0.5), BubbleKeyframe(t: 2, x: 0.4, y: 0.5)])
+    }
+
+    @Test func recordedKeyframesKeepTheBubbleInsideTheFrame() {
+        // A 16:10 frame: the bubble (0.2 of the width) is 0.32 of the height.
+        var camera = Project.Camera(enabled: true, size: 0.2, keyframes: [])
+        camera.record(BubbleKeyframe(t: 0, x: 1.2, y: -0.5), aspect: 1.6)
+        let k = camera.keyframes[0]
+        #expect(abs(k.x - 0.9) < 1e-9)
+        #expect(abs(k.y - 0.16) < 1e-9)
     }
 }

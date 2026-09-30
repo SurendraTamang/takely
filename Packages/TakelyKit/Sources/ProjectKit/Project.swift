@@ -33,11 +33,23 @@ public struct BubbleKeyframe: Codable, Sendable, Equatable {
     public var t: Double
     public var x: Double
     public var y: Double
+    /// False from here until the next visible keyframe: the user hid the bubble.
+    public var visible: Bool
 
-    public init(t: Double, x: Double, y: Double) {
+    public init(t: Double, x: Double, y: Double, visible: Bool = true) {
         self.t = t
         self.x = x
         self.y = y
+        self.visible = visible
+    }
+
+    /// Manifests written before `visible` existed decode as visible.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        t = try c.decode(Double.self, forKey: .t)
+        x = try c.decode(Double.self, forKey: .x)
+        y = try c.decode(Double.self, forKey: .y)
+        visible = try c.decodeIfPresent(Bool.self, forKey: .visible) ?? true
     }
 }
 

@@ -167,6 +167,27 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(await session.state == .idle)
     }
 
+    @Test func bubbleKeyframesAndStyleReachTheManifest() async throws {
+        var withCamera = config
+        withCamera.camera = true
+        let (session, clock) = makeSession()
+        let fake = Mutex<FakeSource?>(nil)
+        let handle = try await session.start(config: withCamera, in: Synthetic.temporaryFolder()) { router in
+            let source = FakeSource(router: router)
+            fake.withLock { $0 = source }
+            return [source]
+        }
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 100, seconds: 1)
+        handle.router.recordBubble(center: CGPoint(x: 25, y: 75), visible: true, at: Synthetic.seconds(100.5))
+        handle.router.setBubble(size: 0.12, shape: .rounded)
+        clock.set(101)
+        let project = try await session.stop().bundle.readProject()
+        #expect(project.camera.enabled)
+        #expect(project.camera.size == 0.12 && project.camera.shape == .rounded)
+        #expect(project.camera.keyframes.last.map { [$0.t, $0.x, $0.y] } == [0.5, 0.25, 0.75])
+    }
+
     @Test func stopDuringPauseKeepsSegment() async throws {
         let (session, clock) = makeSession()
         let fake = Mutex<FakeSource?>(nil)
@@ -295,6 +316,29 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(cursor.samples.map(\.t) == [10, 10.5])
         #expect(cursor.samples.first.map { NormalizedPoint(x: $0.x, y: $0.y) } == NormalizedPoint(x: 0.5, y: 0.25))
         #expect(cursor.clicks.map(\.t) == [10.25])
+    }
+
+    @Test func bubbleMovesAreKeyframedOnTheEditedTimeline() throws {
+        let router = FrameRouter(
+            captureRect: CGRect(x: 100, y: 0, width: 400, height: 200), camera: Project.Camera(enabled: true, size: 0.1, keyframes: [])
+        ) { CGPoint(x: 0, y: 0) }
+        // Placed before recording starts: t = 0.
+        router.recordBubble(center: CGPoint(x: 300, y: 100), visible: true, at: Synthetic.seconds(40))
+        let writer = try SegmentWriter(
+            url: Synthetic.temporaryFolder().appending(path: "s.mov"),
+            config: WriterConfig(
+                tracks: [.screen], screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30, videoBitrate: 500_000))
+        router.attach(writer, offset: 10)
+        router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
+        router.recordBubble(center: CGPoint(x: 150, y: 50), visible: true, at: Synthetic.seconds(52))
+        router.recordBubble(center: CGPoint(x: 150, y: 50), visible: false, at: Synthetic.seconds(55))
+        router.setBubble(size: 0.2, shape: .square)
+        let camera = router.camera
+        #expect(camera.keyframes.map(\.t) == [0, 12, 15])
+        #expect(camera.keyframes[0].x == 0.5 && camera.keyframes[0].y == 0.5)
+        #expect(camera.keyframes[1].x == 0.125 && camera.keyframes[1].y == 0.25)
+        #expect(camera.keyframes.map(\.visible) == [true, true, false])
+        #expect(camera.size == 0.2 && camera.shape == .square)
     }
 
     @Test func detachedRouterDropsFrames() {
