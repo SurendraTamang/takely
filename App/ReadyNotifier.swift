@@ -32,15 +32,21 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
 
     func recordingReady(_ url: URL, duration: Double) async {
         announce("Recording ready")
-        var status = await center.notificationSettings().authorizationStatus
-        if status == .notDetermined {
-            // First recording ever: ask now, rather than silently falling back to Finder.
-            _ = await requestAuthorization()
-            status = await center.notificationSettings().authorizationStatus
+        switch await center.notificationSettings().authorizationStatus {
+        case .authorized, .provisional:
+            await post(url, duration: duration)
+        case .notDetermined:
+            // First recording ever: ask now rather than silently falling back to Finder, but don't await the
+            // answer — the controller stays busy (and a quit waits) until this returns.
+            Task {
+                if await requestAuthorization() { await post(url, duration: duration) } else { reveal(url) }
+            }
+        default:
+            reveal(url)
         }
-        guard status == .authorized || status == .provisional else {
-            return reveal(url)
-        }
+    }
+
+    private func post(_ url: URL, duration: Double) async {
         let content = UNMutableNotificationContent()
         content.title = "Recording ready"
         content.body = "\(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))) · \(url.lastPathComponent)"
