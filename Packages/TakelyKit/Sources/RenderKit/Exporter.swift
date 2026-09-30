@@ -107,8 +107,7 @@ public struct Exporter: Sendable {
             try? FileManager.default.removeItem(at: chaptered)
             do {
                 try await ChapterWriter.write(partial, to: chaptered, markers: markers)
-                try FileManager.default.removeItem(at: partial)
-                try FileManager.default.moveItem(at: chaptered, to: partial)
+                _ = try FileManager.default.replaceItemAt(partial, withItemAt: chaptered)  // the export survives a failed swap
             } catch {
                 // Chapters are a nicety: keep the export without them rather than failing it.
                 try? FileManager.default.removeItem(at: chaptered)

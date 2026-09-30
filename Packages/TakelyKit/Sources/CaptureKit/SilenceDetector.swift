@@ -4,6 +4,10 @@ public struct SilenceDetector: Sendable {
     /// −45 dBFS as an RMS amplitude. ponytail: fixed threshold; adapt to the room's noise floor if rooms vary.
     static let threshold: Float = 0.005_623
     static let minimumGap = 0.4
+    /// A retake never looks further back than this for a pause…
+    static let lookback = 15.0
+    /// …and without one it takes back only this much (e.g. the microphone is off, or speakers play throughout).
+    static let fallback = 5.0
     static let frame = 480
     static let rate = 48_000.0
 
@@ -17,7 +21,7 @@ public struct SilenceDetector: Sendable {
 
     /// Adds mono 48 kHz samples whose first sample is at edited time `t`.
     public mutating func add(_ samples: [Float], at t: Double) {
-        if pending.isEmpty { pendingStart = t }
+        pendingStart = t - Double(pending.count) / Self.rate  // re-anchor to the timestamps (drift, dropped buffers)
         pending += samples
         var offset = 0
         while pending.count - offset >= Self.frame {
@@ -36,10 +40,12 @@ public struct SilenceDetector: Sendable {
         pendingStart += Double(offset) / Self.rate
     }
 
-    /// Where a retake should cut: inside the last completed pause after `segmentStart`, keeping up to 0.2 s of it;
-    /// `segmentStart` if the segment has none. A pause still going on (after the words being taken back) doesn't count.
-    public func cutPoint(segmentStart: Double) -> Double {
-        guard let gap = gaps.last(where: { $0.lowerBound >= segmentStart }) else { return segmentStart }
+    /// Where a retake requested at `now` should cut: inside the last completed pause in this segment and within
+    /// the last `lookback` seconds, keeping up to 0.2 s of it; otherwise `fallback` seconds back. Never before
+    /// `segmentStart`. A pause still going on (after the words being taken back) doesn't count.
+    public func cutPoint(segmentStart: Double, now: Double) -> Double {
+        let earliest = max(segmentStart, now - Self.lookback)
+        guard let gap = gaps.last(where: { $0.lowerBound >= earliest }) else { return max(segmentStart, now - Self.fallback) }
         return gap.lowerBound + min(0.2, (gap.upperBound - gap.lowerBound) / 2)
     }
 

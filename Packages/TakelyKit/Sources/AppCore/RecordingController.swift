@@ -134,8 +134,10 @@ public final class RecordingController {
     }
 
     /// Oops-retake: removes the last words (back to the previous pause) and keeps recording.
-    public func retake() async {
-        guard phase == .recording, !isBusy else { return }
+    /// Returns whether it happened (not when paused, busy or failed).
+    @discardableResult
+    public func retake() async -> Bool {
+        guard phase == .recording, !isBusy else { return false }
         isBusy = true
         defer { finishBusy() }
         do {
@@ -145,10 +147,12 @@ public final class RecordingController {
             elapsed = accumulated
             startTicking()
             feedback.announce("Retake")
+            return true
         } catch {
             log.error("retake failed: \(error.localizedDescription)")
             await resyncWithEngine()
             errorMessage = "Couldn't retake: \(error.localizedDescription)"
+            return false
         }
     }
 

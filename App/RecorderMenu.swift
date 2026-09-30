@@ -101,7 +101,7 @@ struct RecorderMenu: View {
             .controlSize(.large)
             .disabled(model.displays.isEmpty || controller.isBusy)
             Button {
-                model.coordinator.prompter.toggle()
+                model.coordinator.togglePrompter()
             } label: {
                 Label("Prompter", systemImage: "text.alignleft").frame(maxWidth: .infinity)
             }

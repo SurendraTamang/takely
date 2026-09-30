@@ -18,6 +18,8 @@ enum ScreenSpace {
 /// A borderless panel above everything, on all Spaces. Takely's windows never appear in recordings: the stream
 /// filter excludes the app.
 final class OverlayPanel: NSPanel {
+    /// Pickers take keys (Esc, Return); the drawing canvas and palette mustn't swallow the user's typing.
+    var takesKeys = true
     init(frame: CGRect, activating: Bool, level: NSWindow.Level = .screenSaver) {
         super.init(
             contentRect: frame, styleMask: activating ? [.borderless] : [.borderless, .nonactivatingPanel], backing: .buffered,
@@ -30,7 +32,7 @@ final class OverlayPanel: NSPanel {
         isReleasedWhenClosed = false
     }
 
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { takesKeys }
 }
 
 /// A window the user can record: its frame is in global points.

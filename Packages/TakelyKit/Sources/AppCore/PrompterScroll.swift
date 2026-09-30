@@ -1,10 +1,10 @@
-/// Teleprompter pacing: how far the script moves per second at a reading speed.
+/// Teleprompter pacing: how fast the script moves so it's read at a given speed.
 public enum PrompterScroll {
-    /// Points per second for `wordsPerMinute` at `fontSize`, assuming ~6 words per line and a line height of
-    /// 1.3 × the font size (a comfortable reading layout at the prompter's width).
-    public static func pointsPerSecond(wordsPerMinute: Double, fontSize: Double) -> Double {
-        let linesPerSecond = wordsPerMinute / 60 / 6
-        return linesPerSecond * fontSize * 1.3
+    /// Points per second so that `wordCount` words laid out over `scrollableHeight` points take as long as reading
+    /// them at `wordsPerMinute` — independent of font size and panel width, which only change the layout.
+    public static func pointsPerSecond(scrollableHeight: Double, wordCount: Int, wordsPerMinute: Double) -> Double {
+        guard scrollableHeight > 0, wordCount > 0, wordsPerMinute > 0 else { return 0 }
+        return scrollableHeight / (Double(wordCount) / wordsPerMinute * 60)
     }
 
     /// The next scroll offset after `elapsed` seconds, clamped to the script's end.

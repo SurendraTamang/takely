@@ -3,10 +3,11 @@ import Testing
 @testable import AppCore
 
 @Suite struct PrompterScrollTests {
-    @Test func speakingPaceMatchesLinesOfText() {
-        // 150 wpm ≈ 25 lines/min at 6 words per line → 0.4167 lines/s × (32 pt × 1.3).
-        let speed = PrompterScroll.pointsPerSecond(wordsPerMinute: 150, fontSize: 32)
-        #expect(abs(speed - 17.333) < 0.01)
+    @Test func readsTheWholeScriptInTheTimeItTakesToSayIt() {
+        // 300 words at 150 wpm take 2 min: 1200 pt of scrolling → 10 pt/s, whatever the font or width.
+        #expect(PrompterScroll.pointsPerSecond(scrollableHeight: 1200, wordCount: 300, wordsPerMinute: 150) == 10)
+        #expect(PrompterScroll.pointsPerSecond(scrollableHeight: 0, wordCount: 300, wordsPerMinute: 150) == 0)
+        #expect(PrompterScroll.pointsPerSecond(scrollableHeight: 500, wordCount: 0, wordsPerMinute: 150) == 0)
     }
 
     @Test func stopsAtTheEndAndNeverGoesNegative() {

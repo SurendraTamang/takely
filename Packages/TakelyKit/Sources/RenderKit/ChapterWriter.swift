@@ -14,6 +14,7 @@ enum ChapterWriter {
         let tracks = try await asset.load(.tracks).filter { $0.mediaType == .video || $0.mediaType == .audio }
         let reader = try AVAssetReader(asset: asset)
         let writer = try AVAssetWriter(outputURL: destination, fileType: .mp4)
+        writer.shouldOptimizeForNetworkUse = true  // keep the export's fast-start layout for sharing
 
         var copies: [(AVAssetReaderTrackOutput, AVAssetWriterInput)] = []
         var video: AVAssetWriterInput?
@@ -46,7 +47,11 @@ enum ChapterWriter {
         writer.startSession(atSourceTime: .zero)
 
         // Each chapter runs until the next one (the last until the end).
-        let starts = [0] + markers.map(\.t).filter { $0 > 0.05 && $0 < duration.seconds - 0.05 }.sorted()
+        // Markers closer than 0.5 s are one chapter (a double press); text samples can't share a time.
+        var starts = [0.0]
+        for t in markers.map(\.t).sorted() where t > 0.05 && t < duration.seconds - 0.05 && t - starts.last! >= 0.5 {
+            starts.append(t)
+        }
         var samples: [CMSampleBuffer] = []
         for (index, start) in starts.enumerated() {
             let from = CMTime(seconds: start, preferredTimescale: 600)
@@ -65,7 +70,10 @@ enum ChapterWriter {
                 group.addTask { await pump.run(on: DispatchQueue(label: "app.takely.chapters.\(index)")) }
             }
         }
-        if reader.status == .failed { throw reader.error ?? Failure.unreadable }
+        if reader.status == .failed || writer.status == .failed {
+            writer.cancelWriting()
+            throw reader.error ?? writer.error ?? Failure.unreadable
+        }
         await writer.finishWriting()
         if writer.status != .completed { throw writer.error ?? Failure.unwritable("finish") }
     }

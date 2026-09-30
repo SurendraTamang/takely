@@ -1,6 +1,5 @@
 import AppCore
 import AppKit
-import Combine
 import SwiftUI
 
 /// The invisible prompter: a floating script panel that recordings never show (Takely's windows are excluded from
@@ -40,7 +39,7 @@ final class Prompter {
         panel.titlebarAppearsTransparent = true
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false  // clicking the text makes it key, so Space and the arrows work
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         panel.setFrameAutosaveName("TakelyPrompter")  // AppKit remembers where the user put it
@@ -61,17 +60,16 @@ final class PrompterModel {
         editing = settings.prompterScript.isEmpty
     }
 
-    var speed: Double {
-        PrompterScroll.pointsPerSecond(wordsPerMinute: settings.prompterWordsPerMinute, fontSize: settings.prompterFontSize)
-    }
 }
 
 private struct PrompterView: View {
     @Bindable var model: PrompterModel
     @State private var position = ScrollPosition(edge: .top)
+    /// Where the scroll is (kept exactly; the scroll view reports rounded offsets, which would stall slow speeds).
     @State private var offset = 0.0
     @State private var maxOffset = 0.0
-    private let tick = Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()
+    @State private var lastTick: Date?
+    @FocusState private var focused: Bool
 
     var body: some View {
         @Bindable var settings = model.settings
@@ -96,14 +94,21 @@ private struct PrompterView: View {
                 .onScrollGeometryChange(for: [Double].self) { geometry in
                     [geometry.contentOffset.y, geometry.contentSize.height - geometry.containerSize.height]
                 } action: { _, values in
-                    offset = values[0]
+                    if !model.scrolling || abs(values[0] - offset) > 2 { offset = values[0] }  // the user scrolled
                     maxOffset = values[1]
                 }
                 .scaleEffect(x: settings.prompterMirrored ? -1 : 1, y: 1)
-                .onReceive(tick) { _ in
-                    guard model.scrolling else { return }
-                    position.scrollTo(y: PrompterScroll.advance(offset, by: 1.0 / 30, speed: model.speed, maxOffset: maxOffset))
+                .background {
+                    // Drives scrolling only while it runs (no timer when paused or hidden).
+                    TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !model.scrolling)) { timeline in
+                        Color.clear.onChange(of: timeline.date) { _, now in step(to: now) }
+                    }
                 }
+                .onChange(of: model.scrolling) { lastTick = nil }
+                .focusable()
+                .focusEffectDisabled()
+                .focused($focused)
+                .onTapGesture { focused = true }
                 .onKeyPress(.space) {
                     model.scrolling.toggle()
                     return .handled
@@ -117,8 +122,20 @@ private struct PrompterView: View {
     }
 
     private func nudge(_ distance: Double) -> KeyPress.Result {
-        position.scrollTo(y: min(max(0, offset + distance), max(0, maxOffset)))
+        offset = min(max(0, offset + distance), max(0, maxOffset))
+        position.scrollTo(y: offset)
         return .handled
+    }
+
+    /// Advances by the time since the last frame, at the pace that reads the script in its spoken time.
+    private func step(to now: Date) {
+        defer { lastTick = now }
+        guard let last = lastTick else { return }
+        let words = model.settings.prompterScript.split(whereSeparator: \.isWhitespace).count
+        let speed = PrompterScroll.pointsPerSecond(
+            scrollableHeight: maxOffset, wordCount: words, wordsPerMinute: model.settings.prompterWordsPerMinute)
+        offset = PrompterScroll.advance(offset, by: now.timeIntervalSince(last), speed: speed, maxOffset: maxOffset)
+        position.scrollTo(y: offset)
     }
 
     private var toolbar: some View {

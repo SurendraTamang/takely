@@ -16,8 +16,6 @@ final class DrawingOverlay {
     private var canvas: OverlayPanel?
     private var palette: OverlayPanel?
 
-    var isDrawing: Bool { model.drawing }
-
     init() {
         KeyboardShortcuts.disable(.exitDrawing)
         KeyboardShortcuts.onKeyUp(for: .exitDrawing) { [weak self] in self?.setDrawing(false) }
@@ -28,6 +26,7 @@ final class DrawingOverlay {
     func prepare(on display: CGRect) -> CGWindowID {
         teardown()
         let panel = OverlayPanel(frame: ScreenSpace.flip(display), activating: false, level: .screenSaver)
+        panel.takesKeys = false
         panel.ignoresMouseEvents = true
         panel.contentView = NSHostingView(rootView: DrawingCanvas(model: model))
         panel.orderFrontRegardless()
@@ -56,6 +55,8 @@ final class DrawingOverlay {
             KeyboardShortcuts.disable(.exitDrawing)
             palette?.orderOut(nil)
             palette = nil
+            // A drag cut short by leaving draw mode never ends on its own: end it so it fades.
+            for i in model.strokes.indices where model.strokes[i].ended == nil { model.strokes[i].ended = .now }
         }
     }
 
@@ -65,6 +66,7 @@ final class DrawingOverlay {
         let panel = OverlayPanel(
             frame: CGRect(x: frame.midX - size.width / 2, y: frame.maxY - size.height - 40, width: size.width, height: size.height),
             activating: false, level: NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1))
+        panel.takesKeys = false
         panel.contentView = host
         panel.orderFrontRegardless()
         palette = panel

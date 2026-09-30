@@ -37,24 +37,31 @@ import Testing
     @Test func cutsBackToThePauseBeforeTheLastWords() {
         // "…first take. [pause] Second tak— oops" → cut inside the pause, keeping 0.2 s of it.
         let detector = Self.detect(Self.audio([(2, true), (1, false), (1.5, true)]), start: 10)
-        #expect(abs(detector.cutPoint(segmentStart: 10) - 12.2) < 0.02)
+        #expect(abs(detector.cutPoint(segmentStart: 10, now: 14.5) - 12.2) < 0.02)
     }
 
     @Test func ignoresTheSilenceStillGoingWhenOopsIsPressed() {
         // Said something wrong, stopped, then pressed oops: the trailing silence isn't the cut; the pause before is.
         let detector = Self.detect(Self.audio([(1, true), (0.5, false), (1, true), (2, false)]))
-        #expect(abs(detector.cutPoint(segmentStart: 0) - 1.2) < 0.02)
+        #expect(abs(detector.cutPoint(segmentStart: 0, now: 4.5) - 1.2) < 0.02)
     }
 
     @Test func shortPausesKeepAtMostHalfTheGap() {
         let detector = Self.detect(Self.audio([(1, true), (0.4, false), (1, true)]))
-        #expect(abs(detector.cutPoint(segmentStart: 0) - 1.2) < 0.02)
+        #expect(abs(detector.cutPoint(segmentStart: 0, now: 2.4) - 1.2) < 0.02)
     }
 
-    @Test func withoutAPauseInTheSegmentItCutsToTheSegmentStart() {
-        let detector = Self.detect(Self.audio([(1, true), (0.6, false), (3, true)]))
-        #expect(detector.cutPoint(segmentStart: 2) == 2)
-        #expect(Self.detect(Self.audio([(3, true)])).cutPoint(segmentStart: 0) == 0)
+    @Test func withoutARecentPauseItCutsBackFiveSecondsAtMost() {
+        // No pause in the segment (e.g. the mic is off, or speakers play throughout): 5 s back, never past the start.
+        #expect(Self.detect(Self.audio([(30, true)])).cutPoint(segmentStart: 0, now: 30) == 25)
+        #expect(Self.detect(Self.audio([(3, true)])).cutPoint(segmentStart: 0, now: 3) == 0)
+        #expect(SilenceDetector().cutPoint(segmentStart: 40, now: 60) == 55)
+    }
+
+    @Test func pausesBeforeTheSegmentOrTooLongAgoDontCount() {
+        let detector = Self.detect(Self.audio([(1, true), (0.6, false), (29, true)]))
+        #expect(detector.cutPoint(segmentStart: 2, now: 6) == 2)  // the pause is before this segment
+        #expect(detector.cutPoint(segmentStart: 0, now: 30.6) == 25.6)  // the pause is 29 s ago: past the 15 s lookback
     }
 
     @Test func dropsGapsAfterACut() {

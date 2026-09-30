@@ -165,19 +165,21 @@ public actor CaptureSession {
     private func retakeNow() async throws -> Double {
         guard state == .recording, let router, let bundle else { throw CaptureError.invalidState }
         let segmentStart = project?.duration ?? 0
-        let cut = max(segmentStart, router.retakePoint())
+        let cut = max(segmentStart, router.retakePoint(at: now()))
         do {
             try await closeSegment()
         } catch {
             state = .paused  // like a failed pause: the user can resume or stop
             throw error
         }
+        // Paused from here: if a write below fails, the engine honestly isn't recording (resume or stop still work).
+        state = .paused
+        var dropped: Project.Segment?
         if var project, project.duration > segmentStart, let last = project.segments.last {
             let keep = cut - segmentStart
             if keep < 0.05 {
                 project.segments.removeLast()
-                try? FileManager.default.removeItem(at: bundle.segmentURL(last.file))
-                try? FileManager.default.removeItem(at: bundle.sidecarURL(for: last.file))
+                dropped = last
             } else {
                 project.segments[project.segments.count - 1].duration = min(last.duration, keep)
             }
@@ -188,7 +190,11 @@ public actor CaptureSession {
         if let project { try bundle.write(project) }
         try bundle.write(router.cursor)
         try bundle.write(router.markers)
-        state = .paused
+        // Delete a dropped segment only once the manifest no longer lists it (a crash in between stays consistent).
+        if let dropped {
+            try? FileManager.default.removeItem(at: bundle.segmentURL(dropped.file))
+            try? FileManager.default.removeItem(at: bundle.sidecarURL(for: dropped.file))
+        }
         try await resumeNow()
         return project?.duration ?? 0
     }

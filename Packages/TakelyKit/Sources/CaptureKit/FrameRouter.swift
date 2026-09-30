@@ -76,24 +76,28 @@ public final class FrameRouter: Sendable {
 
     public var markers: [Marker] { state.withLock { $0.markers } }
 
-    /// Marks the current moment (host time) on the edited timeline.
-    public func addMarker(at hostTime: CMTime) {
+    /// Marks the current moment (host time) on the edited timeline; false before the segment's first frame.
+    @discardableResult
+    public func addMarker(at hostTime: CMTime) -> Bool {
         state.withLock { s in
-            guard let t = s.editedTime(at: hostTime) else { return }
+            guard let t = s.editedTime(at: hostTime) else { return false }
             s.markers.append(Marker(t: t))
+            return true
         }
     }
 
-    /// Where an oops-retake should cut now (edited time): see `SilenceDetector.cutPoint`.
-    func retakePoint() -> Double {
-        let segmentStart = state.withLock { $0.offset }
-        return silence.withLock { $0.detector.cutPoint(segmentStart: segmentStart) }
+    /// Where an oops-retake requested at `hostTime` should cut (edited time): see `SilenceDetector.cutPoint`.
+    func retakePoint(at hostTime: CMTime) -> Double {
+        let (segmentStart, now) = state.withLock { ($0.offset, $0.editedTime(at: hostTime) ?? $0.offset) }
+        return silence.withLock { $0.detector.cutPoint(segmentStart: segmentStart, now: now) }
     }
 
     /// Measures the microphone for pauses, on the edited timeline of the running segment.
     private func trackSilence(_ buffer: CMSampleBuffer) {
         guard let t = state.withLock({ $0.editedTime(at: buffer.presentationTimeStamp) }) else { return }
         silence.withLock { s in
+            // A new format (e.g. a headset connected) gets a new converter instead of failing from then on.
+            if let format = buffer.formatDescription, s.downmixer?.handles(format) == false { s.downmixer = nil }
             guard let samples = try? Downmixer.convert(buffer, with: &s.downmixer) else { return }
             s.detector.add(samples, at: t)
         }

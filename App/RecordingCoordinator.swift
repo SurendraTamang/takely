@@ -2,6 +2,7 @@ import AppCore
 import AppKit
 import CaptureKit
 import CoreMedia
+import KeyboardShortcuts
 import SwiftUI
 
 /// What happens around the controller's commands: the target picker before a recording, the camera bubble and the
@@ -23,6 +24,8 @@ final class RecordingCoordinator {
     /// whether recordings include the camera: hiding the bubble doesn't turn the camera off for the next take.
     private var bubbleShown = false
     private var wasRecording = false
+    /// The phase the prompter and the recording-only hotkeys last followed (so a manual pause of the prompter sticks).
+    private var followedPhase: RecordingController.Phase?
 
     init(controller: RecordingController, settings: RecordingSettings, session: LiveRecordingSession, camera: CameraController) {
         self.controller = controller
@@ -60,15 +63,17 @@ final class RecordingCoordinator {
 
     /// ⌥⇧Z: takes back the last words (to the previous pause) and keeps recording.
     func retake() async {
-        guard controller.phase == .recording else { return }
-        await controller.retake()
+        guard controller.phase == .recording, await controller.retake() else { return }
         NSSound(named: "Pop")?.play()
+        // The cut may have removed the bubble's latest hide or move: record where it is now.
+        recordBubble(visible: settings.camera && bubbleShown)
     }
 
     /// ⌥⇧M: marks this moment; markers become chapters in the export.
     func addMarker() {
-        guard controller.phase == .recording, let active = session.active else { return }
-        active.router.addMarker(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        guard controller.phase == .recording, let active = session.active,
+            active.router.addMarker(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        else { return }
         NSSound(named: "Tink")?.play()
         AccessibilityNotification.Announcement("Marker added").post()
     }
@@ -77,6 +82,14 @@ final class RecordingCoordinator {
     func toggleDrawing() {
         guard controller.isRecording else { return }
         session.drawing.toggle()
+    }
+
+    /// ⌥⇧S: shows or hides the prompter; shown mid-recording, it starts scrolling with it.
+    func togglePrompter() {
+        prompter.toggle()
+        if prompter.isVisible, settings.prompterFollowsRecording, !prompter.model.editing {
+            prompter.model.scrolling = controller.phase == .recording
+        }
     }
 
     /// ⌥⇧C: hides the bubble, or shows it (turning the camera on if needed) so it can be placed before recording.
@@ -108,7 +121,13 @@ final class RecordingCoordinator {
         withObservationTracking {
             _ = (controller.phase, settings.camera, settings.cameraID, settings.showControls)
             update()
-            followRecordingWithPrompter()
+            if controller.phase != followedPhase {
+                followedPhase = controller.phase
+                followRecordingWithPrompter()
+                // Retake, marker and draw only exist while recording, so their keys aren't taken from other apps.
+                let names: [KeyboardShortcuts.Name] = [.retake, .addMarker, .toggleDrawing]
+                if controller.isRecording { KeyboardShortcuts.enable(names) } else { KeyboardShortcuts.disable(names) }
+            }
         } onChange: {
             Task { @MainActor [weak self] in self?.observe() }
         }

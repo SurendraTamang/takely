@@ -13,7 +13,8 @@ extension KeyboardShortcuts.Name {
 }
 
 /// Global hotkeys: ⌥⇧R start/stop (skips a running countdown), ⌥⇧P pause/resume, ⌥⇧T show/hide the panel,
-/// ⌥⇧C show/hide the camera (rebindable in Settings). They go through the same commands as the panel buttons.
+/// ⌥⇧C show/hide the camera, ⌥⇧S show/hide the prompter; while recording also ⌥⇧Z retake, ⌥⇧M marker,
+/// ⌥⇧D draw (rebindable in Settings). They go through the same commands as the panel buttons.
 @MainActor
 enum HotkeyCenter {
     static func install(controller: RecordingController, coordinator: RecordingCoordinator, statusItem: StatusItemController) {
@@ -24,7 +25,7 @@ enum HotkeyCenter {
             coordinator.toggleBubble()
         }
         KeyboardShortcuts.onKeyUp(for: .togglePrompter) {
-            coordinator.prompter.toggle()
+            coordinator.togglePrompter()
         }
         KeyboardShortcuts.onKeyUp(for: .retake) {
             Task { await coordinator.retake() }

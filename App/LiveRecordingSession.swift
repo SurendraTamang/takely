@@ -2,6 +2,7 @@
 import AppCore
 import AppKit
 import CaptureKit
+import OSLog
 import ProjectKit
 @preconcurrency import ScreenCaptureKit
 
@@ -40,6 +41,7 @@ final class LiveRecordingSession: RecordingSession {
     private(set) var active: (router: FrameRouter, captureRect: CGRect)?
 
     private let engine = CaptureSession()
+    private let log = Logger(subsystem: "app.takely", category: "app")
     private let settings: RecordingSettings
     private let camera: CameraController
     private var clickMonitor: Any?
@@ -52,6 +54,15 @@ final class LiveRecordingSession: RecordingSession {
     }
 
     func start(in folder: URL) async throws -> RecordingHandle {
+        do {
+            return try await startNow(in: folder)
+        } catch {
+            drawing.teardown()  // cancelled countdown or failed start: no canvas left on screen
+            throw error
+        }
+    }
+
+    private func startNow(in folder: URL) async throws -> RecordingHandle {
         if settings.camera, !(await AVCaptureDevice.requestAccess(for: .video)) { throw LiveSessionError.cameraDenied }
         if settings.microphone, !(await AVCaptureDevice.requestAccess(for: .audio)) { throw LiveSessionError.microphoneDenied }
         let (filter, captureRect, sourceRect, kind) = try await capture(target)
@@ -105,8 +116,14 @@ final class LiveRecordingSession: RecordingSession {
         let bounds = CGDisplayBounds(display.displayID)
         // The drawing canvas is the one Takely window that is recorded: put it up, then list it as an exception.
         let canvasID = drawing.prepare(on: bounds)
-        let current = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        var current = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // A window just put on screen can take a moment to be listed.
+        for _ in 0..<5 where !current.windows.contains(where: { $0.windowID == canvasID }) {
+            try await Task.sleep(for: .milliseconds(50))
+            current = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        }
         let canvas = current.windows.filter { $0.windowID == canvasID }
+        if canvas.isEmpty { log.error("drawing canvas not listed by ScreenCaptureKit; drawings won't be recorded") }
         // Exclude the app, not a window snapshot, so windows opened later (the popover) never appear.
         let ownApps = current.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
         let filter =
