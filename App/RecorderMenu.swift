@@ -100,7 +100,12 @@ struct RecorderMenu: View {
             .tint(.red)
             .controlSize(.large)
             .disabled(model.displays.isEmpty || controller.isBusy)
-            Text("⌥⇧R records from anywhere · ⌥⇧T opens this panel · ⌥⇧C shows the camera")
+            Button {
+                model.coordinator.prompter.toggle()
+            } label: {
+                Label("Prompter", systemImage: "text.alignleft").frame(maxWidth: .infinity)
+            }
+            Text("⌥⇧R records from anywhere · ⌥⇧T opens this panel · ⌥⇧C camera · ⌥⇧S prompter")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -153,6 +158,9 @@ struct RecorderMenu: View {
             }
             .controlSize(.large)
             .disabled(controller.isBusy)
+            Text("⌥⇧Z oops, retake · ⌥⇧M marker · ⌥⇧D draw on screen")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
     }

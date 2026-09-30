@@ -33,6 +33,7 @@ final class LiveRecordingSession: RecordingSession {
     /// Set by the coordinator before each start; kept for a restart.
     var target = Target.display
     let countdown = Countdown()
+    let drawing = DrawingOverlay()
     /// Called once the recording runs, to record the bubble's starting place.
     var bubbleStart: () -> Void = {}
     /// The running recording's router and captured area (global points), for the bubble's keyframes.
@@ -101,15 +102,21 @@ final class LiveRecordingSession: RecordingSession {
             ?? content.displays.first { $0.displayID == settings.displayID }
             ?? content.displays.first { $0.displayID == CGMainDisplayID() } ?? content.displays.first
         guard let display else { throw LiveSessionError.noDisplay }
+        let bounds = CGDisplayBounds(display.displayID)
+        // The drawing canvas is the one Takely window that is recorded: put it up, then list it as an exception.
+        let canvasID = drawing.prepare(on: bounds)
+        let current = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let canvas = current.windows.filter { $0.windowID == canvasID }
         // Exclude the app, not a window snapshot, so windows opened later (the popover) never appear.
-        let ownApps = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        let ownApps = current.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
         let filter =
             ownApps.isEmpty
             ? SCContentFilter(
                 display: display,
-                excludingWindows: content.windows.filter { $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier })
-            : SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
-        let bounds = CGDisplayBounds(display.displayID)
+                excludingWindows: current.windows.filter {
+                    $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier && $0.windowID != canvasID
+                })
+            : SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: canvas)
         guard let region else { return (filter, bounds, nil, .display) }
         guard let clamped = CaptureGeometry.clamp(region, to: bounds) else { throw LiveSessionError.areaGone }
         return (filter, clamped, CaptureGeometry.sourceRect(for: clamped, on: bounds), .region)
@@ -121,6 +128,7 @@ final class LiveRecordingSession: RecordingSession {
 
     func stop() async throws -> StoppedRecording {
         removeClickMonitor()
+        drawing.teardown()
         active = nil
         return try await engine.stop()
     }
@@ -129,6 +137,7 @@ final class LiveRecordingSession: RecordingSession {
         let state = await engine.state
         if state == .idle {
             removeClickMonitor()
+            drawing.teardown()
             active = nil
         }
         return state

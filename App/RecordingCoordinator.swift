@@ -13,6 +13,7 @@ final class RecordingCoordinator {
     private let session: LiveRecordingSession
     private let camera: CameraController
     private let picker = TargetPicker()
+    let prompter: Prompter
     private var bubble: BubblePanel?
     private var controlBar: OverlayPanel?
     private var controlBarMoves: (any NSObjectProtocol)?
@@ -28,6 +29,7 @@ final class RecordingCoordinator {
         self.settings = settings
         self.session = session
         self.camera = camera
+        prompter = Prompter(settings: settings)
         observe()
     }
 
@@ -54,6 +56,27 @@ final class RecordingCoordinator {
 
     func toggleRecording() async {
         if controller.isRecording { await controller.stop() } else { await record() }
+    }
+
+    /// ⌥⇧Z: takes back the last words (to the previous pause) and keeps recording.
+    func retake() async {
+        guard controller.phase == .recording else { return }
+        await controller.retake()
+        NSSound(named: "Pop")?.play()
+    }
+
+    /// ⌥⇧M: marks this moment; markers become chapters in the export.
+    func addMarker() {
+        guard controller.phase == .recording, let active = session.active else { return }
+        active.router.addMarker(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        NSSound(named: "Tink")?.play()
+        AccessibilityNotification.Announcement("Marker added").post()
+    }
+
+    /// ⌥⇧D: draw on the screen (recorded) during a display or area recording.
+    func toggleDrawing() {
+        guard controller.isRecording else { return }
+        session.drawing.toggle()
     }
 
     /// ⌥⇧C: hides the bubble, or shows it (turning the camera on if needed) so it can be placed before recording.
@@ -85,6 +108,7 @@ final class RecordingCoordinator {
         withObservationTracking {
             _ = (controller.phase, settings.camera, settings.cameraID, settings.showControls)
             update()
+            followRecordingWithPrompter()
         } onChange: {
             Task { @MainActor [weak self] in self?.observe() }
         }
@@ -114,6 +138,12 @@ final class RecordingCoordinator {
             if !recordingActive { camera.stopSoon() }
         }
         if recordingActive && controller.phase != .starting && settings.showControls { showControlBar() } else { hideControlBar() }
+    }
+
+    /// With "Scroll with recording", the visible prompter scrolls while recording and stops otherwise.
+    private func followRecordingWithPrompter() {
+        guard settings.prompterFollowsRecording, prompter.isVisible, !prompter.model.editing else { return }
+        prompter.model.scrolling = controller.phase == .recording
     }
 
     // MARK: Bubble
@@ -155,7 +185,7 @@ final class RecordingCoordinator {
 
     private func showControlBar() {
         guard controlBar == nil else { return }
-        let host = NSHostingView(rootView: ControlBar(controller: controller))
+        let host = NSHostingView(rootView: ControlBar(coordinator: self, controller: controller))
         let size = host.fittingSize
         let screen = NSScreen.main?.visibleFrame ?? .zero
         let saved = settings.controlsOrigin.flatMap { origin in NSScreen.screens.contains { $0.frame.contains(origin) } ? origin : nil }
@@ -183,6 +213,7 @@ final class RecordingCoordinator {
 
 /// The floating recording controls: timer · pause/resume · restart · stop · discard.
 private struct ControlBar: View {
+    let coordinator: RecordingCoordinator
     let controller: RecordingController
 
     var body: some View {
@@ -198,6 +229,10 @@ private struct ControlBar: View {
             button(controller.phase == .paused ? "Resume" : "Pause", controller.phase == .paused ? "play.fill" : "pause.fill") {
                 await controller.togglePause()
             }
+            button("Oops, retake (⌥⇧Z)", "arrow.uturn.backward") { await coordinator.retake() }
+                .disabled(controller.phase != .recording)
+            button("Add marker (⌥⇧M)", "bookmark") { coordinator.addMarker() }
+                .disabled(controller.phase != .recording)
             button("Restart", "arrow.counterclockwise") {
                 if confirm("Discard this take and start again?", action: "Restart") { await controller.restart() }
             }
