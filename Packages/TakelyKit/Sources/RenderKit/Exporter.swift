@@ -100,8 +100,8 @@ public struct Exporter: Sendable {
             try? FileManager.default.removeItem(at: partial)  // don't leave hidden partial files behind
             throw error
         }
-        try? FileManager.default.removeItem(at: output)
-        try FileManager.default.moveItem(at: partial, to: output)
+        // Swaps atomically: a failed replace keeps the previous export.
+        _ = try FileManager.default.replaceItemAt(output, withItemAt: partial)
         progress(1)
         return output
     }
