@@ -18,9 +18,6 @@ enum ScreenSpace {
 /// A borderless panel above everything, on all Spaces. Takely's windows never appear in recordings: the stream
 /// filter excludes the app.
 final class OverlayPanel: NSPanel {
-    var onCancel: () -> Void = {}
-    var onConfirm: () -> Void = {}
-
     init(frame: CGRect, activating: Bool, level: NSWindow.Level = .screenSaver) {
         super.init(
             contentRect: frame, styleMask: activating ? [.borderless] : [.borderless, .nonactivatingPanel], backing: .buffered,
@@ -34,11 +31,6 @@ final class OverlayPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { true }
-    override func cancelOperation(_ sender: Any?) { onCancel() }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 36 || event.keyCode == 76 { onConfirm() } else { super.keyDown(with: event) }  // Return, Enter
-    }
 }
 
 /// A window the user can record: its frame is in global points.
@@ -58,6 +50,9 @@ struct PickableWindow: Identifiable, @unchecked Sendable {
 @MainActor
 final class TargetPicker {
     private var panels: [OverlayPanel] = []
+    private var keys: Any?
+    /// Completes the picker that's showing (nil = cancelled); a new picker or `close` always completes the old one.
+    private var cancelPending: (() -> Void)?
 
     /// The dragged region in global points, clamped to the display it started on; nil if cancelled.
     /// Return confirms `initial` (the last region) without dragging.
@@ -65,7 +60,10 @@ final class TargetPicker {
         await present { screen, scale, finish in
             AnyView(RegionSelectionView(screen: screen, scale: scale, initial: initial, finish: finish))
         } confirm: {
-            initial
+            // Only if it's still on a connected display.
+            initial.flatMap { region in
+                NSScreen.screens.lazy.compactMap { CaptureGeometry.clamp(region, to: ScreenSpace.flip($0.frame)) }.first
+            }
         }
     }
 
@@ -102,16 +100,25 @@ final class TargetPicker {
             let finish: (T?) -> Void = { [weak self] value in
                 guard !resumed else { return }
                 resumed = true
+                self?.cancelPending = nil
                 self?.close()
                 continuation.resume(returning: value)
             }
+            cancelPending = { finish(nil) }
             for screen in NSScreen.screens {
                 let panel = OverlayPanel(frame: screen.frame, activating: true)
                 panel.contentView = NSHostingView(rootView: content(ScreenSpace.flip(screen.frame), screen.backingScaleFactor, finish))
-                panel.onCancel = { finish(nil) }
-                panel.onConfirm = { if let value = confirm() { finish(value) } }
                 panels.append(panel)
                 panel.orderFrontRegardless()
+            }
+            // Esc cancels, Return confirms, whichever overlay has focus.
+            keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                switch event.keyCode {
+                case 53: finish(nil)
+                case 36, 76: if let value = confirm() { finish(value) }
+                default: return event
+                }
+                return nil
             }
             NSApp.activate()
             let underPointer = panels.first { $0.frame.contains(NSEvent.mouseLocation) } ?? panels.first
@@ -121,6 +128,9 @@ final class TargetPicker {
     }
 
     private func close() {
+        cancelPending?()
+        keys.map(NSEvent.removeMonitor)
+        keys = nil
         panels.forEach { $0.orderOut(nil) }
         panels = []
     }
@@ -180,7 +190,7 @@ private struct RegionSelectionView: View {
                     if let dragged, let region = CaptureGeometry.clamp(dragged, to: screen) { finish(region) } else { dragged = nil }
                 }
         )
-        .onHover { inside in if inside { NSCursor.crosshair.push() } else { NSCursor.pop() } }
+        .pointerStyle(.rectSelection)
     }
 }
 

@@ -80,8 +80,6 @@ public struct CursorTrack: Codable, Sendable, Equatable {
 }
 
 extension Project.Camera {
-    /// Bubble center at time `t`. Each keyframe starts a move from the previous
-    /// position that completes over `transition` seconds.
     /// Adds a keyframe, moved so the whole bubble stays inside a frame `aspect` (width / height) wide. One within
     /// `coalescing` seconds of the last replaces it (a drag's updates, or the duplicate around a pause).
     public mutating func record(_ keyframe: BubbleKeyframe, aspect: Double, coalescing: Double = 0.15) {
@@ -97,6 +95,8 @@ extension Project.Camera {
         }
     }
 
+    /// Bubble center at time `t`, nil while hidden. Each keyframe starts a move from the previous
+    /// position that completes over `transition` seconds.
     public func bubbleCenter(at t: Double, transition: Double = 0.15) -> NormalizedPoint? {
         guard let first = keyframes.first else { return nil }
         guard let index = keyframes.lastIndex(where: { $0.t <= t }) else {

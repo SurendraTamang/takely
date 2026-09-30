@@ -27,7 +27,7 @@ final class Countdown {
     /// `target` is the capture area in global points.
     func run(over target: CGRect) async throws {
         outcome = .running
-        let size = CGSize(width: 220, height: 220)
+        let size = CGSize(width: 200, height: 200)
         let center = ScreenSpace.flip(CGPoint(x: target.midX, y: target.midY))
         let panel = OverlayPanel(
             frame: CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width, height: size.height),

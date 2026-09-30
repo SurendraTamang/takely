@@ -68,8 +68,7 @@ final class RecorderModel {
         return zip(displays, names).map { display, name in
             seen[name, default: 0] += 1
             let count = seen[name]!
-            let unique = names.filter { $0 == name }.count == 1
-            return Display(id: display.displayID, name: unique ? name : "\(name) (\(count))")
+            return Display(id: display.displayID, name: count == 1 ? name : "\(name) (\(count))")
         }
     }
 }

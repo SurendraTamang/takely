@@ -17,6 +17,11 @@ final class RecordingCoordinator {
     private var controlBar: OverlayPanel?
     private var controlBarMoves: (any NSObjectProtocol)?
     private var panelOpen = false
+    private var picking = false
+    /// Whether the bubble is on screen (when the camera is on). Separate from `settings.camera`, which decides
+    /// whether recordings include the camera: hiding the bubble doesn't turn the camera off for the next take.
+    private var bubbleShown = false
+    private var wasRecording = false
 
     init(controller: RecordingController, settings: RecordingSettings, session: LiveRecordingSession, camera: CameraController) {
         self.controller = controller
@@ -30,7 +35,9 @@ final class RecordingCoordinator {
     /// session's start). While counting down, ⌥⇧R skips the countdown instead.
     func record() async {
         if session.countdown.isRunning { return session.countdown.skip() }
-        guard controller.phase == .idle, !controller.isBusy else { return }
+        guard controller.phase == .idle, !controller.isBusy, !picking else { return }
+        picking = true
+        defer { picking = false }
         switch settings.target {
         case .display:
             session.target = .display
@@ -49,13 +56,21 @@ final class RecordingCoordinator {
         if controller.isRecording { await controller.stop() } else { await record() }
     }
 
+    /// ⌥⇧C: hides the bubble, or shows it (turning the camera on if needed) so it can be placed before recording.
     func toggleBubble() {
-        if bubble != nil { recordBubble(visible: false) }
-        settings.camera.toggle()
+        if settings.camera && bubbleShown {
+            recordBubble(visible: false)
+            bubbleShown = false
+        } else {
+            settings.camera = true
+            bubbleShown = true
+        }
+        update()
     }
 
     func panelDidOpen() {
         panelOpen = true
+        if settings.camera { bubbleShown = true }
         update()
     }
 
@@ -83,8 +98,13 @@ final class RecordingCoordinator {
     }
 
     private func update() {
-        let wantsBubble = settings.camera && (panelOpen || recordingActive)
-        if wantsBubble {
+        // The bubble appears with the panel or a recording and stays until hidden (so it can be dragged into place
+        // after the panel closes); a finished recording hides it unless the panel is open.
+        if recordingActive != wasRecording {
+            wasRecording = recordingActive
+            bubbleShown = settings.camera && (recordingActive || panelOpen)
+        }
+        if settings.camera && bubbleShown {
             camera.start(deviceID: settings.cameraID)
             showBubble()
         } else {
@@ -100,8 +120,8 @@ final class RecordingCoordinator {
 
     private func showBubble() {
         guard bubble == nil else { return }
-        let panel = BubblePanel(
-            session: camera.session, diameter: settings.bubbleDiameter, shape: settings.bubbleShape, origin: settings.bubbleOrigin)
+        let origin = settings.bubbleOrigin.flatMap { origin in NSScreen.screens.contains { $0.frame.contains(origin) } ? origin : nil }
+        let panel = BubblePanel(session: camera.session, diameter: settings.bubbleDiameter, shape: settings.bubbleShape, origin: origin)
         panel.onChange = { [weak self, weak panel] in
             guard let self, let panel else { return }
             settings.bubbleOrigin = panel.frame.origin
@@ -111,7 +131,8 @@ final class RecordingCoordinator {
         }
         panel.onHide = { [weak self] in
             self?.recordBubble(visible: false)
-            self?.settings.camera = false
+            self?.bubbleShown = false
+            self?.update()
         }
         panel.orderFrontRegardless()
         bubble = panel
@@ -123,9 +144,11 @@ final class RecordingCoordinator {
     private func recordBubble(visible: Bool) {
         guard let bubble, let active = session.active else { return }
         let frame = ScreenSpace.flip(bubble.frame)
+        let area = active.captureRect
+        // Size first (the keyframe is clamped with it), capped so it fits a small area: at most half its shorter side.
+        active.router.setBubble(size: min(bubble.diameter / area.width, 0.5, 0.5 * area.height / area.width), shape: bubble.shape)
         active.router.recordBubble(
             center: CGPoint(x: frame.midX, y: frame.midY), visible: visible, at: CMClockGetTime(CMClockGetHostTimeClock()))
-        active.router.setBubble(size: bubble.diameter / active.captureRect.width, shape: bubble.shape)
     }
 
     // MARK: Control bar
@@ -135,7 +158,8 @@ final class RecordingCoordinator {
         let host = NSHostingView(rootView: ControlBar(controller: controller))
         let size = host.fittingSize
         let screen = NSScreen.main?.visibleFrame ?? .zero
-        let origin = settings.controlsOrigin ?? CGPoint(x: screen.midX - size.width / 2, y: screen.minY + 24)
+        let saved = settings.controlsOrigin.flatMap { origin in NSScreen.screens.contains { $0.frame.contains(origin) } ? origin : nil }
+        let origin = saved ?? CGPoint(x: screen.midX - size.width / 2, y: screen.minY + 24)
         let panel = OverlayPanel(frame: CGRect(origin: origin, size: size), activating: false, level: .floating)
         panel.contentView = host
         panel.isMovableByWindowBackground = true

@@ -6,12 +6,13 @@ import ProjectKit
 @preconcurrency import ScreenCaptureKit
 
 enum LiveSessionError: Error, LocalizedError {
-    case noDisplay, windowGone, cameraDenied, microphoneDenied
+    case noDisplay, windowGone, areaGone, cameraDenied, microphoneDenied
 
     var errorDescription: String? {
         switch self {
         case .noDisplay: "No display is available to record."
         case .windowGone: "That window is no longer available."
+        case .areaGone: "That area is no longer on a connected display. Choose the area again."
         case .cameraDenied: "Allow Camera access in System Settings, or turn the camera off."
         case .microphoneDenied: "Allow Microphone access in System Settings, or turn the microphone off."
         }
@@ -61,7 +62,8 @@ final class LiveRecordingSession: RecordingSession {
             camera: settings.camera, systemAudio: settings.systemAudio, microphone: settings.microphone,
             echoCancellation: settings.removeEcho
         )
-        config.microphoneDeviceID = settings.microphoneID
+        // A saved microphone that's been unplugged falls back to the system default.
+        config.microphoneDeviceID = settings.microphoneID.flatMap { AVCaptureDevice(uniqueID: $0) == nil ? nil : $0 }
         if config.camera { camera.start(deviceID: settings.cameraID) }
         let cameraSession = camera.session
         let cameraQueue = camera.queue
@@ -108,7 +110,8 @@ final class LiveRecordingSession: RecordingSession {
                 excludingWindows: content.windows.filter { $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier })
             : SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
         let bounds = CGDisplayBounds(display.displayID)
-        guard let region, let clamped = CaptureGeometry.clamp(region, to: bounds) else { return (filter, bounds, nil, .display) }
+        guard let region else { return (filter, bounds, nil, .display) }
+        guard let clamped = CaptureGeometry.clamp(region, to: bounds) else { throw LiveSessionError.areaGone }
         return (filter, clamped, CaptureGeometry.sourceRect(for: clamped, on: bounds), .region)
     }
 

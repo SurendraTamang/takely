@@ -43,7 +43,7 @@ public final class CameraSource: NSObject, FrameSource, AVCaptureVideoDataOutput
     public func stop() async {
         await withCheckedContinuation { continuation in
             queue.async {
-                self.session.removeOutput(self.output)
+                if self.session.outputs.contains(self.output) { self.session.removeOutput(self.output) }
                 continuation.resume()
             }
         }

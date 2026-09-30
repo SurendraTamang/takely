@@ -117,7 +117,10 @@ struct RecorderMenu: View {
 
     /// "System default" first, then the connected devices; a saved device that's gone shows as the default.
     private func devicePicker(_ title: String, selection: Binding<String?>, devices: [RecorderModel.Device]) -> some View {
-        Picker(title, selection: selection) {
+        let shown = Binding<String?>(
+            get: { selection.wrappedValue.flatMap { id in devices.contains { $0.id == id } ? id : nil } },
+            set: { selection.wrappedValue = $0 })
+        return Picker(title, selection: shown) {
             Text("System Default").tag(String?.none)
             ForEach(devices) { device in
                 Text(device.name).tag(Optional(device.id))
