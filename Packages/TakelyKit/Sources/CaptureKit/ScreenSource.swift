@@ -27,6 +27,9 @@ public final class ScreenSource: NSObject, FrameSource, SCStreamOutput, SCStream
         c.width = size.width
         c.height = size.height
         if let sourceRect { c.sourceRect = sourceRect }
+        // A window can be resized while recording: keep it inside the fixed output frame (letterboxed).
+        c.scalesToFit = config.target == .window
+        c.preservesAspectRatio = true
         c.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(config.fps))
         c.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         // Pin sRGB + Rec. 709 so files look the same in every player (the display default is often Display P3).
@@ -39,6 +42,7 @@ public final class ScreenSource: NSObject, FrameSource, SCStreamOutput, SCStream
         c.sampleRate = 48_000
         c.channelCount = 2
         c.captureMicrophone = config.microphone
+        if let id = config.microphoneDeviceID { c.microphoneCaptureDeviceID = id }
         return c
     }
 
