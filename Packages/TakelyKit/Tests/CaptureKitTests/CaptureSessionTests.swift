@@ -167,6 +167,55 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(await session.state == .idle)
     }
 
+    @Test func sourcesWarmUpDuringTheArmedStepAndTheSegmentStartsAfterIt() async throws {
+        let (session, clock) = makeSession()
+        let fake = Mutex<FakeSource?>(nil)
+        let folder = Synthetic.temporaryFolder()
+        let handle = try await session.start(
+            config: config, in: folder,
+            sources: { router in
+                let source = FakeSource(router: router)
+                fake.withLock { $0 = source }
+                return [source]
+            },
+            armed: {
+                // The countdown: sources already run, but nothing is written yet.
+                let source = try #require(fake.withLock { $0 })
+                #expect(source.started.withLock { $0 })
+                let files = FileManager.default.enumerator(atPath: folder.path)?.allObjects as? [String] ?? []
+                #expect(!files.contains { $0.hasSuffix(".mov") }, "no segment before the countdown ends: \(files)")
+                try await source.emitScreen(from: 100, seconds: 1)
+                clock.set(103)
+            })
+        #expect(FileManager.default.fileExists(atPath: handle.bundle.segmentURL("segment-000.mov").path))
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 103, seconds: 1)
+        clock.set(104)
+        let project = try await session.stop().bundle.readProject()
+        // The segment starts at the end of the countdown (primed with the last frame), not at the first warm-up frame.
+        let duration = try #require(project.segments.first?.duration)
+        #expect(abs(duration - 1) < 0.1, "segment duration \(duration)")
+    }
+
+    @Test func cancellingTheArmedStepLeavesNothingBehind() async throws {
+        let (session, _) = makeSession()
+        let folder = Synthetic.temporaryFolder()
+        let fake = Mutex<FakeSource?>(nil)
+        await #expect(throws: CancellationError.self) {
+            try await session.start(
+                config: config, in: folder,
+                sources: { router in
+                    let source = FakeSource(router: router)
+                    fake.withLock { $0 = source }
+                    return [source]
+                },
+                armed: { throw CancellationError() })
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+        #expect(fake.withLock { $0?.started.withLock { $0 } } == false)
+        #expect(await session.state == .idle)
+    }
+
     @Test func bubbleKeyframesAndStyleReachTheManifest() async throws {
         var withCamera = config
         withCamera.camera = true
