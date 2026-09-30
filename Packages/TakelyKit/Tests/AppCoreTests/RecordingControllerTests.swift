@@ -263,7 +263,8 @@ struct Harness {
         await h.settle()
         #expect(h.controller.phase == .idle)
         #expect(h.session.calls == ["start", "stop"])
-        #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected.")
+        #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected. Saved up to 1:23.")
+        #expect(h.feedback.ready.isEmpty)
     }
 
     @Test func failureDuringACommandIsHandledRightAfter() async {
@@ -280,7 +281,7 @@ struct Harness {
         await h.settle()
         #expect(h.controller.phase == .idle)
         #expect(h.session.calls == ["start", "pause", "stop"])
-        #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected.")
+        #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected. Saved up to 1:23.")
     }
 
     @Test func overlappingStopsRunOnce() async {

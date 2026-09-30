@@ -248,9 +248,7 @@ public final class RecordingController {
             switch event.kind {
             case .streamStopped(userInitiated: true):
                 break  // the system "Stop sharing" control: an intentional stop
-            case .streamStopped:
-                return "Recording stopped: \(event.error.localizedDescription)"
-            case .writerFailed:
+            case .streamStopped, .writerFailed:
                 return stoppedMessage(event.error, savedIn: bundle)
             }
         case nil:
@@ -259,7 +257,7 @@ public final class RecordingController {
         return closeFailure.map { stoppedMessage($0, savedIn: bundle) }
     }
 
-    /// For a recording cut short by a write failure: what went wrong and how much was kept.
+    /// For a recording cut short by a failure: what went wrong and how much was kept.
     private static func stoppedMessage(_ error: any Error, savedIn bundle: ProjectBundle) -> String {
         let saved = (try? bundle.readProject().duration) ?? 0
         return "Recording stopped: \(error.localizedDescription) Saved up to \(clock(saved))."
