@@ -133,7 +133,7 @@ struct Harness {
         let folder = folder
         controller = RecordingController(
             session: session, exporter: exporter, feedback: feedback, disk: disk,
-            saveFolder: { folder }, now: time.now,
+            saveFolder: { folder }, trash: { try FileManager.default.removeItem(at: $0) }, now: time.now,
             sleep: { _ in try await Task.sleep(for: .seconds(3600)) })  // loops stay idle; tests call checkStorage directly
     }
 
@@ -157,6 +157,45 @@ struct Harness {
         #expect(h.controller.lastRecording == h.session.handles[0].bundle.exportURL)
         #expect(h.feedback.announcements == ["Recording started", "Recording stopped"])
         #expect(h.feedback.failures.isEmpty)
+    }
+
+    @Test func cancellingTheCountdownIsSilent() async {
+        let h = Harness()
+        h.session.startError = CancellationError()
+        await h.controller.start()
+        #expect(h.controller.phase == .idle)
+        #expect(h.controller.errorMessage == nil)
+        #expect(h.feedback.failures.isEmpty)
+    }
+
+    @Test func discardStopsWithoutExportingAndTrashesTheBundle() async {
+        let h = Harness()
+        await h.controller.start()
+        let bundle = h.session.handles[0].bundle
+        await h.controller.discard()
+        #expect(h.controller.phase == .idle)
+        #expect(h.session.calls == ["start", "stop"])
+        #expect(h.exporter.count.withLock { $0 } == 0)
+        #expect(h.feedback.ready.isEmpty && h.feedback.failures.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: bundle.url.path))
+        #expect(h.feedback.announcements.last == "Recording discarded")
+    }
+
+    @Test func restartDiscardsTheTakeAndStartsAgain() async {
+        let h = Harness()
+        await h.controller.start()
+        let first = h.session.handles[0].bundle
+        await h.controller.restart()
+        #expect(h.controller.phase == .recording)
+        #expect(h.session.calls == ["start", "stop", "start"])
+        #expect(!FileManager.default.fileExists(atPath: first.url.path))
+        #expect(h.exporter.count.withLock { $0 } == 0)
+    }
+
+    @Test func discardWhileIdleDoesNothing() async {
+        let h = Harness()
+        await h.controller.discard()
+        #expect(h.session.calls.isEmpty)
     }
 
     @Test func failedStartIsSentAsFeedback() async {
