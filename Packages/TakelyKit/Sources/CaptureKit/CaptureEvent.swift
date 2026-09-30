@@ -34,3 +34,15 @@ public struct RecordingHandle: Sendable {
         self.router = router
     }
 }
+
+/// What `CaptureSession.stop` saved. `failure` is set when the last segment couldn't be closed:
+/// the bundle then holds the recording up to that segment.
+public struct StoppedRecording: Sendable {
+    public let bundle: ProjectBundle
+    public let failure: (any Error)?
+
+    public init(bundle: ProjectBundle, failure: (any Error)?) {
+        self.bundle = bundle
+        self.failure = failure
+    }
+}

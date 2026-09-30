@@ -75,8 +75,8 @@ public actor CaptureSession {
     }
 
     /// Stops sources, finalizes the manifest and returns the bundle.
-    /// A failure closing the last segment is logged; earlier segments are kept.
-    public func stop() async throws -> ProjectBundle {
+    /// A failure closing the last segment is returned in `failure`; earlier segments are kept.
+    public func stop() async throws -> StoppedRecording {
         try await serialized { session in try await session.stopNow() }
     }
 
@@ -154,10 +154,16 @@ public actor CaptureSession {
         state = .recording
     }
 
-    private func stopNow() async throws -> ProjectBundle {
+    private func stopNow() async throws -> StoppedRecording {
         guard state != .idle, let bundle else { throw CaptureError.invalidState }
+        var failure: (any Error)?
         if state == .recording {
-            do { try await closeSegment() } catch { log.error("closing last segment failed: \(error.localizedDescription)") }
+            do {
+                try await closeSegment()
+            } catch {
+                log.error("closing last segment failed: \(error.localizedDescription)")
+                failure = error
+            }
         }
         for source in sources { await source.stop() }
         project?.status = .finished
@@ -165,7 +171,7 @@ public actor CaptureSession {
             do { try bundle.write(project) } catch { log.error("writing final manifest failed: \(error.localizedDescription)") }
         }
         reset()
-        return bundle
+        return StoppedRecording(bundle: bundle, failure: failure)
     }
 
     private func closeSegment() async throws {

@@ -12,7 +12,8 @@ public protocol RecordingSession: AnyObject {
     func start(in folder: URL) async throws -> RecordingHandle
     func pause() async throws
     func resume() async throws
-    func stop() async throws -> ProjectBundle
+    /// Returns the saved bundle, plus the error if the last segment couldn't be closed.
+    func stop() async throws -> StoppedRecording
     /// The engine's actual state, for resyncing after a failed pause or resume.
     func state() async -> CaptureSession.State
 }

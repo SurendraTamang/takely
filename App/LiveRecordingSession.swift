@@ -72,7 +72,7 @@ final class LiveRecordingSession: RecordingSession {
     func pause() async throws { try await engine.pause() }
     func resume() async throws { try await engine.resume() }
 
-    func stop() async throws -> ProjectBundle {
+    func stop() async throws -> StoppedRecording {
         removeClickMonitor()
         return try await engine.stop()
     }

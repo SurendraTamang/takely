@@ -210,8 +210,7 @@ public final class RecordingController {
         case .streamStopped:
             errorMessage = "Recording stopped: \(event.error.localizedDescription)"
         case .writerFailed:
-            let saved = bundle.flatMap { try? $0.readProject().duration } ?? 0
-            errorMessage = "Recording stopped: \(event.error.localizedDescription) Saved up to \(Self.clock(saved))."
+            errorMessage = bundle.map { Self.stoppedMessage(event.error, savedIn: $0) }
         }
     }
 
@@ -222,9 +221,9 @@ public final class RecordingController {
         phase = .stopping
         stopTicking()
         storageLoop?.cancel()
-        let bundle: ProjectBundle
+        let stopped: StoppedRecording
         do {
-            bundle = try await session.stop()
+            stopped = try await session.stop()
         } catch {
             log.error("stop failed: \(error.localizedDescription)")
             errorMessage = "Couldn't stop recording: \(error.localizedDescription)"
@@ -232,9 +231,18 @@ public final class RecordingController {
             return nil
         }
         feedback.announce("Recording stopped")
-        if export { await exportAndReport(bundle) }
+        if export { await exportAndReport(stopped.bundle) }
+        if let failure = stopped.failure, errorMessage == nil {
+            errorMessage = Self.stoppedMessage(failure, savedIn: stopped.bundle)
+        }
         finishRecording()
-        return bundle
+        return stopped.bundle
+    }
+
+    /// For a recording cut short by a write failure: what went wrong and how much was kept.
+    private static func stoppedMessage(_ error: any Error, savedIn bundle: ProjectBundle) -> String {
+        let saved = (try? bundle.readProject().duration) ?? 0
+        return "Recording stopped: \(error.localizedDescription) Saved up to \(clock(saved))."
     }
 
     private func exportAndReport(_ bundle: ProjectBundle) async {

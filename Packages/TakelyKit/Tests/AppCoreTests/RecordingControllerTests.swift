@@ -19,6 +19,8 @@ final class FakeSession: RecordingSession {
     var calls: [String] = []
     var startError: (any Error)?
     var pauseError: (any Error)?
+    /// Reported by `stop` as a failure closing the last segment; the bundle is still returned.
+    var closeFailure: (any Error)?
     /// Makes pause take a while, so a test can hold the controller busy.
     var pauseDelay: Duration = .zero
     /// Makes start/stop take a while, to open the window for overlapping commands.
@@ -57,7 +59,7 @@ final class FakeSession: RecordingSession {
         engineState = .recording
     }
 
-    func stop() async throws -> ProjectBundle {
+    func stop() async throws -> StoppedRecording {
         calls.append("stop")
         try await Task.sleep(for: delay)
         engineState = .idle
@@ -65,7 +67,7 @@ final class FakeSession: RecordingSession {
         project.status = .finished
         project.segments = [.init(file: "segment-000.mov", duration: 83, tracks: [.screen])]
         try handles.last!.bundle.write(project)
-        return handles.last!.bundle
+        return StoppedRecording(bundle: handles.last!.bundle, failure: closeFailure)
     }
 
     func state() async -> CaptureSession.State { engineState }
@@ -186,6 +188,16 @@ struct Harness {
         #expect(h.controller.phase == .idle)
         #expect(h.session.calls == ["start", "stop"])
         #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected. Saved up to 1:23.")
+    }
+
+    @Test func lastSegmentCloseFailureIsExplainedAndTheRestExported() async {
+        let h = Harness()
+        await h.controller.start()
+        h.session.closeFailure = Broke()
+        await h.controller.stop()
+        #expect(h.controller.errorMessage == "Recording stopped: The display was disconnected. Saved up to 1:23.")
+        #expect(h.exporter.count.withLock { $0 } == 1)
+        #expect(h.controller.lastRecording == h.session.handles[0].bundle.exportURL)
     }
 
     @Test func systemStopSharingStopsWithoutAnError() async {

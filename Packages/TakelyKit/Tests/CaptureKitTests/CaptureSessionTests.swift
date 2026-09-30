@@ -76,9 +76,10 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(source.started.withLock { $0 })
         try await source.emitScreen(from: 100, seconds: 1)
         clock.set(101)
-        let bundle = try await session.stop()
+        let stopped = try await session.stop()
+        #expect(stopped.failure == nil)
 
-        let project = try bundle.readProject()
+        let project = try stopped.bundle.readProject()
         #expect(project.status == .finished)
         #expect(project.segments.map(\.file) == ["segment-000.mov"])
         #expect(project.segments.first?.tracks == [.screen])
@@ -106,7 +107,7 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         try await session.resume()
         try await source.emitScreen(from: 200, seconds: 2)
         clock.set(202)
-        let bundle = try await session.stop()
+        let bundle = try await session.stop().bundle
 
         let project = try bundle.readProject()
         #expect(project.segments.map(\.file) == ["segment-000.mov", "segment-001.mov"])
@@ -134,7 +135,7 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         try await session.resume()
         // No frames emitted: the screen is static.
         clock.set(152)
-        let bundle = try await session.stop()
+        let bundle = try await session.stop().bundle
 
         let project = try bundle.readProject()
         #expect(project.segments.map(\.file) == ["segment-000.mov", "segment-001.mov"])
@@ -178,7 +179,7 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         clock.set(101)
 
         let p = Task { try await session.pause() }
-        let s = Task { try await session.stop() }
+        let s = Task { try await session.stop().bundle }
         _ = await p.result
         let bundle = try await s.value
 
@@ -203,8 +204,8 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         try await source.emitScreen(from: 100, seconds: 1)
         clock.set(101)
 
-        async let first = attempt { try await session.stop() }
-        let second = await attempt { try await session.stop() }
+        async let first = attempt { try await session.stop().bundle }
+        let second = await attempt { try await session.stop().bundle }
         let outcomes = [await first, second]
 
         var successes: [ProjectBundle] = []
