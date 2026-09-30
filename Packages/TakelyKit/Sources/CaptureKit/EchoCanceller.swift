@@ -1,16 +1,19 @@
 @preconcurrency import AVFoundation
 import CoreMedia
+import OSLog
 import WebRTCAEC
 
 /// Removes speaker playback from the microphone with WebRTC AEC3, using the system audio as the echo reference.
-/// Both streams are converted to 48 kHz mono and placed on one sample timeline by their host-clock timestamps,
-/// so clock drift or a gap in either only moves where samples land. Not thread-safe: `FrameRouter` calls it
-/// under a lock (ScreenCaptureKit delivers both streams on one queue).
+///
+/// The writer lays audio out by sample count (only a track's first timestamp counts), so the cleaned microphone
+/// must contain exactly the raw microphone's samples: one output sample per input sample, in order. The reference
+/// is placed on the microphone's timeline by host-clock timestamps; the microphone itself follows its sample count
+/// and only a jump over `micGap` (e.g. a pause) starts a new run. Not thread-safe: `FrameRouter` calls it under a
+/// lock (ScreenCaptureKit delivers both streams on one queue).
 final class EchoCanceller {
     enum Failure: Error, Equatable {
-        case formatChanged
         case conversion
-        case processing(Int32)
+        case invalidTime
     }
 
     static let sampleRate = 48_000
@@ -18,10 +21,12 @@ final class EchoCanceller {
     static let frame = sampleRate / 100
     /// How far the microphone may run ahead of its reference before the missing part counts as silence.
     static let maxWait = Int64(sampleRate * 150 / 1000)
-    /// Timestamp jitter absorbed without treating it as a gap.
+    /// Reference timestamp jitter absorbed without treating it as a gap or an overlap.
     static let tolerance = Int64(sampleRate / 1000)
     /// For resampled streams, whose converter holds samples back: only a jump this big is a real gap.
     static let resampledTolerance = Int64(sampleRate / 5)
+    /// A microphone jump this big is a real gap (a pause); smaller ones are clock drift and are ignored.
+    static let micGap = Int64(sampleRate / 10)
     /// System audio kept when the microphone stalls, so the reference can't grow without bound.
     static let maxReference = sampleRate * 2
     /// AEC3's output lags its input by this many samples (its band-splitting filter bank; measured, constant).
@@ -34,6 +39,9 @@ final class EchoCanceller {
     private var reference = Timeline()
     private var mic = Timeline()
     private var run: Run?
+    /// Set when AEC3 fails: the microphone then passes through unprocessed, sample for sample.
+    private var bypassing = false
+    private static let log = Logger(subsystem: "app.takely", category: "capture")
 
     /// Nil if AEC3 can't be created.
     init?() {
@@ -46,10 +54,11 @@ final class EchoCanceller {
 
     /// Adds system audio (the far end) to the reference timeline.
     func addReference(_ buffer: CMSampleBuffer) throws {
+        let index = try Self.index(of: buffer.presentationTimeStamp)
+        if let format = buffer.formatDescription, referenceConverter?.handles(format) == false { referenceConverter = nil }
         let samples = try Downmixer.convert(buffer, with: &referenceConverter)
-        let index = Self.index(of: buffer.presentationTimeStamp)
-        let tolerance = Self.tolerance(referenceConverter)
-        if reference.samples.isEmpty || index < reference.start {
+        let tolerance = referenceConverter?.exact == false ? Self.resampledTolerance : Self.tolerance
+        if reference.samples.isEmpty || index < reference.start || index > reference.end + Int64(Self.maxReference) {
             reference = Timeline(start: index)
         } else if index > reference.end + tolerance {
             reference.samples += [Float](repeating: 0, count: Int(index - reference.end))  // a gap in the playback is silence
@@ -65,34 +74,29 @@ final class EchoCanceller {
         if reference.samples.count > Self.maxReference { reference.removeFirst(reference.samples.count - Self.maxReference) }
     }
 
-    private static func tolerance(_ downmixer: Downmixer?) -> Int64 {
-        downmixer?.exact == false ? resampledTolerance : tolerance
-    }
-
-    /// Adds microphone audio and returns whatever is ready: 48 kHz mono, echo removed, at the microphone's timestamps.
-    func clean(_ buffer: CMSampleBuffer) throws -> CMSampleBuffer? {
-        var samples = try Downmixer.convert(buffer, with: &micConverter)
-        let index = Self.index(of: buffer.presentationTimeStamp)
+    /// Adds microphone audio and returns what is ready: 48 kHz mono, echo removed, one buffer per run.
+    func clean(_ buffer: CMSampleBuffer) throws -> [CMSampleBuffer] {
+        let index = try Self.index(of: buffer.presentationTimeStamp)
         var output = Output()
-        let tolerance = Self.tolerance(micConverter)
-        if run != nil || !mic.samples.isEmpty {
-            if index > mic.end + tolerance {
-                try drain(force: true, into: &output)  // a gap in the microphone (e.g. after a pause) starts a new run
-            } else if index < mic.end - tolerance {
-                samples.removeFirst(min(Int(mic.end - index), samples.count))  // audio already queued: don't repeat it
-            }
+        if let format = buffer.formatDescription, micConverter?.handles(format) == false {
+            try drain(force: true, into: &output)  // e.g. a headset connected: finish the run, then convert the new format
+            micConverter = nil
+        }
+        let samples = try Downmixer.convert(buffer, with: &micConverter)
+        if run != nil || !mic.samples.isEmpty, index > mic.end + Self.micGap {
+            try drain(force: true, into: &output)  // a gap in the microphone (e.g. after a pause) starts a new run
         }
         if run == nil && mic.samples.isEmpty { mic = Timeline(start: index) }
         mic.samples += samples
         try drain(force: false, into: &output)
-        return output.buffer(format: outputFormat)
+        return output.buffers(format: outputFormat)
     }
 
-    /// Processes all pending microphone audio, treating any missing reference as silence.
-    func flush() throws -> CMSampleBuffer? {
+    /// Processes all pending microphone audio (missing reference counts as silence) and ends the run.
+    func flush() throws -> [CMSampleBuffer] {
         var output = Output()
         try drain(force: true, into: &output)
-        return output.buffer(format: outputFormat)
+        return output.buffers(format: outputFormat)
     }
 
     /// Processes pending microphone frames whose reference has arrived (or waited long enough).
@@ -103,29 +107,39 @@ final class EchoCanceller {
             let referenceReady = reference.end >= start + Int64(Self.frame)
             guard force || referenceReady || mic.end - start >= Self.maxWait else { return }
             let count = min(Self.frame, mic.samples.count)
-            try process(Array(mic.samples.prefix(count)), into: &output)
+            let near = Array(mic.samples.prefix(count))
+            if !bypassing { process(near, into: &output) }
+            if bypassing { output.append(near[...], at: start) }
             mic.removeFirst(count)
         }
         guard force, var run else { return }
-        while run.emitted < run.fed + Self.processingDelay {
-            try process([], into: &output)
-            run = self.run!
+        while !bypassing && run.emitted < run.fed + Self.processingDelay {
+            process([], into: &output)
+            run = self.run ?? run
         }
         self.run = nil
     }
 
     /// Runs one 10 ms frame (`near` padded with silence) through AEC3 and emits the output that belongs to real
     /// microphone samples, moved back by `processingDelay` so it lines up with the raw microphone.
-    private func process(_ near: [Float], into output: inout Output) throws {
+    /// If AEC3 fails, emits the raw samples still inside it and switches to bypass; `near` is then not consumed.
+    private func process(_ near: [Float], into output: inout Output) {
         var run = self.run ?? Run(origin: mic.start)
         let position = run.origin + run.produced
         var frame = near + [Float](repeating: 0, count: Self.frame - near.count)
         let far = reference.frame(at: position, count: Self.frame)
         let rendered = far.withUnsafeBufferPointer { webrtc_aec_analyze_render(aec, $0.baseAddress) }
-        guard rendered == 0 else { throw Failure.processing(rendered) }
-        let processed = frame.withUnsafeMutableBufferPointer { webrtc_aec_process_capture(aec, $0.baseAddress) }
-        guard processed == 0 else { throw Failure.processing(processed) }
+        let processed = rendered == 0 ? frame.withUnsafeMutableBufferPointer { webrtc_aec_process_capture(aec, $0.baseAddress) } : rendered
+        guard processed == 0 else {
+            Self.log.error("echo cancellation failed (\(processed)); passing the microphone through")
+            let owed = Int(run.fed + Self.processingDelay - run.emitted)
+            output.append(run.recent.suffix(owed), at: run.origin + run.fed - Int64(owed))
+            bypassing = true
+            self.run = nil
+            return
+        }
         run.fed += Int64(near.count)
+        run.recent = Array((run.recent + near).suffix(Int(Self.processingDelay)))
         let low = max(run.emitted, run.produced)
         let high = min(run.produced + Int64(Self.frame), run.fed + Self.processingDelay)
         if low < high {
@@ -137,7 +151,10 @@ final class EchoCanceller {
         self.run = run
     }
 
-    static func index(of time: CMTime) -> Int64 { Int64((time.seconds * Double(sampleRate)).rounded()) }
+    static func index(of time: CMTime) throws -> Int64 {
+        guard time.isNumeric else { throw Failure.invalidTime }
+        return Int64((time.seconds * Double(sampleRate)).rounded())
+    }
 
     private static func makeOutputFormat() -> CMAudioFormatDescription? {
         var asbd = AudioStreamBasicDescription(
@@ -162,6 +179,8 @@ private struct Run {
     var produced: Int64 = 0
     /// Next output position to emit; positions before `processingDelay` are pre-roll and skipped.
     var emitted: Int64 = EchoCanceller.processingDelay
+    /// The last `processingDelay` raw samples fed: what's still inside AEC3 if it fails.
+    var recent: [Float] = []
 }
 
 /// Samples on the 48 kHz timeline, `samples[0]` at index `start`.
@@ -189,17 +208,13 @@ private struct Timeline {
     }
 }
 
-/// Cleaned frames collected during one call, contiguous by construction except across a microphone gap.
+/// Cleaned audio from one call, one entry per run. Gaps between runs are not filled: the writer lays audio out by
+/// sample count, and the raw microphone has no samples there either.
 private struct Output {
     var runs: [(start: Int64, samples: [Float])] = []
 
     mutating func append(_ frame: ArraySlice<Float>, at index: Int64) {
-        if let last = runs.last, last.start + Int64(last.samples.count) > index {
-            // Never emit a sample position twice; runs stay in order.
-            let overlap = Int(last.start + Int64(last.samples.count) - index)
-            if overlap < frame.count { append(frame.dropFirst(overlap), at: index + Int64(overlap)) }
-            return
-        }
+        guard !frame.isEmpty else { return }
         if let last = runs.last, last.start + Int64(last.samples.count) == index {
             runs[runs.count - 1].samples += frame
         } else {
@@ -207,15 +222,11 @@ private struct Output {
         }
     }
 
-    /// One buffer for the newest run; earlier runs only exist across a microphone gap and are merged
-    /// into one buffer with silence, which the writer lays out by timestamp anyway.
-    func buffer(format: CMAudioFormatDescription) -> CMSampleBuffer? {
-        guard let first = runs.first, let last = runs.last else { return nil }
-        let end = last.start + Int64(last.samples.count)
-        var samples = [Float](repeating: 0, count: Int(end - first.start))
-        for run in runs {
-            samples.replaceSubrange(Int(run.start - first.start)..<Int(run.start - first.start) + run.samples.count, with: run.samples)
-        }
+    func buffers(format: CMAudioFormatDescription) -> [CMSampleBuffer] {
+        runs.compactMap { Self.buffer($0.samples, at: $0.start, format: format) }
+    }
+
+    private static func buffer(_ samples: [Float], at index: Int64, format: CMAudioFormatDescription) -> CMSampleBuffer? {
         let byteCount = samples.count * 4
         var block: CMBlockBuffer?
         guard
@@ -225,19 +236,18 @@ private struct Output {
             let block,
             samples.withUnsafeBytes({
                 CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: byteCount)
-            })
-                == noErr
+            }) == noErr
         else { return nil }
         var buffer: CMSampleBuffer?
         CMAudioSampleBufferCreateReadyWithPacketDescriptions(
             allocator: nil, dataBuffer: block, formatDescription: format, sampleCount: samples.count,
-            presentationTimeStamp: CMTime(value: first.start, timescale: CMTimeScale(EchoCanceller.sampleRate)),
+            presentationTimeStamp: CMTime(value: index, timescale: CMTimeScale(EchoCanceller.sampleRate)),
             packetDescriptions: nil, sampleBufferOut: &buffer)
         return buffer
     }
 }
 
-/// Converts one stream's buffers to 48 kHz mono Float32. The stream's format must not change.
+/// Converts one stream's buffers (of one format) to 48 kHz mono Float32.
 /// 48 kHz input is downmixed directly, so every buffer's samples stay with its timestamp. Other rates go through
 /// `AVAudioConverter`, which keeps up to a chunk of samples until more input arrives (`exact` is false).
 private final class Downmixer {
@@ -260,11 +270,13 @@ private final class Downmixer {
         self.exact = direct
     }
 
+    func handles(_ format: CMFormatDescription) -> Bool { CMFormatDescriptionEqual(format, otherFormatDescription: source) }
+
+    /// Converts with `downmixer`, creating one for the buffer's format if there is none.
     static func convert(_ buffer: CMSampleBuffer, with downmixer: inout Downmixer?) throws -> [Float] {
         guard let format = buffer.formatDescription else { throw EchoCanceller.Failure.conversion }
         if downmixer == nil { downmixer = Downmixer(format) }
-        guard let downmixer else { throw EchoCanceller.Failure.conversion }
-        guard CMFormatDescriptionEqual(format, otherFormatDescription: downmixer.source) else { throw EchoCanceller.Failure.formatChanged }
+        guard let downmixer, downmixer.handles(format) else { throw EchoCanceller.Failure.conversion }
         return try downmixer.convert(buffer)
     }
 

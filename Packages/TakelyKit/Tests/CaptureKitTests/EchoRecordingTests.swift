@@ -39,7 +39,7 @@ import Testing
                 samples.append((left + right) / 2)
             }
         }
-        return (EchoCanceller.index(of: buffers.first?.presentationTimeStamp ?? .zero), samples)
+        return (try EchoCanceller.index(of: buffers.first?.presentationTimeStamp ?? .zero), samples)
     }
 
     @Test(.enabled(if: segment != nil)) func removesEchoFromARealRecording() async throws {
@@ -58,14 +58,14 @@ import Testing
                 try canceller.addReference(system[s])
                 s += 1
             }
-            if let out = try canceller.clean(buffer) { cleaned.append(out) }
+            cleaned += try canceller.clean(buffer)
         }
-        if let out = try canceller.flush() { cleaned.append(out) }
+        cleaned += try canceller.flush()
 
         let far = try Self.mono(system)
         let near = try Self.mono(mic)
         var out: [Float] = []
-        let outStart = EchoCanceller.index(of: try #require(cleaned.first).presentationTimeStamp)
+        let outStart = try EchoCanceller.index(of: try #require(cleaned.first).presentationTimeStamp)
         for buffer in cleaned { out += try EchoCancellerTests.floats(buffer) }
 
         // Echo-only windows: 0.5 s where the system audio plays (> −40 dBFS), after 2 s of convergence.

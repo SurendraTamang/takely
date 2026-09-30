@@ -316,26 +316,42 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(writer.startTime == Synthetic.seconds(60))
     }
 
-    /// Records ~2 s of echo through a router with cancellation on and returns the mic and raw mic track durations.
-    func recordEcho(micFormatChangesAt change: Int? = nil) async throws -> (tracks: [TrackKind], mic: Double, raw: Double) {
+    struct EchoSegment {
+        var tracks: [TrackKind]
+        /// Decoded mono samples of `mic` and `micRaw`.
+        var mic: [Float]
+        var raw: [Float]
+    }
+
+    /// Records ~4 s of speaker echo through a router with cancellation on. `splitAt` switches to a second segment
+    /// at that chunk (like a pause); `monoFrom` makes the microphone mono from that chunk on (a headset connecting).
+    func recordEcho(splitAt: Int? = nil, monoFrom: Int = .max) async throws -> [EchoSegment] {
         let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100), cancelsEcho: true) { CGPoint(x: 50, y: 50) }
-        let url = Synthetic.temporaryFolder().appending(path: "s.mov")
-        let writer = try SegmentWriter(
-            url: url,
-            config: WriterConfig(
-                tracks: [.screen, .system, .mic, .micRaw], screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30,
-                videoBitrate: 500_000))
-        router.attach(writer, offset: 0)
-        let chunks = 94
+        let config = WriterConfig(
+            tracks: [.screen, .system, .mic, .micRaw], screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30,
+            videoBitrate: 500_000)
+        var urls = [Synthetic.temporaryFolder().appending(path: "s0.mov")]
+        var writers = [try SegmentWriter(url: urls[0], config: config)]
+        router.attach(writers[0], offset: 0)
+        let chunks = 188
         let far = EchoCancellerTests.noise(count: chunks * 1024)
         let mic = EchoCancellerTests.echoOf(far)
+        func seconds(_ i: Int) -> Double { 50 + Double(i * 1024) / 48_000 }
         router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
         for i in 0..<chunks {
+            if i == splitAt {
+                router.attach(nil, offset: 0)
+                _ = try await writers[0].finish(at: Synthetic.seconds(seconds(i)))
+                urls.append(Synthetic.temporaryFolder().appending(path: "s1.mov"))
+                writers.append(try SegmentWriter(url: urls[1], config: config))
+                router.attach(writers[1], offset: 0)
+                router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(seconds(i)), rgb: (0, 0, 0)), kind: .screen)
+            }
             let range = i * 1024..<(i + 1) * 1024
-            let pts = Synthetic.seconds(50 + Double(range.lowerBound) / 48_000)
+            let pts = Synthetic.seconds(seconds(i))
             router.receive(Synthetic.audio(pts: pts, samples: EchoCancellerTests.stereo(far[range]), channels: 2), kind: .system)
             let micBuffer =
-                i >= (change ?? .max)
+                i >= monoFrom
                 ? Synthetic.audio(pts: pts, samples: Array(mic[range]), channels: 1)
                 : Synthetic.audio(pts: pts, samples: EchoCancellerTests.stereo(mic[range]), channels: 2)
             router.receive(micBuffer, kind: .mic)
@@ -345,23 +361,47 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
             }
         }
         router.attach(nil, offset: 0)
-        _ = try await writer.finish(at: Synthetic.seconds(50 + Double(chunks * 1024) / 48_000))
-        let tracks = try await AVURLAsset(url: url).load(.tracks).sorted { $0.trackID < $1.trackID }
-        let durations = try await tracks.asyncMap { try await $0.load(.timeRange).duration.seconds }
-        return (writer.writtenTracks, durations[2], durations[3])
+        _ = try await writers.last!.finish(at: Synthetic.seconds(seconds(chunks)))
+        var segments: [EchoSegment] = []
+        for (url, writer) in zip(urls, writers) {
+            let asset = AVURLAsset(url: url)
+            let audio = try await asset.loadTracks(withMediaType: .audio).sorted { $0.trackID < $1.trackID }
+            segments.append(
+                EchoSegment(
+                    tracks: writer.writtenTracks,
+                    mic: try EchoRecordingTests.mono(EchoRecordingTests.buffers(of: audio[1], in: asset)).samples,
+                    raw: try EchoRecordingTests.mono(EchoRecordingTests.buffers(of: audio[2], in: asset)).samples))
+        }
+        return segments
+    }
+
+    /// Echo removed in the file, in dB, after the canceller has converged (and past AAC's own error).
+    func erle(_ segment: EchoSegment, from: Int = 48_000) -> Double {
+        let end = min(segment.mic.count, segment.raw.count)
+        guard end > from else { return 0 }
+        return 10 * log10(EchoCancellerTests.power(segment.raw[from..<end]) / max(EchoCancellerTests.power(segment.mic[from..<end]), 1e-20))
     }
 
     @Test func echoCancellationWritesCleanedAndRawMicrophone() async throws {
-        let result = try await recordEcho()
-        #expect(result.tracks == [.screen, .system, .mic, .micRaw])
-        #expect(abs(result.mic - result.raw) < 0.05, "mic \(result.mic) s, raw \(result.raw) s")
+        let segment = try #require(try await recordEcho().first)
+        #expect(segment.tracks == [.screen, .system, .mic, .micRaw])
+        #expect(segment.mic.count == segment.raw.count)
+        #expect(erle(segment) >= 15, "echo removed in the file: \(erle(segment)) dB")
     }
 
-    @Test func aFailingCancellerFallsBackToTheRawMicrophone() async throws {
-        // The microphone switches from stereo to mono halfway (e.g. a headset connects): the canceller gives up.
-        let result = try await recordEcho(micFormatChangesAt: 47)
-        #expect(result.tracks == [.screen, .system, .mic, .micRaw])
-        #expect(abs(result.mic - result.raw) < 0.05, "mic \(result.mic) s, raw \(result.raw) s")
+    @Test func eachSegmentGetsExactlyItsOwnCleanedMicrophone() async throws {
+        let segments = try await recordEcho(splitAt: 94)
+        #expect(segments.count == 2)
+        for segment in segments {
+            #expect(segment.mic.count == segment.raw.count, "mic \(segment.mic.count) vs raw \(segment.raw.count) samples")
+        }
+        #expect(erle(segments[1]) >= 15, "echo removed after the switch: \(erle(segments[1])) dB")
+    }
+
+    @Test func aMicrophoneFormatChangeKeepsCancelling() async throws {
+        let segment = try #require(try await recordEcho(monoFrom: 94).first)
+        #expect(segment.mic.count == segment.raw.count)
+        #expect(erle(segment, from: 48_000 * 3) >= 15, "echo removed after the switch: \(erle(segment, from: 48_000 * 3)) dB")
     }
 }
 

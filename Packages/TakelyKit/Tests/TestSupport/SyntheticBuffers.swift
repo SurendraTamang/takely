@@ -35,12 +35,17 @@ public enum Synthetic {
         audio(pts: pts, samples: [Float](repeating: 0, count: frames * 2), channels: 2)
     }
 
-    /// Interleaved Float32 LPCM with the given samples (`samples.count` must be a multiple of `channels`).
-    public static func audio(pts: CMTime, samples: [Float], channels: Int, sampleRate: Double = 48_000) -> CMSampleBuffer {
-        let bytesPerFrame = UInt32(4 * channels)
+    /// Float32 LPCM with the given interleaved samples (`samples.count` must be a multiple of `channels`).
+    /// `interleaved: false` stores them channel after channel, as ScreenCaptureKit delivers audio.
+    public static func audio(
+        pts: CMTime, samples: [Float], channels: Int, sampleRate: Double = 48_000, interleaved: Bool = true
+    ) -> CMSampleBuffer {
+        let frames = samples.count / channels
+        let samples = interleaved ? samples : (0..<channels).flatMap { c in (0..<frames).map { samples[$0 * channels + c] } }
+        let bytesPerFrame = UInt32(interleaved ? 4 * channels : 4)
         var asbd = AudioStreamBasicDescription(
             mSampleRate: sampleRate, mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | (interleaved ? 0 : kAudioFormatFlagIsNonInterleaved),
             mBytesPerPacket: bytesPerFrame, mFramesPerPacket: 1, mBytesPerFrame: bytesPerFrame,
             mChannelsPerFrame: UInt32(channels), mBitsPerChannel: 32, mReserved: 0
         )
