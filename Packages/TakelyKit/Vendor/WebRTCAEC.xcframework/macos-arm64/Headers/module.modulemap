@@ -1,0 +1,4 @@
+module WebRTCAEC {
+    header "WebRTCAEC.h"
+    export *
+}
