@@ -564,11 +564,3 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(erle(segment, from: 48_000 * 3) >= 15, "echo removed after the switch: \(erle(segment, from: 48_000 * 3)) dB")
     }
 }
-
-extension Array {
-    func asyncMap<T>(_ transform: (Element) async throws -> T) async rethrows -> [T] {
-        var result: [T] = []
-        for element in self { result.append(try await transform(element)) }
-        return result
-    }
-}
