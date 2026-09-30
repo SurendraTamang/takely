@@ -325,7 +325,8 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
 
     /// Records ~4 s of speaker echo through a router with cancellation on. `splitAt` switches to a second segment
     /// at that chunk (like a pause); `monoFrom` makes the microphone mono from that chunk on (a headset connecting).
-    func recordEcho(splitAt: Int? = nil, monoFrom: Int = .max) async throws -> [EchoSegment] {
+    /// A loud click only the microphone hears is placed at sample `click`, to check `mic` and `micRaw` line up.
+    func recordEcho(splitAt: Int? = nil, monoFrom: Int = .max, click: Int = 48_000 * 3) async throws -> [EchoSegment] {
         let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100), cancelsEcho: true) { CGPoint(x: 50, y: 50) }
         let config = WriterConfig(
             tracks: [.screen, .system, .mic, .micRaw], screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30,
@@ -335,7 +336,8 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         router.attach(writers[0], offset: 0)
         let chunks = 188
         let far = EchoCancellerTests.noise(count: chunks * 1024)
-        let mic = EchoCancellerTests.echoOf(far)
+        var mic = EchoCancellerTests.echoOf(far)
+        for i in click..<click + 48 { mic[i] += 0.9 }
         func seconds(_ i: Int) -> Double { 50 + Double(i * 1024) / 48_000 }
         router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
         for i in 0..<chunks {
@@ -382,25 +384,34 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         return 10 * log10(EchoCancellerTests.power(segment.raw[from..<end]) / max(EchoCancellerTests.power(segment.mic[from..<end]), 1e-20))
     }
 
+    /// Sample index of the loudest moment: the click, which the canceller keeps (the system audio never had it).
+    func click(in samples: [Float]) -> Int { samples.indices.max { abs(samples[$0]) < abs(samples[$1]) } ?? -1 }
+
     @Test func echoCancellationWritesCleanedAndRawMicrophone() async throws {
         let segment = try #require(try await recordEcho().first)
         #expect(segment.tracks == [.screen, .system, .mic, .micRaw])
         #expect(segment.mic.count == segment.raw.count)
+        #expect(
+            abs(click(in: segment.mic) - click(in: segment.raw)) <= 48, "click at \(click(in: segment.mic)) vs \(click(in: segment.raw))")
         #expect(erle(segment) >= 15, "echo removed in the file: \(erle(segment)) dB")
     }
 
     @Test func eachSegmentGetsExactlyItsOwnCleanedMicrophone() async throws {
-        let segments = try await recordEcho(splitAt: 94)
+        let segments = try await recordEcho(splitAt: 94, click: 150 * 1024)
         #expect(segments.count == 2)
         for segment in segments {
             #expect(segment.mic.count == segment.raw.count, "mic \(segment.mic.count) vs raw \(segment.raw.count) samples")
         }
+        let second = segments[1]
+        #expect(abs(click(in: second.mic) - click(in: second.raw)) <= 48, "click at \(click(in: second.mic)) vs \(click(in: second.raw))")
         #expect(erle(segments[1]) >= 15, "echo removed after the switch: \(erle(segments[1])) dB")
     }
 
     @Test func aMicrophoneFormatChangeKeepsCancelling() async throws {
-        let segment = try #require(try await recordEcho(monoFrom: 94).first)
+        let segment = try #require(try await recordEcho(monoFrom: 94, click: 150 * 1024).first)
         #expect(segment.mic.count == segment.raw.count)
+        #expect(
+            abs(click(in: segment.mic) - click(in: segment.raw)) <= 48, "click at \(click(in: segment.mic)) vs \(click(in: segment.raw))")
         #expect(erle(segment, from: 48_000 * 3) >= 15, "echo removed after the switch: \(erle(segment, from: 48_000 * 3)) dB")
     }
 }

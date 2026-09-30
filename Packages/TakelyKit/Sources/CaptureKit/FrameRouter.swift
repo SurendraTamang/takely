@@ -16,7 +16,7 @@ public final class FrameRouter: Sendable {
     }
 
     private let state = Mutex(State())
-    /// Nil when cancellation is off, AEC3 couldn't start, or it failed: then `mic` gets the raw microphone.
+    /// Nil when cancellation is off or AEC3 couldn't start: then `mic` gets the raw microphone.
     private let echo: Mutex<EchoCanceller?>
     private let cancelsEcho: Bool
     private let captureRect: CGRect
@@ -60,7 +60,7 @@ public final class FrameRouter: Sendable {
     func attach(_ writer: SegmentWriter?, offset: Double) {
         // Cleaned microphone audio still waiting for its reference belongs to the segment being detached.
         if let detached = state.withLock({ $0.writer }) {
-            withCanceller(writing: nil, to: detached) { try $0.flush() }
+            withCanceller(writing: nil, to: detached) { $0.flush() }
         }
         state.withLock {
             $0.writer = writer
@@ -93,30 +93,24 @@ public final class FrameRouter: Sendable {
         writer?.append(buffer, as: kind == .mic ? .micRaw : .system)
         withCanceller(writing: kind == .mic ? buffer : nil, to: writer) { canceller in
             guard kind == .mic else {
-                try canceller.addReference(buffer)
+                canceller.addReference(buffer)
                 return []
             }
-            return try canceller.clean(buffer)
+            return canceller.clean(buffer)
         }
     }
 
     /// Runs `body` on the canceller and writes its output to `mic`, under the canceller's lock so cleaned audio
-    /// reaches the writer in order. Without a canceller (none, or it failed: then logged once and turned off for
-    /// the rest of the recording), `raw` goes to `mic` as captured.
+    /// reaches the writer in order. Without a canceller (AEC3 couldn't start), `raw` goes to `mic` as captured.
     private func withCanceller(
-        writing raw: CMSampleBuffer?, to writer: SegmentWriter?, _ body: (EchoCanceller) throws -> [CMSampleBuffer]
+        writing raw: CMSampleBuffer?, to writer: SegmentWriter?, _ body: (EchoCanceller) -> [CMSampleBuffer]
     ) {
         echo.withLock { canceller in
-            if let current = canceller {
-                do {
-                    for cleaned in try body(current) { writer?.append(cleaned, as: .mic) }
-                    return
-                } catch {
-                    Self.log.error("echo cancellation stopped: \(String(describing: error)); recording the raw microphone")
-                    canceller = nil
-                }
+            guard let canceller else {
+                if let raw { writer?.append(raw, as: .mic) }
+                return
             }
-            if let raw { writer?.append(raw, as: .mic) }
+            for cleaned in body(canceller) { writer?.append(cleaned, as: .mic) }
         }
     }
 

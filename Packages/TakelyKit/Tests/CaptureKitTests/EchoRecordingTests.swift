@@ -55,12 +55,12 @@ import Testing
         var s = 0
         for buffer in mic {
             while s < system.count, system[s].presentationTimeStamp <= buffer.presentationTimeStamp {
-                try canceller.addReference(system[s])
+                canceller.addReference(system[s])
                 s += 1
             }
-            cleaned += try canceller.clean(buffer)
+            cleaned += canceller.clean(buffer)
         }
-        cleaned += try canceller.flush()
+        cleaned += canceller.flush()
 
         let far = try Self.mono(system)
         let near = try Self.mono(mic)

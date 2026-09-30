@@ -7,9 +7,11 @@ import WebRTCAEC
 ///
 /// The writer lays audio out by sample count (only a track's first timestamp counts), so the cleaned microphone
 /// must contain exactly the raw microphone's samples: one output sample per input sample, in order. The reference
-/// is placed on the microphone's timeline by host-clock timestamps; the microphone itself follows its sample count
-/// and only a jump over `micGap` (e.g. a pause) starts a new run. Not thread-safe: `FrameRouter` calls it under a
-/// lock (ScreenCaptureKit delivers both streams on one queue).
+/// is placed by host-clock timestamps; the microphone follows its sample count, and the difference between the two
+/// (its clock drift, `skew`) is tracked so each microphone frame meets the system audio played at the same host
+/// time. Only a jump over `micGap` (e.g. a pause) starts a new run. Nothing here throws mid-recording: an unreadable
+/// system-audio buffer is skipped and an unreadable microphone buffer becomes silence of the same length.
+/// Not thread-safe: `FrameRouter` calls it under a lock (ScreenCaptureKit delivers both streams on one queue).
 final class EchoCanceller {
     enum Failure: Error, Equatable {
         case conversion
@@ -39,6 +41,8 @@ final class EchoCanceller {
     private var reference = Timeline()
     private var mic = Timeline()
     private var run: Run?
+    /// Microphone timestamp minus its sample-count position (smoothed): where its frames sit in host time.
+    private var skew: Int64 = 0
     /// Set when AEC3 fails: the microphone then passes through unprocessed, sample for sample.
     private var bypassing = false
     private static let log = Logger(subsystem: "app.takely", category: "capture")
@@ -52,11 +56,11 @@ final class EchoCanceller {
 
     deinit { webrtc_aec_destroy(aec) }
 
-    /// Adds system audio (the far end) to the reference timeline.
-    func addReference(_ buffer: CMSampleBuffer) throws {
-        let index = try Self.index(of: buffer.presentationTimeStamp)
+    /// Adds system audio (the far end) to the reference timeline. An unreadable buffer is skipped (a gap).
+    func addReference(_ buffer: CMSampleBuffer) {
+        guard let index = try? Self.index(of: buffer.presentationTimeStamp) else { return }
         if let format = buffer.formatDescription, referenceConverter?.handles(format) == false { referenceConverter = nil }
-        let samples = try Downmixer.convert(buffer, with: &referenceConverter)
+        guard let samples = try? Downmixer.convert(buffer, with: &referenceConverter) else { return }
         let tolerance = referenceConverter?.exact == false ? Self.resampledTolerance : Self.tolerance
         if reference.samples.isEmpty || index < reference.start || index > reference.end + Int64(Self.maxReference) {
             reference = Timeline(start: index)
@@ -75,36 +79,45 @@ final class EchoCanceller {
     }
 
     /// Adds microphone audio and returns what is ready: 48 kHz mono, echo removed, one buffer per run.
-    func clean(_ buffer: CMSampleBuffer) throws -> [CMSampleBuffer] {
-        let index = try Self.index(of: buffer.presentationTimeStamp)
+    func clean(_ buffer: CMSampleBuffer) -> [CMSampleBuffer] {
         var output = Output()
-        if let format = buffer.formatDescription, micConverter?.handles(format) == false {
-            try drain(force: true, into: &output)  // e.g. a headset connected: finish the run, then convert the new format
-            micConverter = nil
+        var converter = micConverter
+        if let format = buffer.formatDescription, converter?.handles(format) == false { converter = nil }  // e.g. a headset
+        let converted = try? Downmixer.convert(buffer, with: &converter)
+        if converter !== micConverter {
+            drain(force: true, into: &output)  // the format changed: finish the run in the old one
+            micConverter = converter
         }
-        let samples = try Downmixer.convert(buffer, with: &micConverter)
-        if run != nil || !mic.samples.isEmpty, index > mic.end + Self.micGap {
-            try drain(force: true, into: &output)  // a gap in the microphone (e.g. after a pause) starts a new run
+        let samples = converted ?? [Float](repeating: 0, count: buffer.numSamples)  // unreadable: keep its length
+        let expected = mic.end + skew
+        if let index = try? Self.index(of: buffer.presentationTimeStamp), run != nil || !mic.samples.isEmpty {
+            if index > expected + Self.micGap || index < expected - Self.micGap {
+                drain(force: true, into: &output)  // a gap in the microphone (e.g. after a pause) starts a new run
+                mic = Timeline(start: index)
+            } else {
+                skew += (index - mic.end - skew) / 16  // follow the microphone clock's drift, ignoring jitter
+            }
+        } else if run == nil && mic.samples.isEmpty {
+            mic = Timeline(start: (try? Self.index(of: buffer.presentationTimeStamp)) ?? mic.end)
         }
-        if run == nil && mic.samples.isEmpty { mic = Timeline(start: index) }
         mic.samples += samples
-        try drain(force: false, into: &output)
+        drain(force: false, into: &output)
         return output.buffers(format: outputFormat)
     }
 
     /// Processes all pending microphone audio (missing reference counts as silence) and ends the run.
-    func flush() throws -> [CMSampleBuffer] {
+    func flush() -> [CMSampleBuffer] {
         var output = Output()
-        try drain(force: true, into: &output)
+        drain(force: true, into: &output)
         return output.buffers(format: outputFormat)
     }
 
     /// Processes pending microphone frames whose reference has arrived (or waited long enough).
     /// `force` processes everything and ends the run, pushing AEC3's delayed tail out.
-    private func drain(force: Bool, into output: inout Output) throws {
+    private func drain(force: Bool, into output: inout Output) {
         while mic.samples.count >= Self.frame || (force && !mic.samples.isEmpty) {
             let start = mic.start
-            let referenceReady = reference.end >= start + Int64(Self.frame)
+            let referenceReady = reference.end >= start + skew + Int64(Self.frame)
             guard force || referenceReady || mic.end - start >= Self.maxWait else { return }
             let count = min(Self.frame, mic.samples.count)
             let near = Array(mic.samples.prefix(count))
@@ -118,6 +131,7 @@ final class EchoCanceller {
             run = self.run ?? run
         }
         self.run = nil
+        skew = 0
     }
 
     /// Runs one 10 ms frame (`near` padded with silence) through AEC3 and emits the output that belongs to real
@@ -127,7 +141,7 @@ final class EchoCanceller {
         var run = self.run ?? Run(origin: mic.start)
         let position = run.origin + run.produced
         var frame = near + [Float](repeating: 0, count: Self.frame - near.count)
-        let far = reference.frame(at: position, count: Self.frame)
+        let far = reference.frame(at: position + skew, count: Self.frame)
         let rendered = far.withUnsafeBufferPointer { webrtc_aec_analyze_render(aec, $0.baseAddress) }
         let processed = rendered == 0 ? frame.withUnsafeMutableBufferPointer { webrtc_aec_process_capture(aec, $0.baseAddress) } : rendered
         guard processed == 0 else {
@@ -147,7 +161,8 @@ final class EchoCanceller {
             run.emitted = high
         }
         run.produced += Int64(Self.frame)
-        reference.remove(before: position + Int64(Self.frame))
+        // Keep reference past the microphone's real end: the tail's padding mustn't eat the next run's reference.
+        reference.remove(before: min(position + Int64(Self.frame), run.origin + run.fed) + skew)
         self.run = run
     }
 

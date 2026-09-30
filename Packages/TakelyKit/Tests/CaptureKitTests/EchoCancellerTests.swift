@@ -87,7 +87,7 @@ import Testing
             if r >= 0, r < chunks {
                 let range = r * Self.chunk..<(r + 1) * Self.chunk
                 if let skip = skipReference, skip.overlaps(range) { continue }
-                try canceller.addReference(
+                canceller.addReference(
                     Synthetic.audio(
                         pts: Self.pts(range.lowerBound), samples: Self.stereo(far[range]), channels: 2, interleaved: interleaved))
             }
@@ -224,6 +224,37 @@ import Testing
         #expect(out.samples.count == mic.count)
         let erle = Self.erle(mic, out.samples, from: Self.chunk * 200 + Self.rate * 3)
         #expect(erle >= 25, "ERLE after the switch \(erle) dB")
+    }
+
+    @Test func followsAMicrophoneClockThatDrifts() throws {
+        // The microphone's clock runs 0.2 % slow against the host: each of its samples spans a little more host
+        // time, so its timestamps drift ~100 ms from its sample count over 50 s. The echo it hears must still be
+        // matched with the system audio playing at the same host time.
+        let drift = 0.002
+        let count = Self.rate * 50
+        let far = Self.noise(count: Int(Double(count) * (1 + drift)) + Self.chunk)
+        let mic = (0..<count).map { k -> Float in
+            let host = Int((Double(k) * (1 + drift)).rounded()) - 1440
+            return host >= 0 ? far[host] * 0.5 : 0
+        }
+        let canceller = try #require(EchoCanceller())
+        var out = Collected()
+        var reference = 0
+        for step in 0..<(count / Self.chunk) {
+            let first = step * Self.chunk
+            let micPTS = Synthetic.seconds(Self.base + Double(first) * (1 + drift) / Double(Self.rate))
+            while reference * Self.chunk <= Int(Double(first + Self.chunk) * (1 + drift)) {
+                let range = reference * Self.chunk..<(reference + 1) * Self.chunk
+                canceller.addReference(Synthetic.audio(pts: Self.pts(range.lowerBound), samples: Self.stereo(far[range]), channels: 2))
+                reference += 1
+            }
+            let range = first..<first + Self.chunk
+            try out.add(canceller.clean(Synthetic.audio(pts: micPTS, samples: Self.stereo(mic[range]), channels: 2)))
+        }
+        try out.add(canceller.flush())
+        #expect(out.samples.count == count / Self.chunk * Self.chunk)
+        let erle = Self.erle(Array(mic.prefix(out.samples.count)), out.samples, from: Self.rate * 40)
+        #expect(erle >= 20, "ERLE after 40 s of drift \(erle) dB")
     }
 
     @Test func rejectsInvalidTimestamps() {

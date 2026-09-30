@@ -33,18 +33,22 @@ extern "C" WebRTCAEC *webrtc_aec_create(int sample_rate) noexcept try {
   return nullptr;
 }
 
-extern "C" int webrtc_aec_analyze_render(WebRTCAEC *aec, const float *frame) noexcept {
+extern "C" int webrtc_aec_analyze_render(WebRTCAEC *aec, const float *frame) noexcept try {
   // ProcessReverseStream writes its (unused) output; keep the caller's frame const.
   std::copy(frame, frame + aec->render.size(), aec->render.begin());
   const float *src = aec->render.data();
   float *dest = aec->render.data();
   return aec->apm->ProcessReverseStream(&src, aec->stream, aec->stream, &dest);
+} catch (...) {
+  return -1;
 }
 
-extern "C" int webrtc_aec_process_capture(WebRTCAEC *aec, float *frame) noexcept {
+extern "C" int webrtc_aec_process_capture(WebRTCAEC *aec, float *frame) noexcept try {
   aec->apm->set_stream_delay_ms(0);
   const float *src = frame;
   return aec->apm->ProcessStream(&src, aec->stream, aec->stream, &frame);
+} catch (...) {
+  return -1;
 }
 
 extern "C" void webrtc_aec_destroy(WebRTCAEC *aec) noexcept { delete aec; }
