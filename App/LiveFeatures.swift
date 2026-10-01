@@ -15,13 +15,13 @@ final class LiveStatus {
     var fillers = 0
     var isSilent = false
     var coaching = false
-    /// Listening to a recording (Practice is then unavailable).
+    /// A recording is in progress (Practice is then unavailable). Set from the recording's phase.
     var recording = false
     /// Why voice features aren't running, if they can't (shown in the prompter).
     var note: String?
 
     func reset() {
-        recording = false
+        note = nil
         spokenCharacters = nil
         wordsPerMinute = nil
         paceIsOff = false
@@ -51,23 +51,27 @@ final class LiveStatus {
             let session = LiveSession(script: script)
             let started = await session.start()
             guard started, generation == self.generation else {
-                status.note = session.note
+                if generation == self.generation { status.note = session.note }  // not when superseded
                 await session.stop()
                 return
             }
-            status.recording = true
             status.coaching = coach
             install(session, following: script != nil)
             self.router = router
             router.setMicListener { [session] audio in session.feed(audio) }
         }
 
-        /// Practice: follows the voice from the microphone without recording. False if it couldn't start.
-        func startPractice(script: String) async -> Bool {
+        /// Practice: follows the voice from the microphone without recording. False if it couldn't start; nil if a
+        /// newer start or stop superseded it (the caller then has nothing to undo).
+        func startPractice(script: String) async -> Bool? {
             let generation = detachAndStop()
             let session = LiveSession(script: script)
             let started = await session.startPractice()
-            guard started, generation == self.generation else {
+            guard generation == self.generation else {
+                await session.stop()
+                return nil
+            }
+            guard started else {
                 status.note = session.note
                 await session.stop()
                 return false
@@ -76,10 +80,8 @@ final class LiveStatus {
             return true
         }
 
-        /// After a retake took back `seconds`: the prompter goes back to where the reader was.
-        func rewind(by seconds: Double) {
-            session?.rewind(to: CMClockGetTime(CMClockGetHostTimeClock()).seconds - seconds)
-        }
+        /// After a retake cut back to host time `time`: the prompter goes back to where the reader was then.
+        func rewind(to time: Double) { session?.rewind(to: time) }
 
         /// Stops listening; returns the coach's recap if there was enough speech.
         @discardableResult
@@ -137,8 +139,8 @@ final class LiveStatus {
     final class LiveFeatures {
         let status = LiveStatus()
         func startRecording(router: FrameRouter, script: String?, coach: Bool) async {}
-        func startPractice(script: String) async -> Bool { false }
-        func rewind(by seconds: Double) {}
+        func startPractice(script: String) async -> Bool? { false }
+        func rewind(to time: Double) {}
         @discardableResult func stop() async -> String? { nil }
     }
 #endif

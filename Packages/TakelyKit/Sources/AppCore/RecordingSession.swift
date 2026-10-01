@@ -13,8 +13,8 @@ public protocol RecordingSession: AnyObject {
     func pause() async throws
     func resume() async throws
     /// Oops-retake: cuts back to the last pause and keeps recording; returns the recording's new duration and the
-    /// seconds taken back.
-    func retake() async throws -> (duration: Double, removed: Double)
+    /// host time (seconds) the cut corresponds to.
+    func retake() async throws -> (duration: Double, cutHostTime: Double)
     /// Returns the saved bundle, plus the error if the last segment couldn't be closed.
     func stop() async throws -> StoppedRecording
     /// The engine's actual state, for resyncing after a failed pause or resume.

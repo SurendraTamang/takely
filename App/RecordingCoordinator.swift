@@ -18,8 +18,10 @@ final class RecordingCoordinator {
     let live = LiveFeatures()
     /// Receives the live coach's recap ("148 wpm · 4 fillers") for the take being exported (nil clears it).
     var onRecap: (String?) -> Void = { _ in }
-    /// A recap computed before its export started.
-    private var pendingRecap: String?
+    /// A recap computed before its export started, and the take it belongs to.
+    private var pendingRecap: (take: Int, text: String?)?
+    /// Counts takes, so a late recap from a discarded take can't attach to the next one.
+    private var take = 0
     private var bubble: BubblePanel?
     private var controlBar: OverlayPanel?
     private var controlBarMoves: (any NSObjectProtocol)?
@@ -43,7 +45,7 @@ final class RecordingCoordinator {
             Task { @MainActor in
                 if on {
                     let started = await live.startPractice(script: settings.prompterScript)
-                    if !started { prompter?.model.practicing = false }
+                    if started == false { prompter?.model.practicing = false }
                 } else {
                     await live.stop()
                 }
@@ -81,8 +83,8 @@ final class RecordingCoordinator {
 
     /// ⌥⇧Z: takes back the last words (to the previous pause) and keeps recording.
     func retake() async {
-        guard controller.phase == .recording, let removed = await controller.retake() else { return }
-        live.rewind(by: removed)
+        guard controller.phase == .recording, let cut = await controller.retake() else { return }
+        live.rewind(to: cut)
         NSSound(named: "Pop")?.play()
         // The cut may have removed the bubble's latest hide or move: record where it is now.
         recordBubble(visible: settings.camera && bubbleShown)
@@ -181,22 +183,29 @@ final class RecordingCoordinator {
 
     /// Live voice features run while recording: they start when the countdown ends and stop with the recording.
     private func followLive(from old: RecordingController.Phase?, to new: RecordingController.Phase) {
-        if new == .starting { onRecap(nil) }  // a new take: no recap from an earlier (e.g. discarded) one
+        live.status.recording = recordingActive
+        if new == .starting {
+            take += 1  // a new take: nothing from an earlier (e.g. discarded) one carries over
+            pendingRecap = nil
+            onRecap(nil)
+        }
         if old == .starting, new == .recording, let router = session.active?.router {
             prompter.model.practicing = false
             let script =
                 settings.prompterFollowsVoice && prompter.isVisible && !settings.prompterScript.isEmpty ? settings.prompterScript : nil
             Task { await live.startRecording(router: router, script: script, coach: settings.liveCoach) }
         } else if old == .recording || old == .paused, new != .recording, new != .paused {
+            let take = take
             Task {
                 let recap = await live.stop()
-                // Only a take that is being exported gets a recap (not a discard or a restart).
-                if case .exporting = controller.phase { onRecap(recap) } else { pendingRecap = recap }
+                guard take == self.take else { return }  // a newer take started meanwhile (restart)
+                // Only a take that is being exported gets a recap (not a discard).
+                if case .exporting = controller.phase { onRecap(recap) } else { pendingRecap = (take, recap) }
             }
         }
-        if case .exporting = new, let pendingRecap {
-            onRecap(pendingRecap)
-            self.pendingRecap = nil
+        if case .exporting = new, let pending = pendingRecap, pending.take == take {
+            onRecap(pending.text)
+            pendingRecap = nil
         } else if new == .idle {
             pendingRecap = nil
         }

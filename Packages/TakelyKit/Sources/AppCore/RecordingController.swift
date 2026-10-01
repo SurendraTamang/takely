@@ -137,20 +137,20 @@ public final class RecordingController {
     }
 
     /// Oops-retake: removes the last words (back to the previous pause) and keeps recording.
-    /// Returns the seconds taken back, or nil if it didn't happen (paused, busy or failed).
+    /// Returns the host time (seconds) the cut corresponds to, or nil if it didn't happen (paused, busy or failed).
     @discardableResult
     public func retake() async -> Double? {
         guard phase == .recording, !isBusy else { return nil }
         isBusy = true
         defer { finishBusy() }
         do {
-            let (duration, removed) = try await session.retake()
+            let (duration, cutHostTime) = try await session.retake()
             stopTicking()
             accumulated = .seconds(duration)
             elapsed = accumulated
             startTicking()
             feedback.announce("Retake")
-            return removed
+            return cutHostTime
         } catch {
             log.error("retake failed: \(error.localizedDescription)")
             await resyncWithEngine()
