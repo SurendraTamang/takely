@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 paths=()
-for p in App Packages/TakelyKit/Sources Packages/TakelyKit/Tests; do
+for p in App Packages/TakelyKit/Sources Packages/TakelyKit/Tests Packages/TakelyPro/Sources Packages/TakelyPro/Tests; do
     [[ -d "$p" ]] && paths+=("$p")
 done
 if ((${#paths[@]})); then
@@ -18,6 +18,9 @@ rm -rf "${TMPDIR:-/tmp}/takely-tests"
 echo "==> swift test"
 # Serial: parallel suites that encode/decode video can exhaust hardware video sessions ("Cannot Decode").
 swift test --package-path Packages/TakelyKit --quiet --no-parallel
+if [[ -d Packages/TakelyPro ]]; then
+    swift test --package-path Packages/TakelyPro --quiet --no-parallel
+fi
 
 if [[ -f project.yml ]]; then
     echo "==> xcodebuild"

@@ -41,6 +41,10 @@ final class RecordingSettings {
     var prompterMirrored: Bool { didSet { defaults.set(prompterMirrored, forKey: Key.prompterMirrored) } }
     /// The prompter scrolls while recording and stops when paused or stopped.
     var prompterFollowsRecording: Bool { didSet { defaults.set(prompterFollowsRecording, forKey: Key.prompterFollowsRecording) } }
+    /// Takely Pro: transcript and captions, the AI title/summary, and captions drawn into the video.
+    var transcribe: Bool { didSet { defaults.set(transcribe, forKey: Key.transcribe) } }
+    var aiSummary: Bool { didSet { defaults.set(aiSummary, forKey: Key.aiSummary) } }
+    var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
     static let defaultSaveFolder = URL.moviesDirectory.appending(path: "Takely", directoryHint: .isDirectory)
@@ -75,6 +79,9 @@ final class RecordingSettings {
         prompterOpacity = defaults.object(forKey: Key.prompterOpacity) as? Double ?? 0.75
         prompterMirrored = defaults.bool(forKey: Key.prompterMirrored)
         prompterFollowsRecording = defaults.object(forKey: Key.prompterFollowsRecording) as? Bool ?? true
+        transcribe = defaults.object(forKey: Key.transcribe) as? Bool ?? true
+        aiSummary = defaults.object(forKey: Key.aiSummary) as? Bool ?? true
+        burnInCaptions = defaults.bool(forKey: Key.burnInCaptions)
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
         }
@@ -100,6 +107,9 @@ final class RecordingSettings {
         static let bubbleDiameter = "bubbleDiameter"
         static let bubbleOrigin = "bubbleOrigin"
         static let controlsOrigin = "controlsOrigin"
+        static let transcribe = "transcribe"
+        static let aiSummary = "aiSummary"
+        static let burnInCaptions = "burnInCaptions"
         static let prompterScript = "prompterScript"
         static let prompterWordsPerMinute = "prompterWordsPerMinute"
         static let prompterFontSize = "prompterFontSize"

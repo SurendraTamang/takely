@@ -9,7 +9,9 @@ public struct Exporter: Sendable {
         let project = try bundle.readProject()
         guard !project.segments.isEmpty else { throw RenderError.emptyRecording }
         let cursorTrack = try bundle.readCursor()
-        let renderer = FrameRenderer(project: project, cursor: cursorTrack)
+        let transcript = try? bundle.readTranscript()
+        let cues = transcript?.cues() ?? []
+        let renderer = FrameRenderer(project: project, cursor: cursorTrack, captions: cues)
         let composition = AVMutableComposition()
         var tracks: [TrackKind: AVMutableCompositionTrack] = [:]
         var cameraCoverage: [CMTimeRange] = []
@@ -41,6 +43,7 @@ public struct Exporter: Sendable {
         let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
         let passthrough =
             !Exporter.needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
+            && !renderer.hasCaptions
             && presentAudioKinds.count <= 1
             && !Exporter.audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
         let preset =
@@ -101,8 +104,6 @@ public struct Exporter: Sendable {
             try? FileManager.default.removeItem(at: partial)  // don't leave hidden partial files behind
             throw error
         }
-        let transcript = try? bundle.readTranscript()
-        let cues = transcript?.cues() ?? []
         let extras = MovieExtras(
             markers: (try? bundle.readMarkers()) ?? [], captions: cues, captionsLocale: transcript?.locale,
             title: project.title, summary: project.summary)

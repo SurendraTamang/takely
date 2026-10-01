@@ -107,7 +107,8 @@ enum MovieFinisher {
     /// Each chapter runs until the next one (the last until the end). Markers closer than 0.5 s are one chapter
     /// (a double press); text samples can't share a time.
     private static func chapterSamples(_ markers: [Marker], duration: CMTime, format: CMFormatDescription) throws -> [CMSampleBuffer] {
-        var chapters = [Marker(t: 0, title: "Start")]
+        // A marker at 0 (an AI name for the opening) titles the first chapter.
+        var chapters = [Marker(t: 0, title: markers.first { $0.t < 0.05 }?.title ?? "Start")]
         for marker in markers.sorted(by: { $0.t < $1.t })
         where marker.t > 0.05 && marker.t < duration.seconds - 0.05 && marker.t - chapters.last!.t >= 0.5 {
             chapters.append(Marker(t: marker.t, title: marker.title ?? "Chapter \(chapters.count)"))

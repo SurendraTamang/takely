@@ -10,6 +10,9 @@ configFiles:
 packages:
   TakelyKit:
     path: Packages/TakelyKit
+  # Proprietary (see Packages/TakelyPro/LICENSE); the open-source build can drop this and the TakelyPro dependency.
+  TakelyPro:
+    path: Packages/TakelyPro
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     exactVersion: 3.1.0
@@ -34,6 +37,8 @@ targets:
         product: RenderKit
       - package: TakelyKit
         product: AppCore
+      - package: TakelyPro
+        product: TakelyPro
       - package: KeyboardShortcuts
     info:
       path: App/Info.plist

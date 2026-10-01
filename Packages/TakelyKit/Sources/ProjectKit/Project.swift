@@ -112,6 +112,8 @@ public struct Project: Codable, Sendable, Equatable {
     public struct Effects: Codable, Sendable, Equatable {
         public var cursorHighlight: Bool
         public var clickRipples: Bool
+        /// Draw the transcript's captions into the video (optional: absent in older manifests).
+        public var burnInCaptions: Bool?
 
         public init(cursorHighlight: Bool = true, clickRipples: Bool = true) {
             self.cursorHighlight = cursorHighlight

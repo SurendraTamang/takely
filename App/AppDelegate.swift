@@ -4,6 +4,7 @@ import OSLog
 import ProjectKit
 import RenderKit
 import SwiftUI
+import TakelyPro
 
 /// Owns the app's objects and handles launch (recovery, onboarding) and quit.
 @MainActor
@@ -16,6 +17,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private(set) lazy var controller = RecordingController(
         session: session,
         exporter: Exporter(),
+        postProcessor: ProProcessor { [settings] in
+            await MainActor.run {
+                ProProcessor.Options(
+                    transcribe: settings.transcribe, locale: .current, summarize: settings.aiSummary,
+                    burnInCaptions: settings.burnInCaptions)
+            }
+        },
         feedback: notifier,
         saveFolder: { [settings] in settings.saveFolder })
     private lazy var coordinator = RecordingCoordinator(controller: controller, settings: settings, session: session, camera: camera)
