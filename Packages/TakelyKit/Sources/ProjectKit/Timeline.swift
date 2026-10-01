@@ -36,7 +36,7 @@ public struct Marker: Codable, Sendable, Equatable {
     }
 }
 
-public struct NormalizedPoint: Sendable, Equatable {
+public struct NormalizedPoint: Codable, Sendable, Equatable {
     public var x: Double
     public var y: Double
 

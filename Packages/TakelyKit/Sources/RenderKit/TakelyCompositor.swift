@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import ProjectKit
 import Synchronization
 
 /// Carries the renderer and track IDs to the compositor.
@@ -14,11 +15,14 @@ final class TakelyInstruction: NSObject, AVVideoCompositionInstructionProtocol, 
     /// Time ranges the camera track actually covers; outside these, AVFoundation would otherwise repeat its last frame.
     let cameraCoverage: [CMTimeRange]
     let renderer: FrameRenderer
+    /// Output time → recording time, where the renderer's data lives.
+    let map: EditMap
 
     init(
         timeRange: CMTimeRange, screenTrackID: CMPersistentTrackID, cameraTrackID: CMPersistentTrackID?,
-        cameraCoverage: [CMTimeRange], renderer: FrameRenderer
+        cameraCoverage: [CMTimeRange], renderer: FrameRenderer, map: EditMap
     ) {
+        self.map = map
         self.timeRange = timeRange
         self.screenTrackID = screenTrackID
         self.cameraTrackID = cameraTrackID
@@ -85,7 +89,7 @@ final class TakelyCompositor: NSObject, AVVideoCompositing, @unchecked Sendable 
             camera = nil
         }
         let image = instruction.renderer.compose(
-            screen: CIImage(cvPixelBuffer: screen), camera: camera, at: request.compositionTime.seconds)
+            screen: CIImage(cvPixelBuffer: screen), camera: camera, at: instruction.map.sourceTime(request.compositionTime.seconds))
         instruction.renderer.context.render(image, to: output)
         request.finish(withComposedVideoFrame: output)
     }

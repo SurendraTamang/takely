@@ -9,87 +9,26 @@ public struct Exporter: Sendable {
     public init() {}
 
     public func export(_ bundle: ProjectBundle, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
-        let project = try bundle.readProject()
-        guard !project.segments.isEmpty else { throw RenderError.emptyRecording }
-        let cursorTrack = try bundle.readCursor()
-        let transcript = try? bundle.readTranscript()
-        let cues = transcript?.cues() ?? []
-        // An unreadable redactions file fails the export: never export with the blurs silently dropped.
-        let renderer = FrameRenderer(
-            project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions())
-        let composition = AVMutableComposition()
-        var tracks: [TrackKind: AVMutableCompositionTrack] = [:]
-        var cameraCoverage: [CMTimeRange] = []
-        var cursor = CMTime.zero
-
-        for segment in project.segments {
-            let asset = AVURLAsset(url: bundle.segmentURL(segment.file))
-            let sources = try await asset.load(.tracks).sorted { $0.trackID < $1.trackID }
-            guard sources.count == segment.tracks.count else {
-                throw RenderError.trackMismatch("\(segment.file): \(sources.count) tracks, manifest lists \(segment.tracks.count)")
-            }
-            let segmentEnd = CMTime(seconds: segment.duration, preferredTimescale: 600)
-            for (kind, source) in zip(segment.tracks, sources) {
-                let range = try await source.load(.timeRange)
-                let end = CMTimeMinimum(range.end, segmentEnd)
-                // The raw microphone is kept for re-processing only: exporting it would bring the echo back.
-                guard kind != .micRaw, end > range.start, kind != .camera || project.camera.enabled else { continue }
-                let track = try tracks[kind] ?? addTrack(kind, to: composition)
-                tracks[kind] = track
-                try track.insertTimeRange(CMTimeRange(start: range.start, end: end), of: source, at: cursor + range.start)
-                if kind == .camera {
-                    cameraCoverage.append(CMTimeRange(start: cursor + range.start, end: cursor + end))
-                }
-            }
-            cursor = cursor + segmentEnd
-        }
-        guard let screenTrack = tracks[.screen] else { throw RenderError.trackMismatch("no screen track") }
-
-        let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
-        let passthrough =
-            !Exporter.needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
-            && !renderer.hasCaptions && !renderer.hasRedactions
-            && presentAudioKinds.count <= 1
-            && !Exporter.audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
+        // Unreadable edits or redactions fail the export: never export with cuts or blurs silently dropped.
+        let built = try await Self.compose(bundle, edits: try bundle.readEdits())
         let preset =
-            passthrough
+            built.passthrough
             ? AVAssetExportPresetPassthrough
-            : project.capture.codec == .hevc ? AVAssetExportPresetHEVCHighestQuality : AVAssetExportPresetHighestQuality
-        guard let session = AVAssetExportSession(asset: composition, presetName: preset) else {
+            : built.project.capture.codec == .hevc ? AVAssetExportPresetHEVCHighestQuality : AVAssetExportPresetHighestQuality
+        guard let session = AVAssetExportSession(asset: built.composition, presetName: preset) else {
             throw RenderError.exportUnavailable
         }
         session.shouldOptimizeForNetworkUse = true
-
-        if !passthrough {
-            let instruction = TakelyInstruction(
-                timeRange: CMTimeRange(start: .zero, duration: composition.duration),
-                screenTrackID: screenTrack.trackID,
-                cameraTrackID: tracks[.camera]?.trackID,
-                cameraCoverage: cameraCoverage,
-                renderer: renderer
-            )
-            var configuration = AVVideoComposition.Configuration(
-                customVideoCompositorClass: TakelyCompositor.self,
-                frameDuration: CMTime(value: 1, timescale: CMTimeScale(project.capture.fps)),
-                instructions: [instruction],
-                renderSize: CGSize(width: project.capture.pixelSize.width, height: project.capture.pixelSize.height)
-            )
-            // Match the capture path (Rec. 709) explicitly instead of relying on a default.
-            configuration.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
-            configuration.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
-            configuration.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
-            session.videoComposition = AVVideoComposition(configuration: configuration)
-
-            let mix = AVMutableAudioMix()
-            mix.inputParameters = [TrackKind.system, .mic].compactMap { kind in
-                tracks[kind].map {
-                    let parameters = AVMutableAudioMixInputParameters(track: $0)
-                    parameters.setVolume(Exporter.volume(for: kind, in: project), at: .zero)
-                    return parameters
-                }
-            }
-            session.audioMix = mix
+        session.videoComposition = built.videoComposition
+        session.audioMix = built.audioMix
+        let project = built.project
+        let map = built.map
+        // Chapters and captions on the output timeline: dropped inside cuts, clipped across them.
+        let markers = ((try? bundle.readMarkers()) ?? []).compactMap { m in map.outputTime(m.t).map { Marker(t: $0, title: m.title) } }
+        let cues = built.cues.compactMap { cue in
+            map.output(TimeRange(start: cue.start, end: cue.end)).map { CaptionCue(start: $0.start, end: $0.end, text: cue.text) }
         }
+        let transcript = try? bundle.readTranscript()
 
         // Export under a temporary name and move it into place only when complete, so a crash mid-export
         // never leaves a partial MP4 that looks finished (recovery keys on `hasExport`).
@@ -110,7 +49,7 @@ public struct Exporter: Sendable {
             throw error
         }
         let extras = MovieExtras(
-            markers: (try? bundle.readMarkers()) ?? [], captions: cues, captionsLocale: transcript?.locale,
+            markers: markers, captions: cues, captionsLocale: transcript?.locale,
             title: project.title, summary: project.summary)
         if !extras.isEmpty {
             let finished = bundle.exportsURL.appending(path: ".\(bundle.name).finished.mp4")
@@ -146,6 +85,134 @@ public struct Exporter: Sendable {
         return output
     }
 
+    /// A recording's composition with `edits` applied (only kept ranges, back to back), and what plays it: the
+    /// compositor and audio mix, unless nothing needs them. Shared by the export and the editor's preview.
+    public struct Built: @unchecked Sendable {
+        public let composition: AVMutableComposition
+        public let videoComposition: AVVideoComposition?
+        public let audioMix: AVAudioMix?
+        public let project: Project
+        public let map: EditMap
+        /// Captions on the recording timeline.
+        let cues: [CaptionCue]
+        let passthrough: Bool
+
+        /// A player item for previewing: plays exactly what the export would write.
+        public func playerItem() -> AVPlayerItem {
+            let item = AVPlayerItem(asset: composition)
+            item.videoComposition = videoComposition
+            item.audioMix = audioMix
+            return item
+        }
+    }
+
+    /// A join between kept ranges fades out and back in over this long, so cutting mid-waveform doesn't click.
+    static let fade = 0.015
+
+    public static func compose(_ bundle: ProjectBundle, edits: Edits) async throws -> Built {
+        let project = try bundle.readProject()
+        guard !project.segments.isEmpty else { throw RenderError.emptyRecording }
+        let cursorTrack = try bundle.readCursor()
+        let cues = (try? bundle.readTranscript())?.cues() ?? []
+        let renderer = FrameRenderer(
+            project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions(), zooms: edits.zooms)
+        let map = EditMap(cuts: edits.cuts, duration: project.duration)
+        guard map.outputDuration > 0 else { throw RenderError.emptyRecording }
+        let composition = AVMutableComposition()
+        var tracks: [TrackKind: AVMutableCompositionTrack] = [:]
+        var cameraCoverage: [CMTimeRange] = []
+        var offset = 0.0
+
+        for segment in project.segments {
+            defer { offset += segment.duration }
+            let asset = AVURLAsset(url: bundle.segmentURL(segment.file))
+            let sources = try await asset.load(.tracks).sorted { $0.trackID < $1.trackID }
+            guard sources.count == segment.tracks.count else {
+                throw RenderError.trackMismatch("\(segment.file): \(sources.count) tracks, manifest lists \(segment.tracks.count)")
+            }
+            // What's kept of this segment, in its own time.
+            let pieces = map.kept.compactMap { kept -> (start: CMTime, end: CMTime)? in
+                let a = max(kept.start, offset) - offset
+                let b = min(kept.end, offset + segment.duration) - offset
+                return b > a ? (CMTime(seconds: a, preferredTimescale: 600), CMTime(seconds: b, preferredTimescale: 600)) : nil
+            }
+            for (kind, source) in zip(segment.tracks, sources) {
+                let range = try await source.load(.timeRange)
+                // The raw microphone is kept for re-processing only: exporting it would bring the echo back.
+                guard kind != .micRaw, kind != .camera || project.camera.enabled else { continue }
+                for piece in pieces {
+                    let start = CMTimeMaximum(piece.start, range.start)
+                    let end = CMTimeMinimum(piece.end, range.end)
+                    guard end > start else { continue }
+                    let track = try tracks[kind] ?? addTrack(kind, to: composition)
+                    tracks[kind] = track
+                    let at = CMTime(seconds: map.position(offset + start.seconds), preferredTimescale: 600)
+                    try track.insertTimeRange(CMTimeRange(start: start, end: end), of: source, at: at)
+                    if kind == .camera { cameraCoverage.append(CMTimeRange(start: at, duration: end - start)) }
+                }
+            }
+        }
+        guard let screenTrack = tracks[.screen] else { throw RenderError.trackMismatch("no screen track") }
+
+        let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
+        let passthrough =
+            !needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
+            && !renderer.hasCaptions && !renderer.hasRedactions && !renderer.hasZooms && !map.hasCuts
+            && presentAudioKinds.count <= 1
+            && !audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
+        guard !passthrough else {
+            return Built(
+                composition: composition, videoComposition: nil, audioMix: nil, project: project, map: map, cues: cues,
+                passthrough: true)
+        }
+        let instruction = TakelyInstruction(
+            timeRange: CMTimeRange(start: .zero, duration: composition.duration),
+            screenTrackID: screenTrack.trackID,
+            cameraTrackID: tracks[.camera]?.trackID,
+            cameraCoverage: cameraCoverage,
+            renderer: renderer,
+            map: map
+        )
+        var configuration = AVVideoComposition.Configuration(
+            customVideoCompositorClass: TakelyCompositor.self,
+            frameDuration: CMTime(value: 1, timescale: CMTimeScale(project.capture.fps)),
+            instructions: [instruction],
+            renderSize: CGSize(width: project.capture.pixelSize.width, height: project.capture.pixelSize.height)
+        )
+        // Match the capture path (Rec. 709) explicitly instead of relying on a default.
+        configuration.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+        configuration.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
+        configuration.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
+
+        // Joins on the output timeline (the end of each kept range but the last).
+        var joins: [Double] = []
+        var position = 0.0
+        for kept in map.kept.dropLast() {
+            position += kept.duration
+            joins.append(position)
+        }
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = [TrackKind.system, .mic].compactMap { kind in
+            tracks[kind].map {
+                let parameters = AVMutableAudioMixInputParameters(track: $0)
+                let volume = Exporter.volume(for: kind, in: project)
+                parameters.setVolume(volume, at: .zero)
+                for join in joins {
+                    let out = CMTimeRange(
+                        start: CMTime(seconds: max(0, join - fade), preferredTimescale: 48_000),
+                        end: CMTime(seconds: join, preferredTimescale: 48_000))
+                    let back = CMTimeRange(start: out.end, duration: CMTime(seconds: fade, preferredTimescale: 48_000))
+                    parameters.setVolumeRamp(fromStartVolume: volume, toEndVolume: 0, timeRange: out)
+                    parameters.setVolumeRamp(fromStartVolume: 0, toEndVolume: volume, timeRange: back)
+                }
+                return parameters
+            }
+        }
+        return Built(
+            composition: composition, videoComposition: AVVideoComposition(configuration: configuration), audioMix: mix,
+            project: project, map: map, cues: cues, passthrough: false)
+    }
+
     /// Whether frames must go through the compositor, judged by the data actually present.
     static func needsCompositing(project: Project, cursor: CursorTrack, hasCameraTrack: Bool) -> Bool {
         (project.camera.enabled && hasCameraTrack)
@@ -167,7 +234,7 @@ public struct Exporter: Sendable {
         presentAudio.contains { volume(for: $0, in: project) != 1 }
     }
 
-    private func addTrack(_ kind: TrackKind, to composition: AVMutableComposition) throws -> AVMutableCompositionTrack {
+    private static func addTrack(_ kind: TrackKind, to composition: AVMutableComposition) throws -> AVMutableCompositionTrack {
         guard
             let track = composition.addMutableTrack(
                 withMediaType: kind.isVideo ? .video : .audio, preferredTrackID: kCMPersistentTrackID_Invalid)

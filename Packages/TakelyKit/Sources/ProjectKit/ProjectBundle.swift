@@ -16,6 +16,7 @@ public struct ProjectBundle: Sendable, Hashable {
     public var markersURL: URL { url.appending(path: "markers.json") }
     public var transcriptURL: URL { url.appending(path: "transcript.json") }
     public var redactionsURL: URL { url.appending(path: "redactions.json") }
+    public var editsURL: URL { url.appending(path: "edits.json") }
     /// Captions for the export, next to it: `exports/<name>.vtt`.
     public var captionsURL: URL { exportURL.deletingPathExtension().appendingPathExtension("vtt") }
     public var segmentsURL: URL { url.appending(path: "segments", directoryHint: .isDirectory) }
@@ -96,6 +97,16 @@ public struct ProjectBundle: Sendable, Hashable {
     public func readRedactions() throws -> [Redaction] {
         guard FileManager.default.fileExists(atPath: redactionsURL.path) else { return [] }
         return try JSONDecoder().decode([Redaction].self, from: Data(contentsOf: redactionsURL))
+    }
+
+    /// No file: no edits.
+    public func readEdits() throws -> Edits {
+        guard FileManager.default.fileExists(atPath: editsURL.path) else { return Edits() }
+        return try JSONDecoder().decode(Edits.self, from: Data(contentsOf: editsURL))
+    }
+
+    public func write(_ edits: Edits) throws {
+        try JSONEncoder().encode(edits).write(to: editsURL, options: .atomic)
     }
 
     public func write(_ redactions: [Redaction]) throws {
