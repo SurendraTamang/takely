@@ -1,8 +1,11 @@
 import AVFoundation
+import OSLog
 import ProjectKit
 
 /// Turns a finished `.takely` bundle into `exports/<name>.mp4`.
 public struct Exporter: Sendable {
+    private let log = Logger(subsystem: "app.takely", category: "export")
+
     public init() {}
 
     public func export(_ bundle: ProjectBundle, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
@@ -110,15 +113,31 @@ public struct Exporter: Sendable {
         if !extras.isEmpty {
             let finished = bundle.exportsURL.appending(path: ".\(bundle.name).finished.mp4")
             try? FileManager.default.removeItem(at: finished)
-            do {
-                try await MovieFinisher.write(partial, to: finished, extras: extras)
-                _ = try FileManager.default.replaceItemAt(partial, withItemAt: finished)  // the export survives a failed swap
-            } catch {
-                // Chapters, captions and metadata are niceties: keep the export without them rather than failing it.
-                try? FileManager.default.removeItem(at: finished)
+            // Captions are the most complex part: if the pass fails, retry without them so chapters and metadata stay.
+            var attempts = [extras]
+            if !extras.captions.isEmpty {
+                var withoutCaptions = extras
+                withoutCaptions.captions = []
+                if !withoutCaptions.isEmpty { attempts.append(withoutCaptions) }
+            }
+            for attempt in attempts {
+                do {
+                    try? FileManager.default.removeItem(at: finished)
+                    try await MovieFinisher.write(partial, to: finished, extras: attempt)
+                    _ = try FileManager.default.replaceItemAt(partial, withItemAt: finished)  // the export survives a failed swap
+                    break
+                } catch {
+                    // Niceties: keep the export without them rather than failing it.
+                    log.error("finishing the export failed: \(String(describing: error))")
+                    try? FileManager.default.removeItem(at: finished)
+                }
             }
         }
-        if !cues.isEmpty { try? WebVTT.render(cues).write(to: bundle.captionsURL, atomically: true, encoding: .utf8) }
+        if cues.isEmpty {
+            try? FileManager.default.removeItem(at: bundle.captionsURL)  // no stale captions from an earlier export
+        } else {
+            try? WebVTT.render(cues).write(to: bundle.captionsURL, atomically: true, encoding: .utf8)
+        }
         // Swaps atomically: a failed replace keeps the previous export.
         _ = try FileManager.default.replaceItemAt(output, withItemAt: partial)
         progress(1)

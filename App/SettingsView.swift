@@ -49,16 +49,18 @@ struct SettingsView: View {
             Toggle("Countdown before recording", isOn: $settings.countdown)
             Toggle("Show recording controls", isOn: $settings.showControls)
             Toggle("Scroll the prompter while recording", isOn: $settings.prompterFollowsRecording)
-            Section("Takely Pro") {
-                Toggle("Transcribe recordings (captions)", isOn: $settings.transcribe)
-                Toggle("Burn captions into the video", isOn: $settings.burnInCaptions)
-                    .disabled(!settings.transcribe)
-                Toggle("AI title, summary and chapter names", isOn: $settings.aiSummary)
-                    .disabled(!settings.transcribe)
-                Text("On this Mac, in the system language. AI needs Apple Intelligence (System Settings › Apple Intelligence & Siri).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            #if canImport(TakelyPro)
+                Section("Takely Pro") {
+                    Toggle("Transcribe recordings (captions)", isOn: $settings.transcribe)
+                    Toggle("Burn captions into the video", isOn: $settings.burnInCaptions)
+                        .disabled(!settings.transcribe)
+                    Toggle("AI title, summary and chapter names", isOn: $settings.aiSummary)
+                        .disabled(!settings.transcribe)
+                    Text("On this Mac, in the system language. AI needs Apple Intelligence (System Settings › Apple Intelligence & Siri).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            #endif
             Picker("Quality", selection: $settings.resolution) {
                 Text("720p").tag(Resolution.p720)
                 Text("1080p").tag(Resolution.p1080)

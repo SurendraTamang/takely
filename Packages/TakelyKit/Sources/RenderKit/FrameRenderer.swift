@@ -32,7 +32,8 @@ public final class FrameRenderer: Sendable {
 
     /// White text on a translucent dark box, centred near the bottom (sized to the frame height).
     private static func captionImage(_ text: String, canvas: CGRect) -> CIImage {
-        let size = max(12, canvas.height * 0.045)
+        // Sized by height, but small enough that a 42-character line fits narrow (square, portrait) captures too.
+        let size = max(12, min(canvas.height * 0.045, canvas.width * 0.04))
         let style = NSMutableParagraphStyle()
         style.alignment = .center
         let generator = CIFilter.attributedTextImageGenerator()
