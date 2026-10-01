@@ -34,6 +34,8 @@ final class LiveRecordingSession: RecordingSession {
     /// Set by the coordinator before each start; kept for a restart.
     var target = Target.display
     let countdown = Countdown()
+    /// Overrides the countdown setting for the next start only (automation can skip it).
+    var countdownOverride: Bool?
     let drawing = DrawingOverlay()
     /// Called once the recording runs, to record the bubble's starting place.
     var bubbleStart: () -> Void = {}
@@ -79,7 +81,8 @@ final class LiveRecordingSession: RecordingSession {
         if config.camera { camera.start(deviceID: settings.cameraID) }
         let cameraSession = camera.session
         let cameraQueue = camera.queue
-        let countdown = settings.countdown ? countdown : nil
+        let countdown = countdownOverride ?? settings.countdown ? countdown : nil
+        countdownOverride = nil
         let handle = try await engine.start(
             config: config, in: folder,
             sources: { [config] router in

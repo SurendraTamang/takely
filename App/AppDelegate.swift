@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private lazy var coordinator = RecordingCoordinator(controller: controller, settings: settings, session: session, camera: camera)
     private lazy var model = RecorderModel(controller: controller, settings: settings, coordinator: coordinator)
     private var statusItem: StatusItemController?
+    private var automation: Automation?
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var reviewWindow: NSWindow?
@@ -68,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor)
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
+        automation = Automation(host: coordinator)
         coordinator.onRecap = { [notifier] recap in notifier.recap = recap }
         notifier.onReview = { [weak self] bundle in self?.showReview(bundle) }
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -79,6 +81,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             await offerRecovery()
             if !settings.hasOnboarded { showOnboarding() }  // after recovery, so its alerts don't stack on the welcome
         }
+    }
+
+    /// `takely://…` (the URL scheme for automation). URLs that arrive while launching wait for the app to be ready.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Task {
+            while automation == nil { try? await Task.sleep(for: .milliseconds(50)) }
+            urls.forEach { automation?.open($0) }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        automation?.stop()
     }
 
     // MARK: Quit
