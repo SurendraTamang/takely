@@ -446,6 +446,39 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(camera.size == 0.2 && camera.shape == .square)
     }
 
+    @Test func theMicListenerHearsWhatTheMicTrackGetsWhileRecording() async throws {
+        for cancelsEcho in [false, true] {
+            let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100), cancelsEcho: cancelsEcho) {
+                CGPoint(x: 50, y: 50)
+            }
+            let heard = Mutex<[MicAudio]>([])
+            router.setMicListener { audio in heard.withLock { $0.append(audio) } }
+            let mic = Synthetic.audio(pts: Synthetic.seconds(49), samples: [Float](repeating: 0.1, count: 1024), channels: 1)
+            router.receive(mic, kind: .mic)  // before recording: not heard
+            let tracks: [TrackKind] = cancelsEcho ? [.screen, .system, .mic, .micRaw] : [.screen, .mic]
+            let writer = try SegmentWriter(
+                url: Synthetic.temporaryFolder().appending(path: "s.mov"),
+                config: WriterConfig(
+                    tracks: tracks, screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30, videoBitrate: 500_000))
+            router.attach(writer, offset: 0)
+            router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
+            for i in 0..<20 {
+                let pts = Synthetic.seconds(50 + Double(i * 1024) / 48_000)
+                router.receive(Synthetic.audio(pts: pts, samples: [Float](repeating: 0.1, count: 2048), channels: 2), kind: .mic)
+            }
+            router.attach(nil, offset: 0)
+            router.receive(
+                Synthetic.audio(pts: Synthetic.seconds(60), samples: [Float](repeating: 0.1, count: 1024), channels: 1), kind: .mic)
+            let audio = heard.withLock { $0 }
+            let count = audio.reduce(0) { $0 + $1.samples.count }
+            #expect(audio.first.map { abs($0.hostTime - 50) < 0.02 } == true, "starts at the recording, cancelsEcho \(cancelsEcho)")
+            // Everything recorded is heard (the echo path flushes its last samples at the segment's end).
+            #expect(abs(count - 20 * 1024) <= 1024, "heard \(count) samples, cancelsEcho \(cancelsEcho)")
+            #expect(audio.allSatisfy { $0.hostTime < 59 }, "nothing after the segment ended")
+            _ = try await writer.finish(at: Synthetic.seconds(51))
+        }
+    }
+
     @Test func detachedRouterDropsFrames() {
         let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100)) { CGPoint(x: 50, y: 50) }
         router.receive(Synthetic.video(width: 8, height: 8, pts: .zero, rgb: (0, 0, 0)), kind: .screen)
