@@ -30,26 +30,27 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
     }
 
-    func recordingReady(_ url: URL, duration: Double) async {
+    func recordingReady(_ url: URL, duration: Double, title: String?) async {
         announce("Recording ready")
         switch await center.notificationSettings().authorizationStatus {
         case .authorized, .provisional:
-            await post(url, duration: duration)
+            await post(url, duration: duration, title: title)
         case .notDetermined:
             // First recording ever: ask now rather than silently falling back to Finder, but don't await the
             // answer — the controller stays busy (and a quit waits) until this returns.
             Task {
-                if await requestAuthorization() { await post(url, duration: duration) } else { reveal(url) }
+                if await requestAuthorization() { await post(url, duration: duration, title: title) } else { reveal(url) }
             }
         default:
             reveal(url)
         }
     }
 
-    private func post(_ url: URL, duration: Double) async {
+    private func post(_ url: URL, duration: Double, title: String?) async {
         let content = UNMutableNotificationContent()
         content.title = "Recording ready"
-        content.body = "\(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))) · \(url.lastPathComponent)"
+        let length = Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))
+        content.body = title.map { "\($0) · \(length)" } ?? "\(length) · \(url.lastPathComponent)"
         content.categoryIdentifier = Self.category
         content.sound = .default
         content.userInfo = ["path": url.path]

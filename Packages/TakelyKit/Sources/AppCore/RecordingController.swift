@@ -26,6 +26,7 @@ public final class RecordingController {
 
     private let session: any RecordingSession
     private let exporter: any Exporting
+    private let postProcessor: (any PostProcessor)?
     private let feedback: any RecordingFeedback
     private let disk: any DiskSpace
     private let saveFolder: @MainActor () -> URL
@@ -48,6 +49,7 @@ public final class RecordingController {
     public init(
         session: any RecordingSession,
         exporter: any Exporting,
+        postProcessor: (any PostProcessor)? = nil,
         feedback: any RecordingFeedback,
         disk: any DiskSpace = SystemDiskSpace(),
         saveFolder: @escaping @MainActor () -> URL,
@@ -57,6 +59,7 @@ public final class RecordingController {
     ) {
         self.session = session
         self.exporter = exporter
+        self.postProcessor = postProcessor
         self.feedback = feedback
         self.disk = disk
         self.saveFolder = saveFolder
@@ -318,17 +321,28 @@ public final class RecordingController {
     private func exportAndReport(_ bundle: ProjectBundle, failure: String? = nil, diskFull: Bool = false) async {
         phase = .exporting(0)
         wakeWaiters()
-        do {
-            let url = try await exporter.export(bundle) { progress in
-                Task { @MainActor [weak self] in
-                    if case .exporting = self?.phase { self?.phase = .exporting(progress) }
-                }
+        // Post-processing (transcript, AI title) takes the first fifth of the progress bar, when there is one.
+        let share = postProcessor == nil ? 0.0 : 0.2
+        let setProgress: @Sendable (Double) -> Void = { progress in
+            Task { @MainActor [weak self] in
+                if case .exporting = self?.phase { self?.phase = .exporting(progress) }
             }
+        }
+        if let postProcessor {
+            do {
+                try await postProcessor.process(bundle) { setProgress($0 * share) }
+            } catch {
+                log.error("post-processing failed: \(error.localizedDescription)")
+            }
+        }
+        do {
+            let url = try await exporter.export(bundle) { setProgress(share + $0 * (1 - share)) }
             lastRecording = url
             if let failure {
                 await report(failure)
             } else {
-                await feedback.recordingReady(url, duration: (try? bundle.readProject().duration) ?? 0)
+                let project = try? bundle.readProject()
+                await feedback.recordingReady(url, duration: project?.duration ?? 0, title: project?.title)
             }
         } catch {
             log.error("export failed: \(error.localizedDescription)")

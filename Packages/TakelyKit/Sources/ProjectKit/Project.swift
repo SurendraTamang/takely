@@ -137,6 +137,9 @@ public struct Project: Codable, Sendable, Equatable {
     public var camera: Camera
     public var effects: Effects
     public var audio: Audio
+    /// Written by the AI summary (Pro) after a recording; absent in older manifests.
+    public var title: String?
+    public var summary: String?
 
     public init(
         status: Status = .recording, createdAt: Date = .now, capture: Capture, segments: [Segment] = [], camera: Camera,

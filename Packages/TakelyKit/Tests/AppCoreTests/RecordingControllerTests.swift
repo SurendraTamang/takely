@@ -104,12 +104,27 @@ final class FakeFeedback: RecordingFeedback {
     var failures: [String] = []
     /// Makes posting the Ready notification take a while, like the real one checking notification settings.
     var readyDelay: Duration = .zero
-    func recordingReady(_ url: URL, duration: Double) async {
+    var titles: [String?] = []
+    func recordingReady(_ url: URL, duration: Double, title: String?) async {
         try? await Task.sleep(for: readyDelay)
         ready.append((url, duration))
+        titles.append(title)
     }
     func recordingFailed(_ message: String) async { failures.append(message) }
     func announce(_ message: String) { announcements.append(message) }
+}
+
+/// Writes a title into the manifest, like the Pro summarizer.
+struct FakePostProcessor: PostProcessor {
+    let title: String?
+    var fails = false
+    func process(_ bundle: ProjectBundle, progress: @escaping @Sendable (Double) -> Void) async throws {
+        if fails { throw Broke() }
+        var project = try bundle.readProject()
+        project.title = title
+        try bundle.write(project)
+        progress(1)
+    }
 }
 
 final class FakeDisk: DiskSpace {
@@ -136,10 +151,10 @@ struct Harness {
     let folder = Synthetic.temporaryFolder()
     let controller: RecordingController
 
-    init() {
+    init(postProcessor: (any PostProcessor)? = nil) {
         let folder = folder
         controller = RecordingController(
-            session: session, exporter: exporter, feedback: feedback, disk: disk,
+            session: session, exporter: exporter, postProcessor: postProcessor, feedback: feedback, disk: disk,
             saveFolder: { folder }, trash: { try FileManager.default.removeItem(at: $0) }, now: time.now,
             sleep: { _ in try await Task.sleep(for: .seconds(3600)) })  // loops stay idle; tests call checkStorage directly
     }
@@ -217,6 +232,22 @@ struct Harness {
         await h.controller.togglePause()
         await h.controller.retake()
         #expect(!h.session.calls.contains("retake"))
+    }
+
+    @Test func postProcessingRunsBeforeTheExportAndItsTitleReachesReady() async {
+        let h = Harness(postProcessor: FakePostProcessor(title: "Fixing the login bug"))
+        await h.controller.start()
+        await h.controller.stop()
+        #expect(h.feedback.titles == ["Fixing the login bug"])
+        #expect(h.exporter.count.withLock { $0 } == 1)
+    }
+
+    @Test func aFailingPostProcessorDoesntBlockTheExport() async {
+        let h = Harness(postProcessor: FakePostProcessor(title: nil, fails: true))
+        await h.controller.start()
+        await h.controller.stop()
+        #expect(h.feedback.ready.count == 1)
+        #expect(h.feedback.failures.isEmpty)
     }
 
     @Test func discardWhileIdleDoesNothing() async {

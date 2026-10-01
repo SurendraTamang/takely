@@ -101,18 +101,23 @@ public struct Exporter: Sendable {
             try? FileManager.default.removeItem(at: partial)  // don't leave hidden partial files behind
             throw error
         }
-        let markers = (try? bundle.readMarkers()) ?? []
-        if !markers.isEmpty {
-            let chaptered = bundle.exportsURL.appending(path: ".\(bundle.name).chapters.mp4")
-            try? FileManager.default.removeItem(at: chaptered)
+        let transcript = try? bundle.readTranscript()
+        let cues = transcript?.cues() ?? []
+        let extras = MovieExtras(
+            markers: (try? bundle.readMarkers()) ?? [], captions: cues, captionsLocale: transcript?.locale,
+            title: project.title, summary: project.summary)
+        if !extras.isEmpty {
+            let finished = bundle.exportsURL.appending(path: ".\(bundle.name).finished.mp4")
+            try? FileManager.default.removeItem(at: finished)
             do {
-                try await ChapterWriter.write(partial, to: chaptered, markers: markers)
-                _ = try FileManager.default.replaceItemAt(partial, withItemAt: chaptered)  // the export survives a failed swap
+                try await MovieFinisher.write(partial, to: finished, extras: extras)
+                _ = try FileManager.default.replaceItemAt(partial, withItemAt: finished)  // the export survives a failed swap
             } catch {
-                // Chapters are a nicety: keep the export without them rather than failing it.
-                try? FileManager.default.removeItem(at: chaptered)
+                // Chapters, captions and metadata are niceties: keep the export without them rather than failing it.
+                try? FileManager.default.removeItem(at: finished)
             }
         }
+        if !cues.isEmpty { try? WebVTT.render(cues).write(to: bundle.captionsURL, atomically: true, encoding: .utf8) }
         // Swaps atomically: a failed replace keeps the previous export.
         _ = try FileManager.default.replaceItemAt(output, withItemAt: partial)
         progress(1)
