@@ -3,7 +3,8 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import ProjectKit
 
-/// Composes one output frame: screen → cursor halo → click pulses → camera bubble.
+/// Composes one output frame: screen (blurs → cursor halo → click pulses, then zoomed) → camera bubble → captions.
+/// Times are on the recording timeline (the compositor maps cut exports back to it).
 ///
 /// Immutable after init, so safe to share across concurrent compositor requests.
 public final class FrameRenderer: Sendable {
@@ -16,9 +17,16 @@ public final class FrameRenderer: Sendable {
     private let captions: [(cue: CaptionCue, image: CIImage)]
     /// Areas blurred out (secrets on screen, areas the user chose); only enabled ones are kept.
     private let redactions: [Redaction]
+    private let zooms: [Zoom]
+    /// The cursor, smoothed, sampled every `1 / pathRate` s (for zooms that follow it). Precomputed: frames are
+    /// rendered concurrently and out of order, so each must depend only on its time.
+    private let cursorPath: [NormalizedPoint]
+    static let pathRate = 30.0
+    /// The smoothed cursor catches up with the real one over about this long.
+    static let followLag = 0.35
 
     public init(
-        project: Project, cursor: CursorTrack, captions: [CaptionCue] = [], redactions: [Redaction] = [],
+        project: Project, cursor: CursorTrack, captions: [CaptionCue] = [], redactions: [Redaction] = [], zooms: [Zoom] = [],
         context: CIContext = CIContext(options: [.cacheIntermediates: false])
     ) {
         self.project = project
@@ -28,6 +36,26 @@ public final class FrameRenderer: Sendable {
         self.canvas = canvas
         self.captions = project.effects.burnInCaptions == true ? captions.map { ($0, Self.captionImage($0.text, canvas: canvas)) } : []
         self.redactions = redactions.filter(\.enabled)
+        self.zooms = zooms.filter { $0.end > $0.start && $0.scale > 1 }
+        cursorPath = self.zooms.contains { $0.focus == .cursor } ? Self.smoothedPath(cursor, duration: project.duration) : []
+    }
+
+    /// Whether any zoom will be drawn (the export then needs the compositor).
+    public var hasZooms: Bool { !zooms.isEmpty }
+
+    /// Exponential smoothing of the cursor (a critically damped follow): the zoom glides instead of jittering.
+    static func smoothedPath(_ cursor: CursorTrack, duration: Double) -> [NormalizedPoint] {
+        let step = 1 / pathRate
+        let pull = 1 - exp(-step / followLag)
+        var path: [NormalizedPoint] = []
+        var current: NormalizedPoint?
+        for i in 0...Int(duration * pathRate) {
+            let target = cursor.position(at: Double(i) * step) ?? current ?? NormalizedPoint(x: 0.5, y: 0.5)
+            let p = current.map { NormalizedPoint(x: $0.x + (target.x - $0.x) * pull, y: $0.y + (target.y - $0.y) * pull) } ?? target
+            path.append(p)
+            current = p
+        }
+        return path
     }
 
     /// Whether anything will be blurred (the export then needs the compositor).
@@ -78,6 +106,7 @@ public final class FrameRenderer: Sendable {
                 .composited(over: image)
             }
         }
+        image = zoom(image.cropped(to: canvas), at: t)
         if project.camera.enabled, let camera, let center = project.camera.bubbleCenter(at: t) {
             image = bubble(camera, center: point(center)).composited(over: image)
         }
@@ -85,6 +114,28 @@ public final class FrameRenderer: Sendable {
             image = caption.image.composited(over: image)
         }
         return image.cropped(to: canvas)
+    }
+
+    /// Scales the screen around the zoom's focus, keeping the view inside the screen.
+    private func zoom(_ image: CIImage, at t: Double) -> CIImage {
+        guard let zoom = zooms.first(where: { $0.start < t && t < $0.end }) else { return image }
+        let s = zoom.scale(at: t)
+        guard s > 1.0001 else { return image }
+        let focus: NormalizedPoint
+        switch zoom.focus {
+        case .cursor:
+            focus =
+                cursorPath.isEmpty
+                ? NormalizedPoint(x: 0.5, y: 0.5) : cursorPath[min(cursorPath.count - 1, max(0, Int((t * Self.pathRate).rounded())))]
+        case .point(let p):
+            focus = p
+        }
+        let c = point(focus)
+        let view = CGSize(width: canvas.width / s, height: canvas.height / s)
+        let x = min(max(c.x - view.width / 2, 0), canvas.width - view.width)
+        let y = min(max(c.y - view.height / 2, 0), canvas.height - view.height)
+        return image.transformed(by: CGAffineTransform(translationX: -x, y: -y).concatenating(CGAffineTransform(scaleX: s, y: s)))
+            .cropped(to: canvas)
     }
 
     /// Pixellates, then blurs, each active redaction's box (padded a little): unrecoverable, unlike a light blur.

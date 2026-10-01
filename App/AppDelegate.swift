@@ -30,7 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 await MainActor.run {
                     ProProcessor.Options(
                         transcribe: settings.transcribe, locale: .current, summarize: settings.aiSummary,
-                        burnInCaptions: settings.burnInCaptions, redact: settings.redactSecrets)
+                        burnInCaptions: settings.burnInCaptions, redact: settings.redactSecrets,
+                        autoZoom: settings.autoZoom, removeSilences: settings.removeSilences)
                 }
             }
         #else
@@ -44,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var reviewWindow: NSWindow?
+    private var editorWindow: NSWindow?
+    #if canImport(TakelyPro)
+        private var editor: EditorModel?
+    #endif
     /// When macOS last announced a power-off, as a backup to the quit event's reason.
     /// Trusted only briefly: another app can cancel the restart, and later quits are the user's.
     private var powerOffNoticedAt: ContinuousClock.Instant?
@@ -52,8 +57,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let log = Logger(subsystem: "app.takely", category: "app")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if canImport(TakelyPro)
+            let openEditor: ((ProjectBundle) -> Void)? = { [weak self] bundle in self?.showEditor(bundle) }
+        #else
+            let openEditor: ((ProjectBundle) -> Void)? = nil
+        #endif
+        notifier.onEdit = openEditor
         notifier.activate()
-        let statusItem = StatusItemController(model: model) { [weak self] in self?.showSettings() }
+        let statusItem = StatusItemController(
+            model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor)
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         coordinator.onRecap = { [notifier] recap in notifier.recap = recap }
@@ -222,6 +234,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         present(window)
     }
 
+    #if canImport(TakelyPro)
+        /// The editor on a recording (one at a time).
+        func showEditor(_ bundle: ProjectBundle) {
+            statusItem?.closePanel()
+            if editor?.session.bundle.url == bundle.url, let editorWindow { return present(editorWindow) }
+            editorWindow?.close()
+            do {
+                let model = try EditorModel(session: EditSession(bundle: bundle))
+                let window = makeWindow(
+                    title: "Edit — \(bundle.name)",
+                    content: EditorView(model: model) { [weak self] in
+                        guard let self else { return nil }
+                        guard controller.phase == .idle, !controller.isBusy else { return "Finish the current recording or export first." }
+                        do {
+                            try model.session.save()
+                        } catch {
+                            return "Couldn't save the edits: \(error.localizedDescription)"
+                        }
+                        editorWindow?.close()
+                        statusItem?.showPanel()  // shows the export's progress
+                        Task { await self.controller.export(bundle) }
+                        return nil
+                    })
+                window.styleMask.insert([.resizable, .miniaturizable])
+                window.setContentSize(NSSize(width: 1000, height: 680))
+                window.center()
+                editor = model
+                editorWindow = window
+                present(window)
+            } catch {
+                _ = ask("Couldn't open this recording", error.localizedDescription, buttons: ["OK"])
+            }
+        }
+    #endif
+
     private func makeWindow(title: String, content: some View) -> NSWindow {
         let window = NSWindow(contentViewController: NSHostingController(rootView: content))
         window.title = title
@@ -248,6 +295,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             settingsWindow = nil
         } else if window === reviewWindow {
             reviewWindow = nil
+        } else if window === editorWindow {
+            #if canImport(TakelyPro)
+                // Edits are kept (they're non-destructive): the next export of this recording uses them.
+                if let session = editor?.session, session.changed {
+                    do {
+                        try session.save()
+                    } catch {
+                        log.error("saving edits failed: \(error.localizedDescription)")
+                    }
+                }
+                editor?.close()
+                editor = nil
+            #endif
+            editorWindow = nil
         }
     }
 }

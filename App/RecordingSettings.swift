@@ -49,6 +49,10 @@ final class RecordingSettings {
     var liveCoach: Bool { didSet { defaults.set(liveCoach, forKey: Key.liveCoach) } }
     /// Takely Pro: keys, emails and card numbers seen on screen are blurred in the export.
     var redactSecrets: Bool { didSet { defaults.set(redactSecrets, forKey: Key.redactSecrets) } }
+    /// Takely Pro: zoom in on bursts of clicks; cut long pauses where nothing happens on screen (both off: exports
+    /// shouldn't change unexpectedly).
+    var autoZoom: Bool { didSet { defaults.set(autoZoom, forKey: Key.autoZoom) } }
+    var removeSilences: Bool { didSet { defaults.set(removeSilences, forKey: Key.removeSilences) } }
     var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
@@ -89,6 +93,8 @@ final class RecordingSettings {
         prompterFollowsVoice = defaults.object(forKey: Key.prompterFollowsVoice) as? Bool ?? true
         liveCoach = defaults.object(forKey: Key.liveCoach) as? Bool ?? true
         burnInCaptions = defaults.bool(forKey: Key.burnInCaptions)
+        autoZoom = defaults.bool(forKey: Key.autoZoom)
+        removeSilences = defaults.bool(forKey: Key.removeSilences)
         redactSecrets = defaults.object(forKey: Key.redactSecrets) as? Bool ?? true
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
@@ -121,6 +127,8 @@ final class RecordingSettings {
         static let liveCoach = "liveCoach"
         static let burnInCaptions = "burnInCaptions"
         static let redactSecrets = "redactSecrets"
+        static let autoZoom = "autoZoom"
+        static let removeSilences = "removeSilences"
         static let prompterScript = "prompterScript"
         static let prompterWordsPerMinute = "prompterWordsPerMinute"
         static let prompterFontSize = "prompterFontSize"

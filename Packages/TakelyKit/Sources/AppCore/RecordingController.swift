@@ -342,7 +342,9 @@ public final class RecordingController {
                 await report(failure)
             } else {
                 let project = try? bundle.readProject()
-                await feedback.recordingReady(url, duration: project?.duration ?? 0, title: project?.title)
+                let cuts = (try? bundle.readEdits())?.cuts ?? []
+                let duration = project.map { EditMap(cuts: cuts, duration: $0.duration).outputDuration } ?? 0
+                await feedback.recordingReady(url, duration: duration, title: project?.title)
             }
         } catch {
             log.error("export failed: \(error.localizedDescription)")

@@ -242,6 +242,57 @@ import Testing
         #expect(vtt.hasPrefix("WEBVTT") && vtt.contains("00:00:00.200 --> 00:00:01.100\nHello there"))
     }
 
+    @Test func cutsAreLeftOutAndChaptersAndCaptionsFollow() async throws {
+        let bundle = try await makeBundle(
+            segments: [SegSpec(seconds: 2, tracks: [.screen, .mic]), SegSpec(seconds: 2, tracks: [.screen, .mic])], cameraEnabled: false)
+        try bundle.write(Edits(cuts: [TimeRange(start: 0.5, end: 1.5), TimeRange(start: 2.5, end: 3)]))
+        try bundle.write([Marker(t: 1), Marker(t: 3.2)])  // the first starts inside a cut: it moves to the join
+        try bundle.write(
+            Transcript(
+                locale: "en_US",
+                phrases: [.init(start: 0.2, end: 0.8, text: "Kept part", words: []), .init(start: 1, end: 1.4, text: "Cut", words: [])]))
+        let asset = AVURLAsset(url: try await Exporter().export(bundle))
+        let duration = try await asset.load(.duration).seconds
+        #expect(abs(duration - 2.5) < 0.1, "duration \(duration)")
+        let chapters = try await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: ["en"])
+        #expect(chapters.map { ($0.timeRange.start.seconds * 10).rounded() / 10 } == [0, 0.5, 1.7])
+        let vtt = try String(contentsOf: bundle.captionsURL, encoding: .utf8)
+        #expect(vtt.contains("00:00:00.200 --> 00:00:00.500\nKept part") && !vtt.contains("Cut"))
+    }
+
+    @Test func joinsFadeTheAudioOutAndBackIn() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 2, tracks: [.screen, .mic])], cameraEnabled: false)
+        let built = try await Exporter.compose(bundle, edits: Edits(cuts: [TimeRange(start: 0.5, end: 1)]))
+        let parameters = try #require(built.audioMix?.inputParameters.first)
+        var start: Float = -1
+        var end: Float = -1
+        var range = CMTimeRange.zero
+        #expect(
+            parameters.getVolumeRamp(
+                for: CMTime(seconds: 0.49, preferredTimescale: 600), startVolume: &start, endVolume: &end, timeRange: &range))
+        #expect(start == 1 && end == 0 && abs(range.end.seconds - 0.5) < 0.001)
+        #expect(built.map.outputDuration == 1.5 || abs(built.map.outputDuration - 1.5) < 0.05)
+    }
+
+    @Test func oddCutsLeaveNoGapsInAnyTrack() async throws {
+        let bundle = try await makeBundle(
+            segments: [SegSpec(seconds: 2, tracks: [.screen, .mic]), SegSpec(seconds: 2, tracks: [.screen, .mic])], cameraEnabled: false)
+        let cuts = [0.1234, 0.7771, 1.3333, 2.0101, 2.9999].map { TimeRange(start: $0, end: $0 + 0.1717) }
+        let built = try await Exporter.compose(bundle, edits: Edits(cuts: cuts))
+        // Video must be continuous (a gap would show a cached frame); audio may end a little before its segment.
+        for track in built.composition.tracks where track.mediaType == .video {
+            let segments = track.segments ?? []
+            #expect(!segments.contains { $0.isEmpty }, "\(track.mediaType) has an empty stretch")
+            for (a, b) in zip(segments, segments.dropFirst()) { #expect(a.timeMapping.target.end == b.timeMapping.target.start) }
+        }
+    }
+
+    @Test func chaptersMoveToTheJoinOrGoWhenCutEntirely() {
+        let map = EditMap(cuts: [TimeRange(start: 2, end: 4), TimeRange(start: 6, end: 8)], duration: 10)
+        let markers = Exporter.outputMarkers([Marker(t: 1), Marker(t: 3, title: "B"), Marker(t: 6), Marker(t: 8, title: "D")], map: map)
+        #expect(markers == [Marker(t: 1), Marker(t: 2, title: "B"), Marker(t: 4, title: "D")])
+    }
+
     @Test func titleAndSummaryGoIntoTheMovieAndMarkersKeepTheirNames() async throws {
         let bundle = try await makeBundle(segments: [SegSpec(seconds: 3, tracks: [.screen])], cameraEnabled: false)
         var project = try bundle.readProject()

@@ -114,6 +114,27 @@ import Testing
         #expect(later[0] < 5 || later[0] > 250, "inactive after its time: \(later)")
     }
 
+    @Test func zoomScalesTheScreenAroundItsFocusInsideTheFrame() {
+        // Left half red, right half blue; zoomed 2× on a point near the right edge, the view clamps to the blue half.
+        let blue = CIImage(color: CIColor(red: 0, green: 0, blue: 1)).cropped(to: CGRect(x: 200, y: 0, width: 200, height: 250))
+        let screen = blue.composited(over: red)
+        let zoom = Zoom(start: 1, end: 5, scale: 2, focus: .point(NormalizedPoint(x: 0.9, y: 0.5)))
+        let renderer = FrameRenderer(project: project(camera: false), cursor: CursorTrack(), zooms: [zoom], context: context)
+        #expect(renderer.hasZooms)
+        #expect(pixel(renderer.compose(screen: screen, camera: nil, at: 0.5), 10, 125) == [255, 0, 0, 255])
+        #expect(pixel(renderer.compose(screen: screen, camera: nil, at: 3), 10, 125) == [0, 0, 255, 255])
+    }
+
+    @Test func zoomFollowsASmoothedCursor() {
+        let cursor = CursorTrack(samples: [
+            CursorSample(t: 0, x: 0.1, y: 0.1), CursorSample(t: 1, x: 0.1, y: 0.1), CursorSample(t: 1.01, x: 0.9, y: 0.9),
+        ])
+        let path = FrameRenderer.smoothedPath(cursor, duration: 3)
+        #expect(path[30].x < 0.11)  // before the jump
+        #expect(path[33].x > 0.15 && path[33].x < 0.6)  // gliding, not jumping
+        #expect(path[90].x > 0.88)  // caught up
+    }
+
     @Test func clickPulseFadesOut() {
         let cursor = CursorTrack(clicks: [ClickEvent(t: 1, x: 0.5, y: 0.5)])
         let renderer = FrameRenderer(project: project(camera: false, ripples: true), cursor: cursor, context: context)
