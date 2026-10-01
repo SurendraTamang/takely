@@ -7,7 +7,9 @@ import SwiftUI
 @MainActor @Observable
 final class BlurReviewModel {
     let bundle: ProjectBundle
-    var redactions: [Redaction]
+    var redactions: [Redaction] = []
+    /// Why `redactions.json` couldn't be read: saving is then off, so it isn't replaced with an empty list.
+    let loadError: String?
     let duration: Double
     var thumbnails: [UUID: CGImage] = [:]
     /// Adding an area: the frame shown and its time.
@@ -17,7 +19,12 @@ final class BlurReviewModel {
 
     init(bundle: ProjectBundle) {
         self.bundle = bundle
-        redactions = (try? bundle.readRedactions()) ?? []
+        do {
+            redactions = try bundle.readRedactions()
+            loadError = nil
+        } catch {
+            loadError = "Couldn't read this recording's blurred areas: \(error.localizedDescription)"
+        }
         let project = try? bundle.readProject()
         duration = project?.duration ?? 0
         segments = project?.segments ?? []
@@ -43,7 +50,12 @@ final class BlurReviewModel {
         if let addFrame { thumbnails[redactions[redactions.count - 1].id] = addFrame }
     }
 
-    func save() throws { try bundle.write(redactions) }
+    /// Writes the list, unless there's nothing to write and no file yet: the scan (which runs only when there's no
+    /// file) then gets another chance on the next export.
+    func save() throws {
+        guard !redactions.isEmpty || FileManager.default.fileExists(atPath: bundle.redactionsURL.path) else { return }
+        try bundle.write(redactions)
+    }
 
     /// The screen at edited time `t` (segments play back to back).
     private func frame(at t: Double, size: CGSize) async -> CGImage? {
@@ -80,7 +92,7 @@ struct BlurReviewView: View {
                     .frame(minHeight: 240)
             }
             if adding { addArea }
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            if let error = error ?? model.loadError { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {
                 Button(adding ? "Cancel" : "Add Blur Area…") {
                     adding.toggle()
@@ -97,7 +109,7 @@ struct BlurReviewView: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(adding)
+                .disabled(adding || model.loadError != nil)
             }
         }
         .padding()

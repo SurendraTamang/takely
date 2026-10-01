@@ -72,6 +72,14 @@ final class PrompterModel {
     }
 
     #if canImport(TakelyPro)
+        var isWriting: Bool { writing != nil }
+        func stopWriting() { writing?.cancel() }
+    #else
+        var isWriting: Bool { false }
+        func stopWriting() {}
+    #endif
+
+    #if canImport(TakelyPro)
         /// Writing a script from notes: the notes (kept, to write again from them) and the script made from them.
         private var notes: String?
         private var written: String?
@@ -93,16 +101,19 @@ final class PrompterModel {
             notes = source
             writeNote = nil
             writing?.cancel()
+            let before = settings.prompterScript
             writing = Task {
                 do {
                     for try await script in ScriptWriter.write(notes: source, tone: tone, minutes: minutes) {
                         settings.prompterScript = script
-                        written = script
                     }
+                    try Task.checkCancellation()  // a cancelled stream may just end
+                    written = settings.prompterScript
                 } catch is CancellationError {
+                    settings.prompterScript = before
                 } catch {
                     writeNote = "Couldn't write the script: \(error.localizedDescription)"
-                    if written == nil || settings.prompterScript == written { settings.prompterScript = source }
+                    settings.prompterScript = before
                 }
                 writing = nil
             }
@@ -136,6 +147,7 @@ private struct PrompterView: View {
                     .scaleEffect(x: settings.prompterMirrored ? -1 : 1, y: 1)
             } else if model.editing {
                 TextEditor(text: $settings.prompterScript)
+                    .disabled(model.isWriting)  // the streamed script would overwrite typing
                     .font(.system(size: 15))
                     .scrollContentBackground(.hidden)
                     .padding(8)
@@ -208,6 +220,7 @@ private struct PrompterView: View {
             .help(model.scrolling ? "Pause scrolling (Space)" : "Scroll (Space)")
             .disabled(model.editing)
             Button(model.editing ? "Done" : "Edit") {
+                model.stopWriting()
                 model.editing.toggle()
                 model.scrolling = false
             }
