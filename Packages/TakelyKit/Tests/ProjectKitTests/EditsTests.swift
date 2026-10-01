@@ -25,6 +25,9 @@ import Testing
         #expect(map.output(TimeRange(start: 3, end: 7)) == TimeRange(start: 2, end: 4))
         #expect(map.output(TimeRange(start: 4.5, end: 5.5)) == nil)
         #expect(!EditMap(cuts: [], duration: 10).hasCuts)
+        // A few ms left between two cuts is dropped; joins land on whole ticks.
+        let sliver = EditMap(cuts: [TimeRange(start: 1, end: 2), TimeRange(start: 2.01, end: 3.00049)], duration: 5)
+        #expect(sliver.kept == [TimeRange(start: 0, end: 1), TimeRange(start: 3, end: 5)])
     }
 
     @Test func zoomEasesInAndOut() {

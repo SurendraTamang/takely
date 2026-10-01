@@ -19,34 +19,76 @@
         /// Where the preview is, in recording time.
         var playhead = 0.0
         var error: String?
+        /// The transcript word being spoken at the playhead, and which words are cut: kept here, so the transcript
+        /// redraws when they change rather than on every playback tick.
+        private(set) var currentWord: Int?
+        private(set) var cutWords: Set<Int> = []
         private let frames: RecordingFrames
         private var shownEdits: Edits?
+        /// The map of the item in the player (until a rebuilt preview replaces it, the edits may already differ).
+        private var shownMap: EditMap
         private var refresh: Task<Void, Never>?
         @ObservationIgnored private var observer: Any?
 
         init(session: EditSession) throws {
             self.session = session
             frames = RecordingFrames(bundle: session.bundle, segments: try session.bundle.readProject().segments)
+            shownMap = session.map
+            updateCutWords()
             observer = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] time in
                 MainActor.assumeIsolated {
                     guard let self, self.player.rate != 0 else { return }
-                    self.playhead = self.session.map.sourceTime(time.seconds)
+                    self.setPlayhead(self.shownMap.sourceTime(time.seconds))
                 }
             }
         }
 
+        /// Stops playback and the time observer (the window closed).
+        func close() {
+            player.pause()
+            if let observer { player.removeTimeObserver(observer) }
+            observer = nil
+            refresh?.cancel()
+        }
+
+        private func setPlayhead(_ t: Double) {
+            playhead = t
+            let words = session.words
+            // The last word starting at or before t (binary search), if t is inside it.
+            var lo = 0
+            var hi = words.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if words[mid].start <= t { lo = mid + 1 } else { hi = mid }
+            }
+            let word = lo > 0 && t < words[lo - 1].end ? lo - 1 : nil
+            if word != currentWord { currentWord = word }
+        }
+
+        func updateCutWords() {
+            let cut = Set(session.words.indices.filter { session.isCut(word: $0) })
+            if cut != cutWords { cutWords = cut }
+        }
+
         func loadThumbnails(count: Int = 14) async {
-            guard thumbnails.isEmpty else { return }
-            thumbnails = Array(repeating: nil, count: count)
+            guard thumbnails.allSatisfy({ $0 == nil }) else { return }
+            var images = [CGImage?](repeating: nil, count: count)
             for i in 0..<count {
-                thumbnails[i] = await frames.frame(
+                guard !Task.isCancelled else { return }
+                images[i] = await frames.frame(
                     at: (Double(i) + 0.5) * session.duration / Double(count), size: CGSize(width: 240, height: 135))
             }
+            thumbnails = images
         }
 
         /// Rebuilds the preview when the edits changed (briefly debounced, so a drag doesn't rebuild every step).
         func updatePreview() {
-            guard shownEdits != session.edits else { return }
+            updateCutWords()
+            guard shownEdits != session.edits else {
+                refresh?.cancel()  // back to what's showing (an undo): any rebuild, and its error, is moot
+                error = nil
+                return
+            }
             refresh?.cancel()
             refresh = Task {
                 try? await Task.sleep(for: .milliseconds(shownEdits == nil ? 0 : 150))
@@ -56,10 +98,12 @@
                     let built = try await Exporter.compose(session.bundle, edits: edits)
                     guard !Task.isCancelled else { return }
                     let wasPlaying = player.rate != 0
+                    let position = shownMap.sourceTime(player.currentTime().seconds)  // read with the old item's map
                     player.replaceCurrentItem(with: built.playerItem())
                     shownEdits = edits
+                    shownMap = built.map
                     error = nil
-                    seek(to: playhead)
+                    seek(to: wasPlaying ? position : playhead)
                     if wasPlaying { player.play() }
                 } catch {
                     self.error = "Can't preview: \(error.localizedDescription)"
@@ -68,8 +112,8 @@
         }
 
         func seek(to t: Double) {
-            playhead = min(max(0, t), session.duration)
-            let output = CMTime(seconds: session.map.position(playhead), preferredTimescale: 600)
+            setPlayhead(min(max(0, t), session.duration))
+            let output = CMTime(seconds: shownMap.position(playhead), preferredTimescale: 600)
             player.seek(to: output, toleranceBefore: .zero, toleranceAfter: .zero)
         }
 
@@ -156,8 +200,15 @@
                 Spacer()
                 Text("\(Self.time(session.map.outputDuration)) of \(Self.time(session.duration))").monospacedDigit()
                     .foregroundStyle(.secondary)
-                Button("Export") { model.error = export() }
-                    .keyboardShortcut(.defaultAction)
+                Button("Restore Cut", systemImage: "arrow.uturn.left.circle") {
+                    if let cut = session.cut(at: model.playhead) { session.restore(cut) }
+                }
+                .disabled(session.cut(at: model.playhead) == nil)
+                .help("Put back the cut at the playhead")
+                Button("Export") {
+                    model.error = session.map.outputDuration > 0 ? export() : "Everything is cut: restore something first."
+                }
+                .keyboardShortcut(.defaultAction)
             }
             .labelStyle(.iconOnly)
             .controlSize(.regular)
@@ -227,8 +278,7 @@
                                 .overlay(Image(systemName: "scissors").foregroundStyle(.white.opacity(0.7)))
                                 .frame(width: max(2, x(cut.duration)), height: 60)
                                 .offset(x: x(cut.start))
-                                .onTapGesture { session.restore(cut) }
-                                .help("Cut \(EditorView.time(cut.duration)) — click to restore")
+                                .allowsHitTesting(false)  // click inside to seek there; Restore Cut puts it back
                         }
                         if let selection = model.selection {
                             Rectangle().fill(.yellow.opacity(0.3)).border(.yellow, width: 1)
@@ -285,16 +335,22 @@
             RoundedRectangle(cornerRadius: 4)
                 .fill(selected ? Color.accentColor : Color.accentColor.opacity(0.5))
                 .overlay(Text("\(shown.scale, format: .number.precision(.fractionLength(1)))×").font(.caption2).foregroundStyle(.white))
-                .overlay(alignment: .leading) { edge { d in shown.with(start: t(x(zoom.start) + d)) } }
-                .overlay(alignment: .trailing) { edge { d in shown.with(end: t(x(zoom.end) + d)) } }
+                .overlay(alignment: .leading) { edge { d in zoom.with(start: t(x(zoom.start) + d)) } }
+                .overlay(alignment: .trailing) { edge { d in zoom.with(end: t(x(zoom.end) + d)) } }
                 .frame(width: max(6, x(shown.end) - x(shown.start)), height: 22)
                 .offset(x: x(shown.start), y: 1)
                 .onTapGesture { model.selectedZoom = selected ? nil : zoom.id }
                 .gesture(
-                    DragGesture(minimumDistance: 3)
+                    DragGesture(minimumDistance: 3, coordinateSpace: .global)
                         .onChanged { value in
-                            let d = t(x(zoom.start) + value.translation.width) - zoom.start
-                            draft = zoom.with(start: zoom.start + d).with(end: zoom.end + d)
+                            // Moved whole, kept inside the recording (t() clamps to 0...duration).
+                            let d = min(
+                                max(t(x(zoom.start) + value.translation.width) - zoom.start, -zoom.start), model.session.duration - zoom.end
+                            )
+                            var moved = zoom
+                            moved.start += d
+                            moved.end += d
+                            draft = moved
                         }
                         .onEnded { _ in commit() })
         }
@@ -303,7 +359,7 @@
         private func edge(_ resize: @escaping (Double) -> Zoom) -> some View {
             Rectangle().fill(.white.opacity(0.6)).frame(width: 6)
                 .gesture(
-                    DragGesture(minimumDistance: 1)
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
                         .onChanged { value in draft = resize(value.translation.width) }
                         .onEnded { _ in commit() })
         }
@@ -394,9 +450,9 @@
         }
 
         private func word(_ i: Int) -> some View {
-            let cut = session.isCut(word: i)
+            let cut = model.cutWords.contains(i)
             let selected = model.selectedWords.contains(i)
-            let current = session.words[i].start <= model.playhead && model.playhead < session.words[i].end
+            let current = model.currentWord == i
             return Text(session.words[i].text)
                 .strikethrough(cut)
                 .foregroundStyle(cut ? .secondary : .primary)
@@ -406,7 +462,8 @@
                 .onTapGesture {
                     let word = session.words[i]
                     if cut {
-                        session.restore(TimeRange(start: word.start, end: word.end))
+                        // The whole cut it's in (a filler's padding too), not just the word.
+                        if let range = session.cut(at: (word.start + word.end) / 2) { session.restore(range) }
                     } else if NSEvent.modifierFlags.contains(.shift), let anchor {
                         model.selectedWords = Set(min(anchor, i)...max(anchor, i))
                     } else {

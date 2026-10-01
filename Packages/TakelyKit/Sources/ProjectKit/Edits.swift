@@ -41,6 +41,15 @@ public struct Zoom: Codable, Sendable, Equatable, Identifiable {
         self.focus = focus
     }
 
+    /// A hand-edited or newer file can't make the scale absurd.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(UUID.self, forKey: .id), start: try c.decode(Double.self, forKey: .start),
+            end: try c.decode(Double.self, forKey: .end),
+            scale: try c.decode(Double.self, forKey: .scale), focus: try c.decode(Focus.self, forKey: .focus))
+    }
+
     /// How far zoomed in at `t`: 1 outside, `scale` in the middle, eased (smoothstep) over `ease` at each end.
     public func scale(at t: Double) -> Double {
         guard t > start, t < end else { return 1 }
@@ -99,16 +108,22 @@ public struct EditMap: Sendable, Equatable {
     public let outputDuration: Double
     public let duration: Double
 
+    /// Cut points are rounded to this (the composition's timescale), so every track joins at the same instant.
+    public static let tick = 1.0 / 600
+    /// A kept sliver shorter than this (a few ms between two cut words) is dropped: it would only click.
+    public static let minimumKept = 0.04
+
     public init(cuts: [TimeRange], duration: Double) {
         self.duration = duration
+        let round = { (t: Double) in (t / Self.tick).rounded() * Self.tick }
         var kept: [TimeRange] = []
         var from = 0.0
         for cut in cuts where cut.end > from && cut.start < duration {
-            if cut.start > from { kept.append(TimeRange(start: from, end: cut.start)) }
+            if cut.start > from { kept.append(TimeRange(start: round(from), end: round(cut.start))) }
             from = max(from, cut.end)
         }
-        if from < duration { kept.append(TimeRange(start: from, end: duration)) }
-        self.kept = kept
+        if from < duration { kept.append(TimeRange(start: round(from), end: duration)) }
+        self.kept = kept.filter { $0.duration >= Self.minimumKept || kept.count == 1 }
         outputDuration = kept.reduce(0) { $0 + $1.duration }
     }
 

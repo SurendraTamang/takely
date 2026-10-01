@@ -298,8 +298,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else if window === editorWindow {
             #if canImport(TakelyPro)
                 // Edits are kept (they're non-destructive): the next export of this recording uses them.
-                if let session = editor?.session { try? session.save() }
-                editor?.player.pause()
+                if let session = editor?.session, session.changed {
+                    do {
+                        try session.save()
+                    } catch {
+                        log.error("saving edits failed: \(error.localizedDescription)")
+                    }
+                }
+                editor?.close()
                 editor = nil
             #endif
             editorWindow = nil

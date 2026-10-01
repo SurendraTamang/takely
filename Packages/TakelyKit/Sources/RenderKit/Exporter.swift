@@ -24,7 +24,7 @@ public struct Exporter: Sendable {
         let project = built.project
         let map = built.map
         // Chapters and captions on the output timeline: dropped inside cuts, clipped across them.
-        let markers = ((try? bundle.readMarkers()) ?? []).compactMap { m in map.outputTime(m.t).map { Marker(t: $0, title: m.title) } }
+        let markers = Self.outputMarkers((try? bundle.readMarkers()) ?? [], map: map)
         let cues = built.cues.compactMap { cue in
             map.output(TimeRange(start: cue.start, end: cue.end)).map { CaptionCue(start: $0.start, end: $0.end, text: cue.text) }
         }
@@ -121,36 +121,47 @@ public struct Exporter: Sendable {
         let composition = AVMutableComposition()
         var tracks: [TrackKind: AVMutableCompositionTrack] = [:]
         var cameraCoverage: [CMTimeRange] = []
+        typealias Source = (kind: TrackKind, track: AVAssetTrack, range: CMTimeRange)
+        // The assets stay referenced until everything is inserted: a track only weakly references its asset.
+        var loaded: [(asset: AVURLAsset, offset: Double, duration: Double, sources: [Source])] = []
         var offset = 0.0
-
         for segment in project.segments {
-            defer { offset += segment.duration }
             let asset = AVURLAsset(url: bundle.segmentURL(segment.file))
             let sources = try await asset.load(.tracks).sorted { $0.trackID < $1.trackID }
             guard sources.count == segment.tracks.count else {
                 throw RenderError.trackMismatch("\(segment.file): \(sources.count) tracks, manifest lists \(segment.tracks.count)")
             }
-            // What's kept of this segment, in its own time.
-            let pieces = map.kept.compactMap { kept -> (start: CMTime, end: CMTime)? in
-                let a = max(kept.start, offset) - offset
-                let b = min(kept.end, offset + segment.duration) - offset
-                return b > a ? (CMTime(seconds: a, preferredTimescale: 600), CMTime(seconds: b, preferredTimescale: 600)) : nil
-            }
+            var kept: [Source] = []
             for (kind, source) in zip(segment.tracks, sources) {
-                let range = try await source.load(.timeRange)
                 // The raw microphone is kept for re-processing only: exporting it would bring the echo back.
                 guard kind != .micRaw, kind != .camera || project.camera.enabled else { continue }
-                for piece in pieces {
-                    let start = CMTimeMaximum(piece.start, range.start)
-                    let end = CMTimeMinimum(piece.end, range.end)
-                    guard end > start else { continue }
-                    let track = try tracks[kind] ?? addTrack(kind, to: composition)
-                    tracks[kind] = track
-                    let at = CMTime(seconds: map.position(offset + start.seconds), preferredTimescale: 600)
-                    try track.insertTimeRange(CMTimeRange(start: start, end: end), of: source, at: at)
-                    if kind == .camera { cameraCoverage.append(CMTimeRange(start: at, duration: end - start)) }
-                }
+                kept.append((kind, source, try await source.load(.timeRange)))
             }
+            loaded.append((asset, offset, segment.duration, kept))
+            offset += segment.duration
+        }
+        // Each kept piece is placed right where the previous one ended (in exact ticks, not re-rounded seconds),
+        // so the tracks have no gaps or overlaps at the joins and every track joins at the same instant.
+        var out = CMTime.zero
+        var joins: [CMTime] = []
+        for (index, kept) in map.kept.enumerated() {
+            for segment in loaded {
+                let a = CMTime(seconds: max(kept.start, segment.offset) - segment.offset, preferredTimescale: 600)
+                let b = CMTime(seconds: min(kept.end, segment.offset + segment.duration) - segment.offset, preferredTimescale: 600)
+                guard b > a else { continue }
+                for source in segment.sources {
+                    let start = CMTimeMaximum(a, source.range.start)
+                    let end = CMTimeMinimum(b, source.range.end)
+                    guard end > start else { continue }
+                    let track = try tracks[source.kind] ?? addTrack(source.kind, to: composition)
+                    tracks[source.kind] = track
+                    let at = out + (start - a)
+                    try track.insertTimeRange(CMTimeRange(start: start, end: end), of: source.track, at: at)
+                    if source.kind == .camera { cameraCoverage.append(CMTimeRange(start: at, duration: end - start)) }
+                }
+                out = out + (b - a)
+            }
+            if index < map.kept.count - 1 { joins.append(out) }
         }
         guard let screenTrack = tracks[.screen] else { throw RenderError.trackMismatch("no screen track") }
 
@@ -184,26 +195,18 @@ public struct Exporter: Sendable {
         configuration.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
         configuration.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
 
-        // Joins on the output timeline (the end of each kept range but the last).
-        var joins: [Double] = []
-        var position = 0.0
-        for kept in map.kept.dropLast() {
-            position += kept.duration
-            joins.append(position)
-        }
         let mix = AVMutableAudioMix()
         mix.inputParameters = [TrackKind.system, .mic].compactMap { kind in
             tracks[kind].map {
                 let parameters = AVMutableAudioMixInputParameters(track: $0)
                 let volume = Exporter.volume(for: kind, in: project)
                 parameters.setVolume(volume, at: .zero)
+                // Kept ranges are at least `EditMap.minimumKept` (> 2 fades) long, so the ramps never overlap.
+                let length = CMTime(seconds: fade, preferredTimescale: 48_000)
                 for join in joins {
-                    let out = CMTimeRange(
-                        start: CMTime(seconds: max(0, join - fade), preferredTimescale: 48_000),
-                        end: CMTime(seconds: join, preferredTimescale: 48_000))
-                    let back = CMTimeRange(start: out.end, duration: CMTime(seconds: fade, preferredTimescale: 48_000))
-                    parameters.setVolumeRamp(fromStartVolume: volume, toEndVolume: 0, timeRange: out)
-                    parameters.setVolumeRamp(fromStartVolume: 0, toEndVolume: volume, timeRange: back)
+                    parameters.setVolumeRamp(
+                        fromStartVolume: volume, toEndVolume: 0, timeRange: CMTimeRange(start: join - length, end: join))
+                    parameters.setVolumeRamp(fromStartVolume: 0, toEndVolume: volume, timeRange: CMTimeRange(start: join, duration: length))
                 }
                 return parameters
             }
@@ -211,6 +214,19 @@ public struct Exporter: Sendable {
         return Built(
             composition: composition, videoComposition: AVVideoComposition(configuration: configuration), audioMix: mix,
             project: project, map: map, cues: cues, passthrough: false)
+    }
+
+    /// Chapters on the output timeline: one whose start was cut begins where the cut joins; one cut entirely (or
+    /// pushed onto the start, or onto the next chapter) is dropped.
+    static func outputMarkers(_ markers: [Marker], map: EditMap) -> [Marker] {
+        let sorted = markers.sorted { $0.t < $1.t }
+        var result: [Marker] = []
+        for (i, marker) in sorted.enumerated() {
+            let end = i + 1 < sorted.count ? sorted[i + 1].t : map.duration
+            guard let span = map.output(TimeRange(start: marker.t, end: end)), span.start > 0.001 else { continue }
+            result.append(Marker(t: span.start, title: marker.title))
+        }
+        return result
     }
 
     /// Whether frames must go through the compositor, judged by the data actually present.
