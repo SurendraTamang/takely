@@ -47,6 +47,8 @@ final class RecordingSettings {
     /// Takely Pro: the prompter follows the voice; the live coach shows pace and fillers while recording.
     var prompterFollowsVoice: Bool { didSet { defaults.set(prompterFollowsVoice, forKey: Key.prompterFollowsVoice) } }
     var liveCoach: Bool { didSet { defaults.set(liveCoach, forKey: Key.liveCoach) } }
+    /// Takely Pro: keys, emails and card numbers seen on screen are blurred in the export.
+    var redactSecrets: Bool { didSet { defaults.set(redactSecrets, forKey: Key.redactSecrets) } }
     var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
@@ -87,6 +89,7 @@ final class RecordingSettings {
         prompterFollowsVoice = defaults.object(forKey: Key.prompterFollowsVoice) as? Bool ?? true
         liveCoach = defaults.object(forKey: Key.liveCoach) as? Bool ?? true
         burnInCaptions = defaults.bool(forKey: Key.burnInCaptions)
+        redactSecrets = defaults.object(forKey: Key.redactSecrets) as? Bool ?? true
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
         }
@@ -117,6 +120,7 @@ final class RecordingSettings {
         static let prompterFollowsVoice = "prompterFollowsVoice"
         static let liveCoach = "liveCoach"
         static let burnInCaptions = "burnInCaptions"
+        static let redactSecrets = "redactSecrets"
         static let prompterScript = "prompterScript"
         static let prompterWordsPerMinute = "prompterWordsPerMinute"
         static let prompterFontSize = "prompterFontSize"

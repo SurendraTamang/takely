@@ -1,5 +1,6 @@
 import AppCore
 import AppKit
+import ProjectKit
 import SwiftUI
 @preconcurrency import UserNotifications
 
@@ -13,6 +14,9 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
     var recap: String?
     private static let copyAction = "copy"
     private static let revealAction = "reveal"
+    private static let reviewAction = "review"
+    /// Opens the blur review for a recording's bundle (the notification's Review action).
+    var onReview: ((ProjectBundle) -> Void)?
 
     /// Must run at launch: actions only arrive if the delegate is set before the user clicks.
     func activate() {
@@ -23,6 +27,7 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
                 actions: [
                     UNNotificationAction(identifier: Self.copyAction, title: "Copy"),
                     UNNotificationAction(identifier: Self.revealAction, title: "Reveal in Finder"),
+                    UNNotificationAction(identifier: Self.reviewAction, title: "Review Blurs", options: .foreground),
                 ],
                 intentIdentifiers: [])
         ])
@@ -53,6 +58,8 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         content.title = "Recording ready"
         let length = Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))
         content.body = title.map { "\($0) · \(length)" } ?? "\(length) · \(url.lastPathComponent)"
+        let blurred = Self.bundle(of: url).flatMap { try? $0.readRedactions() }?.filter { $0.enabled && $0.kind != .manual }.count ?? 0
+        if blurred > 0 { content.body += "\n\(blurred) secret\(blurred == 1 ? "" : "s") blurred" }
         if let recap {
             content.body += "\n\(recap)"
             self.recap = nil
@@ -97,9 +104,17 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
             switch action {
             case Self.copyAction: Self.copy(url)
             case Self.revealAction: self.reveal(url)
+            case Self.reviewAction: Self.bundle(of: url).map { self.onReview?($0) }
             default: Self.openInQuickTime(url)
             }
         }
+    }
+
+    /// The bundle an export belongs to (`<name>.takely/exports/<name>.mp4`), if it's still there.
+    private static func bundle(of export: URL) -> ProjectBundle? {
+        let url = export.deletingLastPathComponent().deletingLastPathComponent()
+        guard url.pathExtension == ProjectBundle.pathExtension, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return ProjectBundle(url: url)
     }
 
     private func reveal(_ url: URL) {

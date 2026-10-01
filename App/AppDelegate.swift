@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 await MainActor.run {
                     ProProcessor.Options(
                         transcribe: settings.transcribe, locale: .current, summarize: settings.aiSummary,
-                        burnInCaptions: settings.burnInCaptions)
+                        burnInCaptions: settings.burnInCaptions, redact: settings.redactSecrets)
                 }
             }
         #else
@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: StatusItemController?
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
+    private var reviewWindow: NSWindow?
     /// When macOS last announced a power-off, as a backup to the quit event's reason.
     /// Trusted only briefly: another app can cancel the restart, and later quits are the user's.
     private var powerOffNoticedAt: ContinuousClock.Instant?
@@ -56,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         coordinator.onRecap = { [notifier] recap in notifier.recap = recap }
+        notifier.onReview = { [weak self] bundle in self?.showReview(bundle) }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -202,6 +204,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         present(window)
     }
 
+    /// The blurred areas of a recording, to switch off, add to and re-export.
+    func showReview(_ bundle: ProjectBundle) {
+        reviewWindow?.close()
+        let model = BlurReviewModel(bundle: bundle)
+        let window = makeWindow(
+            title: "Blurred Areas — \(bundle.name)",
+            content: BlurReviewView(model: model) { [weak self] in
+                guard let self else { return nil }
+                guard controller.phase == .idle, !controller.isBusy else { return "Finish the current recording or export first." }
+                reviewWindow?.close()
+                statusItem?.showPanel()  // shows the export's progress
+                Task { await self.controller.export(bundle) }
+                return nil
+            })
+        reviewWindow = window
+        present(window)
+    }
+
     private func makeWindow(title: String, content: some View) -> NSWindow {
         let window = NSWindow(contentViewController: NSHostingController(rootView: content))
         window.title = title
@@ -226,6 +246,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             onboardingWindow = nil
         } else if window === settingsWindow {
             settingsWindow = nil
+        } else if window === reviewWindow {
+            reviewWindow = nil
         }
     }
 }
