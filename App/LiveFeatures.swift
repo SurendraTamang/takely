@@ -15,8 +15,13 @@ final class LiveStatus {
     var fillers = 0
     var isSilent = false
     var coaching = false
+    /// Listening to a recording (Practice is then unavailable).
+    var recording = false
+    /// Why voice features aren't running, if they can't (shown in the prompter).
+    var note: String?
 
     func reset() {
+        recording = false
         spokenCharacters = nil
         wordsPerMinute = nil
         paceIsOff = false
@@ -30,42 +35,48 @@ final class LiveStatus {
     import TakelyPro
 
     /// Takely Pro's live recognition, connected to a recording (or a practice run) and mirrored into `LiveStatus`.
+    /// Starts and stops can overlap (a stop while the model loads, a restart): each start belongs to a generation,
+    /// and a start that finishes after a newer start or stop shuts its session down instead of installing it.
     @MainActor
     final class LiveFeatures {
         let status = LiveStatus()
         private var session: LiveSession?
         private var router: FrameRouter?
-        private var practicing = false
-
-        var isPracticing: Bool { practicing }
+        private var generation = 0
 
         /// Starts listening to `router`'s microphone while recording. `script` is followed if given.
         func startRecording(router: FrameRouter, script: String?, coach: Bool) async {
-            await stop()
+            let generation = detachAndStop()
             guard script != nil || coach else { return }
             let session = LiveSession(script: script)
-            guard await session.start() else { return }
-            self.session = session
+            let started = await session.start()
+            guard started, generation == self.generation else {
+                status.note = session.note
+                await session.stop()
+                return
+            }
+            status.recording = true
+            status.coaching = coach
+            install(session, following: script != nil)
             self.router = router
             router.setMicListener { [session] audio in session.feed(audio) }
-            status.coaching = coach
-            if script != nil { status.spokenCharacters = 0 }
-            mirror()
         }
 
-        /// Practice: follows the voice from the microphone without recording.
+        /// Practice: follows the voice from the microphone without recording. False if it couldn't start.
         func startPractice(script: String) async -> Bool {
-            await stop()
+            let generation = detachAndStop()
             let session = LiveSession(script: script)
-            guard await session.startPractice() else { return false }
-            self.session = session
-            practicing = true
-            status.spokenCharacters = 0
-            mirror()
+            let started = await session.startPractice()
+            guard started, generation == self.generation else {
+                status.note = session.note
+                await session.stop()
+                return false
+            }
+            install(session, following: true)
             return true
         }
 
-        /// After a retake removed `seconds` of the recording: the prompter goes back to where the reader was.
+        /// After a retake took back `seconds`: the prompter goes back to where the reader was.
         func rewind(by seconds: Double) {
             session?.rewind(to: CMClockGetTime(CMClockGetHostTimeClock()).seconds - seconds)
         }
@@ -73,26 +84,50 @@ final class LiveStatus {
         /// Stops listening; returns the coach's recap if there was enough speech.
         @discardableResult
         func stop() async -> String? {
-            router?.setMicListener(nil)
-            router = nil
-            practicing = false
-            let recap = await session?.stop()
             let coached = status.coaching
-            session = nil
-            status.reset()
+            let old = session
+            _ = detach()
+            let recap = await old?.stop()
             return coached ? recap : nil
         }
 
-        private func mirror() {
-            guard let session else { return }
+        /// Ends the current session at once (its analyzer finishes in the background) and starts a new generation.
+        private func detachAndStop() -> Int {
+            if let old = detach() { Task { await old.stop() } }
+            return generation
+        }
+
+        private func detach() -> LiveSession? {
+            generation += 1
+            router?.setMicListener(nil)
+            router = nil
+            let old = session
+            session = nil
+            status.reset()
+            return old
+        }
+
+        private func install(_ session: LiveSession, following: Bool) {
+            self.session = session
+            status.note = nil
+            status.spokenCharacters = following ? 0 : nil
+            mirror(session, following: following)
+        }
+
+        /// Copies the session's state into `status` while it's the current one. Only the session is observed
+        /// (reading `status` here would make these writes re-trigger it).
+        private func mirror(_ session: LiveSession, following: Bool) {
+            guard session === self.session else { return }
             withObservationTracking {
-                if status.spokenCharacters != nil { status.spokenCharacters = session.spokenCharacters }
+                if following { status.spokenCharacters = session.spokenCharacters }
                 status.wordsPerMinute = session.wordsPerMinute
                 status.paceIsOff = session.pace.map { $0 != .good } ?? false
                 status.fillers = session.fillers
                 status.isSilent = session.isSilent
             } onChange: {
-                Task { @MainActor [weak self] in self?.mirror() }
+                Task { @MainActor [weak self, weak session] in
+                    if let session { self?.mirror(session, following: following) }
+                }
             }
         }
     }
@@ -101,7 +136,6 @@ final class LiveStatus {
     @MainActor
     final class LiveFeatures {
         let status = LiveStatus()
-        var isPracticing: Bool { false }
         func startRecording(router: FrameRouter, script: String?, coach: Bool) async {}
         func startPractice(script: String) async -> Bool { false }
         func rewind(by seconds: Double) {}

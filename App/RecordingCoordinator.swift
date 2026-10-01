@@ -16,8 +16,10 @@ final class RecordingCoordinator {
     private let picker = TargetPicker()
     let prompter: Prompter
     let live = LiveFeatures()
-    /// Receives the live coach's recap ("148 wpm · 4 fillers") when a recording stops.
+    /// Receives the live coach's recap ("148 wpm · 4 fillers") for the take being exported (nil clears it).
     var onRecap: (String?) -> Void = { _ in }
+    /// A recap computed before its export started.
+    private var pendingRecap: String?
     private var bubble: BubblePanel?
     private var controlBar: OverlayPanel?
     private var controlBarMoves: (any NSObjectProtocol)?
@@ -36,15 +38,19 @@ final class RecordingCoordinator {
         self.session = session
         self.camera = camera
         let live = live
-        prompter = Prompter(settings: settings, live: live.status) { on in
+        weak var prompter: Prompter?
+        let made = Prompter(settings: settings, live: live.status) { on in
             Task { @MainActor in
                 if on {
-                    _ = await live.startPractice(script: settings.prompterScript)
+                    let started = await live.startPractice(script: settings.prompterScript)
+                    if !started { prompter?.model.practicing = false }
                 } else {
                     await live.stop()
                 }
             }
         }
+        prompter = made
+        self.prompter = made
         observe()
     }
 
@@ -75,9 +81,8 @@ final class RecordingCoordinator {
 
     /// ⌥⇧Z: takes back the last words (to the previous pause) and keeps recording.
     func retake() async {
-        let before = controller.elapsed
-        guard controller.phase == .recording, await controller.retake() else { return }
-        live.rewind(by: (before - controller.elapsed) / .seconds(1))
+        guard controller.phase == .recording, let removed = await controller.retake() else { return }
+        live.rewind(by: removed)
         NSSound(named: "Pop")?.play()
         // The cut may have removed the bubble's latest hide or move: record where it is now.
         recordBubble(visible: settings.camera && bubbleShown)
@@ -176,6 +181,7 @@ final class RecordingCoordinator {
 
     /// Live voice features run while recording: they start when the countdown ends and stop with the recording.
     private func followLive(from old: RecordingController.Phase?, to new: RecordingController.Phase) {
+        if new == .starting { onRecap(nil) }  // a new take: no recap from an earlier (e.g. discarded) one
         if old == .starting, new == .recording, let router = session.active?.router {
             prompter.model.practicing = false
             let script =
@@ -184,8 +190,15 @@ final class RecordingCoordinator {
         } else if old == .recording || old == .paused, new != .recording, new != .paused {
             Task {
                 let recap = await live.stop()
-                onRecap(recap)
+                // Only a take that is being exported gets a recap (not a discard or a restart).
+                if case .exporting = controller.phase { onRecap(recap) } else { pendingRecap = recap }
             }
+        }
+        if case .exporting = new, let pendingRecap {
+            onRecap(pendingRecap)
+            self.pendingRecap = nil
+        } else if new == .idle {
+            pendingRecap = nil
         }
     }
 

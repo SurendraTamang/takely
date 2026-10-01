@@ -82,6 +82,9 @@ private struct PrompterView: View {
         @Bindable var settings = model.settings
         VStack(spacing: 0) {
             toolbar
+            if let note = model.live.note {
+                Text(note).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10)
+            }
             if let spoken = model.live.spokenCharacters, !model.editing {
                 FollowingScript(script: settings.prompterScript, spokenCharacters: spoken, fontSize: settings.prompterFontSize)
                     .scaleEffect(x: settings.prompterMirrored ? -1 : 1, y: 1)
@@ -168,7 +171,7 @@ private struct PrompterView: View {
                     model.practice(model.practicing)
                 }
                 .help("Read the script aloud: the prompter follows your voice, without recording")
-                .disabled(model.editing || settings.prompterScript.isEmpty)
+                .disabled(model.editing || settings.prompterScript.isEmpty || model.live.recording)
             #endif
             Spacer()
             Label("\(Int(settings.prompterWordsPerMinute)) wpm", systemImage: "speedometer").labelStyle(.titleOnly).font(.caption)
@@ -223,7 +226,9 @@ struct FollowingScript: NSViewRepresentable {
         let next = NSRange(location: min(spokenRange.upperBound, max(0, attributed.length - 1)), length: attributed.length > 0 ? 1 : 0)
         let glyphs = layout.glyphRange(forCharacterRange: next, actualCharacterRange: nil)
         let line = layout.boundingRect(forGlyphRange: glyphs, in: container)
-        let target = max(0, line.minY + text.textContainerInset.height - scroll.contentView.bounds.height / 3)
+        let maxOffset = max(0, text.frame.height - scroll.contentView.bounds.height)
+        let target = min(maxOffset, max(0, line.minY + text.textContainerInset.height - scroll.contentView.bounds.height / 3))
+        guard abs(scroll.contentView.bounds.origin.y - target) > 1 else { return }
         NSAnimationContext.runAnimationGroup { animation in
             animation.duration = 0.35
             scroll.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: target))

@@ -61,9 +61,9 @@ final class FakeSession: RecordingSession {
 
     /// What `retake` reports as the recording's new duration.
     var retakeDuration = 0.0
-    func retake() async throws -> Double {
+    func retake() async throws -> (duration: Double, removed: Double) {
         calls.append("retake")
-        return retakeDuration
+        return (retakeDuration, 2)
     }
 
     func stop() async throws -> StoppedRecording {

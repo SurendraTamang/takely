@@ -141,7 +141,7 @@ final class LiveRecordingSession: RecordingSession {
 
     func pause() async throws { try await engine.pause() }
     func resume() async throws { try await engine.resume() }
-    func retake() async throws -> Double { try await engine.retake() }
+    func retake() async throws -> (duration: Double, removed: Double) { try await engine.retake() }
 
     func stop() async throws -> StoppedRecording {
         removeClickMonitor()
