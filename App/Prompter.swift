@@ -9,8 +9,8 @@ final class Prompter {
     let model: PrompterModel
     private var panel: NSPanel?
 
-    init(settings: RecordingSettings) {
-        model = PrompterModel(settings: settings)
+    init(settings: RecordingSettings, live: LiveStatus, practice: @escaping (Bool) -> Void) {
+        model = PrompterModel(settings: settings, live: live, practice: practice)
     }
 
     var isVisible: Bool { panel?.isVisible == true }
@@ -52,11 +52,18 @@ final class Prompter {
 @MainActor @Observable
 final class PrompterModel {
     let settings: RecordingSettings
+    /// The voice-following position (Takely Pro), when it's following.
+    let live: LiveStatus
+    /// Starts (true) or stops (false) a practice run of voice-following without recording.
+    let practice: (Bool) -> Void
     var scrolling = false
     var editing = false
+    var practicing = false
 
-    init(settings: RecordingSettings) {
+    init(settings: RecordingSettings, live: LiveStatus, practice: @escaping (Bool) -> Void) {
         self.settings = settings
+        self.live = live
+        self.practice = practice
         editing = settings.prompterScript.isEmpty
     }
 
@@ -75,7 +82,10 @@ private struct PrompterView: View {
         @Bindable var settings = model.settings
         VStack(spacing: 0) {
             toolbar
-            if model.editing {
+            if let spoken = model.live.spokenCharacters, !model.editing {
+                FollowingScript(script: settings.prompterScript, spokenCharacters: spoken, fontSize: settings.prompterFontSize)
+                    .scaleEffect(x: settings.prompterMirrored ? -1 : 1, y: 1)
+            } else if model.editing {
                 TextEditor(text: $settings.prompterScript)
                     .font(.system(size: 15))
                     .scrollContentBackground(.hidden)
@@ -152,6 +162,14 @@ private struct PrompterView: View {
                 model.editing.toggle()
                 model.scrolling = false
             }
+            #if canImport(TakelyPro)
+                Button(model.practicing ? "Stop Practice" : "Practice") {
+                    model.practicing.toggle()
+                    model.practice(model.practicing)
+                }
+                .help("Read the script aloud: the prompter follows your voice, without recording")
+                .disabled(model.editing || settings.prompterScript.isEmpty)
+            #endif
             Spacer()
             Label("\(Int(settings.prompterWordsPerMinute)) wpm", systemImage: "speedometer").labelStyle(.titleOnly).font(.caption)
             Slider(value: $settings.prompterWordsPerMinute, in: 80...220, step: 10).frame(width: 80).help("Reading speed")
@@ -165,5 +183,51 @@ private struct PrompterView: View {
         .padding(.horizontal, 10)
         .padding(.top, 28)  // clear of the transparent title bar's close button
         .padding(.bottom, 6)
+    }
+}
+
+/// The script with spoken words dimmed, scrolled so the next words sit a third of the way down (voice-following).
+/// AppKit text view: SwiftUI's `Text` can't tell where a character is laid out.
+struct FollowingScript: NSViewRepresentable {
+    let script: String
+    let spokenCharacters: Int
+    let fontSize: Double
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = false
+        if let text = scroll.documentView as? NSTextView {
+            text.isEditable = false
+            text.isSelectable = false
+            text.drawsBackground = false
+            text.textContainerInset = NSSize(width: 16, height: 40)
+        }
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let text = scroll.documentView as? NSTextView, let layout = text.layoutManager, let container = text.textContainer
+        else { return }
+        let spoken = min(spokenCharacters, script.count)
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = fontSize * 0.3
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+        let attributed = NSMutableAttributedString(
+            string: script, attributes: [.font: font, .foregroundColor: NSColor.white, .paragraphStyle: style])
+        let spokenRange = NSRange(script.startIndex..<script.index(script.startIndex, offsetBy: spoken), in: script)
+        attributed.addAttribute(.foregroundColor, value: NSColor.white.withAlphaComponent(0.35), range: spokenRange)
+        text.textStorage?.setAttributedString(attributed)
+        // Scroll the line holding the next word to a third of the way down.
+        layout.ensureLayout(for: container)
+        let next = NSRange(location: min(spokenRange.upperBound, max(0, attributed.length - 1)), length: attributed.length > 0 ? 1 : 0)
+        let glyphs = layout.glyphRange(forCharacterRange: next, actualCharacterRange: nil)
+        let line = layout.boundingRect(forGlyphRange: glyphs, in: container)
+        let target = max(0, line.minY + text.textContainerInset.height - scroll.contentView.bounds.height / 3)
+        NSAnimationContext.runAnimationGroup { animation in
+            animation.duration = 0.35
+            scroll.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: target))
+        }
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 }

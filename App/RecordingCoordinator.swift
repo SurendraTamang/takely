@@ -15,6 +15,9 @@ final class RecordingCoordinator {
     private let camera: CameraController
     private let picker = TargetPicker()
     let prompter: Prompter
+    let live = LiveFeatures()
+    /// Receives the live coach's recap ("148 wpm · 4 fillers") when a recording stops.
+    var onRecap: (String?) -> Void = { _ in }
     private var bubble: BubblePanel?
     private var controlBar: OverlayPanel?
     private var controlBarMoves: (any NSObjectProtocol)?
@@ -32,7 +35,16 @@ final class RecordingCoordinator {
         self.settings = settings
         self.session = session
         self.camera = camera
-        prompter = Prompter(settings: settings)
+        let live = live
+        prompter = Prompter(settings: settings, live: live.status) { on in
+            Task { @MainActor in
+                if on {
+                    _ = await live.startPractice(script: settings.prompterScript)
+                } else {
+                    await live.stop()
+                }
+            }
+        }
         observe()
     }
 
@@ -63,7 +75,9 @@ final class RecordingCoordinator {
 
     /// ⌥⇧Z: takes back the last words (to the previous pause) and keeps recording.
     func retake() async {
+        let before = controller.elapsed
         guard controller.phase == .recording, await controller.retake() else { return }
+        live.rewind(by: (before - controller.elapsed) / .seconds(1))
         NSSound(named: "Pop")?.play()
         // The cut may have removed the bubble's latest hide or move: record where it is now.
         recordBubble(visible: settings.camera && bubbleShown)
@@ -122,6 +136,7 @@ final class RecordingCoordinator {
             _ = (controller.phase, settings.camera, settings.cameraID, settings.showControls)
             update()
             if controller.phase != followedPhase {
+                followLive(from: followedPhase, to: controller.phase)
                 followedPhase = controller.phase
                 followRecordingWithPrompter()
                 // Retake, marker and draw only exist while recording, so their keys aren't taken from other apps.
@@ -157,6 +172,21 @@ final class RecordingCoordinator {
             if !recordingActive { camera.stopSoon() }
         }
         if recordingActive && controller.phase != .starting && settings.showControls { showControlBar() } else { hideControlBar() }
+    }
+
+    /// Live voice features run while recording: they start when the countdown ends and stop with the recording.
+    private func followLive(from old: RecordingController.Phase?, to new: RecordingController.Phase) {
+        if old == .starting, new == .recording, let router = session.active?.router {
+            prompter.model.practicing = false
+            let script =
+                settings.prompterFollowsVoice && prompter.isVisible && !settings.prompterScript.isEmpty ? settings.prompterScript : nil
+            Task { await live.startRecording(router: router, script: script, coach: settings.liveCoach) }
+        } else if old == .recording || old == .paused, new != .recording, new != .paused {
+            Task {
+                let recap = await live.stop()
+                onRecap(recap)
+            }
+        }
     }
 
     /// With "Scroll with recording", the visible prompter scrolls while recording and stops otherwise.
@@ -204,7 +234,7 @@ final class RecordingCoordinator {
 
     private func showControlBar() {
         guard controlBar == nil else { return }
-        let host = NSHostingView(rootView: ControlBar(coordinator: self, controller: controller))
+        let host = NSHostingView(rootView: ControlBar(coordinator: self, controller: controller, live: live.status))
         let size = host.fittingSize
         let screen = NSScreen.main?.visibleFrame ?? .zero
         let saved = settings.controlsOrigin.flatMap { origin in NSScreen.screens.contains { $0.frame.contains(origin) } ? origin : nil }
@@ -234,6 +264,7 @@ final class RecordingCoordinator {
 private struct ControlBar: View {
     let coordinator: RecordingCoordinator
     let controller: RecordingController
+    let live: LiveStatus
 
     var body: some View {
         HStack(spacing: 4) {
@@ -245,6 +276,7 @@ private struct ControlBar: View {
                 .font(.body.monospacedDigit())
                 .frame(minWidth: 44)
                 .accessibilityLabel("Elapsed time \(controller.elapsed.formatted(.units(allowed: [.minutes, .seconds])))")
+            if live.coaching { coach }
             button(controller.phase == .paused ? "Resume" : "Pause", controller.phase == .paused ? "play.fill" : "pause.fill") {
                 await controller.togglePause()
             }
@@ -263,6 +295,21 @@ private struct ControlBar: View {
         .padding(6)
         .background(.regularMaterial, in: Capsule())
         .disabled(controller.isBusy)
+    }
+
+    /// Pace (orange when slow or fast), fillers, and a nudge after a long silence.
+    @ViewBuilder private var coach: some View {
+        if live.isSilent && controller.phase == .recording {
+            Text("Still there?").font(.caption).foregroundStyle(.secondary)
+        } else if let wpm = live.wordsPerMinute {
+            Text("\(wpm) wpm").font(.caption.monospacedDigit()).foregroundStyle(live.paceIsOff ? .orange : .secondary)
+                .help("Speaking pace over the last 30 s (110–170 is comfortable)")
+        }
+        if live.fillers > 0 {
+            Text("\(live.fillers) um").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .help("Filler words so far (um, uh, you know, I mean…)")
+                .accessibilityLabel("\(live.fillers) filler words")
+        }
     }
 
     private func button(_ title: String, _ symbol: String, action: @escaping @MainActor () async -> Void) -> some View {
