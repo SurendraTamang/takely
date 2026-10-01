@@ -1,15 +1,20 @@
 import AVFoundation
+import OSLog
 import ProjectKit
 
 /// Turns a finished `.takely` bundle into `exports/<name>.mp4`.
 public struct Exporter: Sendable {
+    private let log = Logger(subsystem: "app.takely", category: "export")
+
     public init() {}
 
     public func export(_ bundle: ProjectBundle, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
         let project = try bundle.readProject()
         guard !project.segments.isEmpty else { throw RenderError.emptyRecording }
         let cursorTrack = try bundle.readCursor()
-        let renderer = FrameRenderer(project: project, cursor: cursorTrack)
+        let transcript = try? bundle.readTranscript()
+        let cues = transcript?.cues() ?? []
+        let renderer = FrameRenderer(project: project, cursor: cursorTrack, captions: cues)
         let composition = AVMutableComposition()
         var tracks: [TrackKind: AVMutableCompositionTrack] = [:]
         var cameraCoverage: [CMTimeRange] = []
@@ -41,6 +46,7 @@ public struct Exporter: Sendable {
         let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
         let passthrough =
             !Exporter.needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
+            && !renderer.hasCaptions
             && presentAudioKinds.count <= 1
             && !Exporter.audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
         let preset =
@@ -101,17 +107,36 @@ public struct Exporter: Sendable {
             try? FileManager.default.removeItem(at: partial)  // don't leave hidden partial files behind
             throw error
         }
-        let markers = (try? bundle.readMarkers()) ?? []
-        if !markers.isEmpty {
-            let chaptered = bundle.exportsURL.appending(path: ".\(bundle.name).chapters.mp4")
-            try? FileManager.default.removeItem(at: chaptered)
-            do {
-                try await ChapterWriter.write(partial, to: chaptered, markers: markers)
-                _ = try FileManager.default.replaceItemAt(partial, withItemAt: chaptered)  // the export survives a failed swap
-            } catch {
-                // Chapters are a nicety: keep the export without them rather than failing it.
-                try? FileManager.default.removeItem(at: chaptered)
+        let extras = MovieExtras(
+            markers: (try? bundle.readMarkers()) ?? [], captions: cues, captionsLocale: transcript?.locale,
+            title: project.title, summary: project.summary)
+        if !extras.isEmpty {
+            let finished = bundle.exportsURL.appending(path: ".\(bundle.name).finished.mp4")
+            try? FileManager.default.removeItem(at: finished)
+            // Captions are the most complex part: if the pass fails, retry without them so chapters and metadata stay.
+            var attempts = [extras]
+            if !extras.captions.isEmpty {
+                var withoutCaptions = extras
+                withoutCaptions.captions = []
+                if !withoutCaptions.isEmpty { attempts.append(withoutCaptions) }
             }
+            for attempt in attempts {
+                do {
+                    try? FileManager.default.removeItem(at: finished)
+                    try await MovieFinisher.write(partial, to: finished, extras: attempt)
+                    _ = try FileManager.default.replaceItemAt(partial, withItemAt: finished)  // the export survives a failed swap
+                    break
+                } catch {
+                    // Niceties: keep the export without them rather than failing it.
+                    log.error("finishing the export failed: \(String(describing: error))")
+                    try? FileManager.default.removeItem(at: finished)
+                }
+            }
+        }
+        if cues.isEmpty {
+            try? FileManager.default.removeItem(at: bundle.captionsURL)  // no stale captions from an earlier export
+        } else {
+            try? WebVTT.render(cues).write(to: bundle.captionsURL, atomically: true, encoding: .utf8)
         }
         // Swaps atomically: a failed replace keeps the previous export.
         _ = try FileManager.default.replaceItemAt(output, withItemAt: partial)

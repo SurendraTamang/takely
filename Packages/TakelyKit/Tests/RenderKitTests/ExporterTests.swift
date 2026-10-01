@@ -222,6 +222,64 @@ import Testing
         #expect(abs(duration - 3) < 0.1, "duration \(duration)")
     }
 
+    @Test func transcriptBecomesCaptionsTrackAndVTT() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 3, tracks: [.screen, .mic])], cameraEnabled: false)
+        try bundle.write(
+            Transcript(
+                locale: "en_US",
+                phrases: [
+                    .init(start: 0.2, end: 1.1, text: "Hello there", words: []),
+                    .init(start: 1.6, end: 2.8, text: "Second line", words: []),
+                ]))
+        let url = try await Exporter().export(bundle)
+        let asset = AVURLAsset(url: url)
+        let subtitles = try await asset.loadTracks(withMediaType: .subtitle)
+        #expect(subtitles.count == 1)
+        #expect(try await subtitles.first?.load(.languageCode) == "eng")
+        let texts = try Self.subtitleTexts(subtitles[0], in: asset)
+        #expect(texts == ["Hello there", "Second line"])
+        let vtt = try String(contentsOf: bundle.captionsURL, encoding: .utf8)
+        #expect(vtt.hasPrefix("WEBVTT") && vtt.contains("00:00:00.200 --> 00:00:01.100\nHello there"))
+    }
+
+    @Test func titleAndSummaryGoIntoTheMovieAndMarkersKeepTheirNames() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 3, tracks: [.screen])], cameraEnabled: false)
+        var project = try bundle.readProject()
+        project.title = "Fixing the login bug"
+        project.summary = "A walkthrough of the fix."
+        try bundle.write(project)
+        try bundle.write([Marker(t: 1.5, title: "The cause")])
+        let asset = AVURLAsset(url: try await Exporter().export(bundle))
+        let metadata = try await asset.load(.commonMetadata)
+        let title = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierTitle).first
+        let description = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: .commonIdentifierDescription).first
+        #expect(try await title?.load(.stringValue) == "Fixing the login bug")
+        #expect(try await description?.load(.stringValue) == "A walkthrough of the fix.")
+        let chapters = try await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: ["en"])
+        let names = try await chapters.asyncMap { try await $0.items.first?.load(.stringValue) }
+        #expect(names == ["Start", "The cause"])
+    }
+
+    /// The text of each non-empty sample of a `tx3g` subtitle track.
+    static func subtitleTexts(_ track: AVAssetTrack, in asset: AVAsset) throws -> [String] {
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        reader.add(output)
+        reader.startReading()
+        var texts: [String] = []
+        while let sample = output.copyNextSampleBuffer() {
+            guard let block = sample.dataBuffer else { continue }
+            var bytes = [UInt8](repeating: 0, count: CMBlockBufferGetDataLength(block))
+            bytes.withUnsafeMutableBytes {
+                _ = CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: $0.count, destination: $0.baseAddress!)
+            }
+            guard bytes.count >= 2 else { continue }
+            let length = Int(bytes[0]) << 8 | Int(bytes[1])
+            if length > 0 { texts.append(String(decoding: bytes[2..<2 + length], as: UTF8.self)) }
+        }
+        return texts
+    }
+
     @Test func withoutMarkersThereAreNoChapters() async throws {
         let bundle = try await makeBundle(segments: [SegSpec(seconds: 1, tracks: [.screen])], cameraEnabled: false)
         let url = try await Exporter().export(bundle)

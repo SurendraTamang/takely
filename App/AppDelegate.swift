@@ -5,6 +5,10 @@ import ProjectKit
 import RenderKit
 import SwiftUI
 
+#if canImport(TakelyPro)
+    import TakelyPro
+#endif
+
 /// Owns the app's objects and handles launch (recovery, onboarding) and quit.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -16,8 +20,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private(set) lazy var controller = RecordingController(
         session: session,
         exporter: Exporter(),
+        postProcessor: Self.postProcessor(settings: settings),
         feedback: notifier,
         saveFolder: { [settings] in settings.saveFolder })
+    /// Takely Pro's transcript and AI pass when it's part of the build; the open-source build has none.
+    private static func postProcessor(settings: RecordingSettings) -> (any PostProcessor)? {
+        #if canImport(TakelyPro)
+            ProProcessor { [settings] in
+                await MainActor.run {
+                    ProProcessor.Options(
+                        transcribe: settings.transcribe, locale: .current, summarize: settings.aiSummary,
+                        burnInCaptions: settings.burnInCaptions)
+                }
+            }
+        #else
+            nil
+        #endif
+    }
+
     private lazy var coordinator = RecordingCoordinator(controller: controller, settings: settings, session: session, camera: camera)
     private lazy var model = RecorderModel(controller: controller, settings: settings, coordinator: coordinator)
     private var statusItem: StatusItemController?

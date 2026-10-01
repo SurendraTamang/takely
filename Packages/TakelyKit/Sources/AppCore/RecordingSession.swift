@@ -30,7 +30,7 @@ extension Exporter: Exporting {}
 @MainActor
 public protocol RecordingFeedback: AnyObject {
     /// Returns once the notification is posted (or its fallback shown), so a quit can wait for it.
-    func recordingReady(_ url: URL, duration: Double) async
+    func recordingReady(_ url: URL, duration: Double, title: String?) async
     /// A start, stop or export failed, or a recording ended early; sent instead of `recordingReady`.
     func recordingFailed(_ message: String) async
     func announce(_ message: String)

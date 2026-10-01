@@ -72,6 +72,27 @@ import Testing
         #expect(pixel(image, 300, 50) == [255, 0, 0, 255])
     }
 
+    @Test func burnedInCaptionsShowOnlyWhileTheirCueIsOn() {
+        var p = project(camera: false)
+        p.effects.burnInCaptions = true
+        let renderer = FrameRenderer(
+            project: p, cursor: CursorTrack(), captions: [CaptionCue(start: 1, end: 2, text: "Hello")], context: context)
+        // The caption box sits in the bottom band; its dark backing changes pixels there while the cue is on.
+        let during = renderer.compose(screen: red, camera: nil, at: 1.5)
+        let before = renderer.compose(screen: red, camera: nil, at: 0.5)
+        let changed = (0..<40).contains { i in pixel(during, 160 + Double(i) * 2, 20) != pixel(before, 160 + Double(i) * 2, 20) }
+        #expect(changed)
+        #expect(pixel(before, 200, 20) == [255, 0, 0, 255])
+        #expect(pixel(during, 5, 240) == [255, 0, 0, 255], "only the bottom band is touched")
+    }
+
+    @Test func captionsAreOffUnlessBurnInIsOn() {
+        let renderer = FrameRenderer(
+            project: project(camera: false), cursor: CursorTrack(), captions: [CaptionCue(start: 0, end: 5, text: "Hello")],
+            context: context)
+        #expect(pixel(renderer.compose(screen: red, camera: nil, at: 1), 200, 20) == [255, 0, 0, 255])
+    }
+
     @Test func clickPulseFadesOut() {
         let cursor = CursorTrack(clicks: [ClickEvent(t: 1, x: 0.5, y: 0.5)])
         let renderer = FrameRenderer(project: project(camera: false, ripples: true), cursor: cursor, context: context)

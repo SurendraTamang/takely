@@ -14,6 +14,9 @@ public struct ProjectBundle: Sendable, Hashable {
     public var manifestURL: URL { url.appending(path: "project.json") }
     public var cursorURL: URL { url.appending(path: "cursor.json") }
     public var markersURL: URL { url.appending(path: "markers.json") }
+    public var transcriptURL: URL { url.appending(path: "transcript.json") }
+    /// Captions for the export, next to it: `exports/<name>.vtt`.
+    public var captionsURL: URL { exportURL.deletingPathExtension().appendingPathExtension("vtt") }
     public var segmentsURL: URL { url.appending(path: "segments", directoryHint: .isDirectory) }
     public var exportsURL: URL { url.appending(path: "exports", directoryHint: .isDirectory) }
 
@@ -78,6 +81,15 @@ public struct ProjectBundle: Sendable, Hashable {
         let url = sidecarURL(for: file)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try JSONDecoder().decode(SegmentSidecar.self, from: Data(contentsOf: url)).tracks
+    }
+
+    public func readTranscript() throws -> Transcript? {
+        guard FileManager.default.fileExists(atPath: transcriptURL.path) else { return nil }
+        return try JSONDecoder().decode(Transcript.self, from: Data(contentsOf: transcriptURL))
+    }
+
+    public func write(_ transcript: Transcript) throws {
+        try JSONEncoder().encode(transcript).write(to: transcriptURL, options: .atomic)
     }
 
     public func readMarkers() throws -> [Marker] {

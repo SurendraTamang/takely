@@ -1,3 +1,4 @@
+import AppKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import ProjectKit
@@ -11,11 +12,46 @@ public final class FrameRenderer: Sendable {
     private let cursor: CursorTrack
     private let canvas: CGRect
 
-    public init(project: Project, cursor: CursorTrack, context: CIContext = CIContext(options: [.cacheIntermediates: false])) {
+    /// Caption images rendered once up front (one per cue), drawn while their cue is on.
+    private let captions: [(cue: CaptionCue, image: CIImage)]
+
+    public init(
+        project: Project, cursor: CursorTrack, captions: [CaptionCue] = [],
+        context: CIContext = CIContext(options: [.cacheIntermediates: false])
+    ) {
         self.project = project
         self.cursor = cursor
         self.context = context
-        canvas = CGRect(x: 0, y: 0, width: project.capture.pixelSize.width, height: project.capture.pixelSize.height)
+        let canvas = CGRect(x: 0, y: 0, width: project.capture.pixelSize.width, height: project.capture.pixelSize.height)
+        self.canvas = canvas
+        self.captions = project.effects.burnInCaptions == true ? captions.map { ($0, Self.captionImage($0.text, canvas: canvas)) } : []
+    }
+
+    /// Whether any burned-in caption will be drawn (the export then needs the compositor).
+    public var hasCaptions: Bool { !captions.isEmpty }
+
+    /// White text on a translucent dark box, centred near the bottom (sized to the frame height).
+    private static func captionImage(_ text: String, canvas: CGRect) -> CIImage {
+        // Sized by height, but small enough that a 42-character line fits narrow (square, portrait) captures too.
+        let size = max(12, min(canvas.height * 0.045, canvas.width * 0.04))
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        let generator = CIFilter.attributedTextImageGenerator()
+        generator.text = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: CTFontCreateWithName("Helvetica-Bold" as CFString, size, nil), .foregroundColor: CGColor(gray: 1, alpha: 1),
+                .paragraphStyle: style,
+            ])
+        generator.scaleFactor = 1
+        guard let textImage = generator.outputImage else { return CIImage.empty() }
+        let pad = size * 0.4
+        let box = textImage.extent.insetBy(dx: -pad, dy: -pad * 0.6)
+        let backing = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0.65)).cropped(to: box)
+        let caption = textImage.composited(over: backing)
+        let x = canvas.midX - box.width / 2 - box.minX
+        let y = canvas.height * 0.06 - box.minY
+        return caption.transformed(by: CGAffineTransform(translationX: x, y: y))
     }
 
     public func compose(screen: CIImage, camera: CIImage?, at t: Double) -> CIImage {
@@ -38,6 +74,9 @@ public final class FrameRenderer: Sendable {
         }
         if project.camera.enabled, let camera, let center = project.camera.bubbleCenter(at: t) {
             image = bubble(camera, center: point(center)).composited(over: image)
+        }
+        if let caption = captions.first(where: { $0.cue.start <= t && t < $0.cue.end }) {
+            image = caption.image.composited(over: image)
         }
         return image.cropped(to: canvas)
     }
