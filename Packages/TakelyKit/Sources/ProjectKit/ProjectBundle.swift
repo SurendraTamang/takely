@@ -10,6 +10,14 @@ public struct ProjectBundle: Sendable, Hashable {
         self.url = url
     }
 
+    /// The bundle `url` is (a `.takely` folder) or was exported from (`<name>.takely/exports/<name>.mp4`), if it's
+    /// still there.
+    public static func containing(_ url: URL) -> ProjectBundle? {
+        let candidate = url.pathExtension == pathExtension ? url : url.deletingLastPathComponent().deletingLastPathComponent()
+        guard candidate.pathExtension == pathExtension, FileManager.default.fileExists(atPath: candidate.path) else { return nil }
+        return ProjectBundle(url: candidate)
+    }
+
     public var name: String { url.deletingPathExtension().lastPathComponent }
     public var manifestURL: URL { url.appending(path: "project.json") }
     public var cursorURL: URL { url.appending(path: "cursor.json") }

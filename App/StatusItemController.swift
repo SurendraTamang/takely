@@ -1,5 +1,6 @@
 import AppCore
 import AppKit
+import ProjectKit
 import SwiftUI
 
 /// The menu bar icon and its panel. Replaces SwiftUI's `MenuBarExtra`, which can't open its panel from
@@ -20,10 +21,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         return panel
     }()
 
-    init(model: RecorderModel, openSettings: @escaping () -> Void) {
+    init(model: RecorderModel, openSettings: @escaping () -> Void, openEditor: ((ProjectBundle) -> Void)? = nil) {
         self.model = model
         super.init()
-        let host = NSHostingController(rootView: RecorderMenu(model: model, openSettings: openSettings))
+        let host = NSHostingController(rootView: RecorderMenu(model: model, openSettings: openSettings, openEditor: openEditor))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         popover.behavior = .transient

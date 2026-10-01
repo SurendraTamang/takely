@@ -6,6 +6,8 @@ import SwiftUI
 struct RecorderMenu: View {
     let model: RecorderModel
     let openSettings: () -> Void
+    /// Opens the editor on a recording (Takely Pro); nil without it.
+    var openEditor: ((ProjectBundle) -> Void)?
 
     private var controller: RecordingController { model.controller }
 
@@ -31,6 +33,9 @@ struct RecorderMenu: View {
             HStack {
                 if let url = controller.lastRecording {
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                    if let openEditor, controller.phase == .idle, let bundle = ProjectBundle.containing(url) {
+                        Button("Edit…") { openEditor(bundle) }
+                    }
                 }
                 Spacer()
                 Button("Settings…", action: openSettings)
