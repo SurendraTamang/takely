@@ -9,9 +9,9 @@ import SwiftUI
 /// control bar during it, and the bubble's moves as keyframes.
 @MainActor
 final class RecordingCoordinator {
-    private let controller: RecordingController
+    let controller: RecordingController
     private let settings: RecordingSettings
-    private let session: LiveRecordingSession
+    let session: LiveRecordingSession
     private let camera: CameraController
     private let picker = TargetPicker()
     let prompter: Prompter
@@ -82,21 +82,27 @@ final class RecordingCoordinator {
     }
 
     /// ⌥⇧Z: takes back the last words (to the previous pause) and keeps recording.
-    func retake() async {
-        guard controller.phase == .recording, let cut = await controller.retake() else { return }
+    /// False if nothing was taken back.
+    @discardableResult
+    func retake() async -> Bool {
+        guard controller.phase == .recording, let cut = await controller.retake() else { return false }
         live.rewind(to: cut)
         NSSound(named: "Pop")?.play()
         // The cut may have removed the bubble's latest hide or move: record where it is now.
         recordBubble(visible: settings.camera && bubbleShown)
+        return true
     }
 
     /// ⌥⇧M: marks this moment; markers become chapters in the export.
-    func addMarker() {
+    /// False if no marker was added.
+    @discardableResult
+    func addMarker() -> Bool {
         guard controller.phase == .recording, let active = session.active,
             active.router.addMarker(at: CMClockGetTime(CMClockGetHostTimeClock()))
-        else { return }
+        else { return false }
         NSSound(named: "Tink")?.play()
         AccessibilityNotification.Announcement("Marker added").post()
+        return true
     }
 
     /// ⌥⇧D: draw on the screen (recorded) during a display or area recording.

@@ -15,6 +15,7 @@ struct SettingsView: View {
             Tab("General", systemImage: "gearshape") { general }
             Tab("Recording", systemImage: "record.circle") { recording }
             Tab("Shortcuts", systemImage: "keyboard") { shortcuts }
+            Tab("Automation", systemImage: "terminal") { automation }
             Tab("Permissions", systemImage: "lock.shield") { permissionsTab }
         }
         .frame(width: 480, height: 320)
@@ -97,6 +98,37 @@ struct SettingsView: View {
             Text("On some keyboard layouts ⌥⇧ + a letter types a special character; pick another shortcut if you need it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .padding()
+    }
+
+    /// The command that puts the bundled `takely` tool on the PATH (the convention VS Code's `code` uses).
+    private var installCommand: String {
+        let tool = Bundle.main.bundleURL.appending(path: "Contents/Helpers/takely").path(percentEncoded: false)
+        return "sudo mkdir -p /usr/local/bin && sudo ln -sf \"\(tool)\" /usr/local/bin/takely"
+    }
+
+    private var automation: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Command-line tool").font(.headline)
+            Text("Run this once in Terminal to use `takely record start`, `takely record stop --json` and more:")
+                .font(.callout)
+            HStack(alignment: .top) {
+                Text(installCommand).font(.caption.monospaced()).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(installCommand, forType: .string)
+                }
+            }
+            Toggle("Let takely:// links control recording without asking", isOn: $settings.allowLinkControl)
+            Text("Off: a link asks you first (any web page or app can open a link). Links never receive the video's location.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text(
+                "Shortcuts and Siri: Takely's actions (Start Recording, Stop Recording returns the video, Add Marker…) are in the Shortcuts app. Links: takely://record/start?countdown=0, takely://record/stop (x-callback-url)."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+            Spacer()
         }
         .padding()
     }
