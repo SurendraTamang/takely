@@ -16,3 +16,6 @@ App/Takely.entitlements
 Config/Local.xcconfig
 scripts/aec-bench/*.s16
 scripts/aec-bench/out/
+
+# Local design notes and plans (not committed)
+docs/superpowers/
