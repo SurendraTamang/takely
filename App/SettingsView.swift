@@ -56,6 +56,7 @@ struct SettingsView: View {
                         .disabled(!settings.transcribe)
                     Toggle("AI title, summary and chapter names", isOn: $settings.aiSummary)
                         .disabled(!settings.transcribe)
+                    Toggle("Blur secrets on screen (keys, emails, card numbers)", isOn: $settings.redactSecrets)
                     Toggle("Prompter follows my voice", isOn: $settings.prompterFollowsVoice)
                     Toggle("Live speaking coach (pace, filler words)", isOn: $settings.liveCoach)
                     Text("On this Mac, in the system language. AI needs Apple Intelligence (System Settings › Apple Intelligence & Siri).")

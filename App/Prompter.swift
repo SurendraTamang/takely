@@ -2,6 +2,10 @@ import AppCore
 import AppKit
 import SwiftUI
 
+#if canImport(TakelyPro)
+    import TakelyPro
+#endif
+
 /// The invisible prompter: a floating script panel that recordings never show (Takely's windows are excluded from
 /// capture). It can scroll by itself at a reading speed, and follow the recording (scroll while recording).
 @MainActor
@@ -67,6 +71,54 @@ final class PrompterModel {
         editing = settings.prompterScript.isEmpty
     }
 
+    #if canImport(TakelyPro)
+        var isWriting: Bool { writing != nil }
+        func stopWriting() { writing?.cancel() }
+    #else
+        var isWriting: Bool { false }
+        func stopWriting() {}
+    #endif
+
+    #if canImport(TakelyPro)
+        /// Writing a script from notes: the notes (kept, to write again from them) and the script made from them.
+        private var notes: String?
+        private var written: String?
+        var writing: Task<Void, Never>?
+        var writeNote: String?
+
+        /// Replaces the editor's text with a spoken script written from it (or, if the editor still holds the last
+        /// script written, from that script's notes), streamed in as the model writes.
+        func writeScript(tone: ScriptWriter.Tone, minutes: Int) {
+            guard ScriptWriter.isAvailable else {
+                writeNote = "Writing a script needs Apple Intelligence: turn it on in System Settings › Apple Intelligence & Siri."
+                return
+            }
+            let source = settings.prompterScript == written ? notes ?? settings.prompterScript : settings.prompterScript
+            guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                writeNote = "Type your notes first: the points to cover, in any order."
+                return
+            }
+            notes = source
+            writeNote = nil
+            writing?.cancel()
+            let before = settings.prompterScript
+            writing = Task {
+                do {
+                    for try await script in ScriptWriter.write(notes: source, tone: tone, minutes: minutes) {
+                        settings.prompterScript = script
+                    }
+                    try Task.checkCancellation()  // a cancelled stream may just end
+                    written = settings.prompterScript
+                } catch is CancellationError {
+                    settings.prompterScript = before
+                } catch {
+                    writeNote = "Couldn't write the script: \(error.localizedDescription)"
+                    settings.prompterScript = before
+                }
+                writing = nil
+            }
+        }
+    #endif
 }
 
 private struct PrompterView: View {
@@ -82,6 +134,11 @@ private struct PrompterView: View {
         @Bindable var settings = model.settings
         VStack(spacing: 0) {
             toolbar
+            #if canImport(TakelyPro)
+                if let note = model.writeNote, model.editing {
+                    Text(note).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10)
+                }
+            #endif
             if let note = model.live.note {
                 Text(note).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 10)
             }
@@ -90,6 +147,7 @@ private struct PrompterView: View {
                     .scaleEffect(x: settings.prompterMirrored ? -1 : 1, y: 1)
             } else if model.editing {
                 TextEditor(text: $settings.prompterScript)
+                    .disabled(model.isWriting)  // the streamed script would overwrite typing
                     .font(.system(size: 15))
                     .scrollContentBackground(.hidden)
                     .padding(8)
@@ -162,6 +220,7 @@ private struct PrompterView: View {
             .help(model.scrolling ? "Pause scrolling (Space)" : "Scroll (Space)")
             .disabled(model.editing)
             Button(model.editing ? "Done" : "Edit") {
+                model.stopWriting()
                 model.editing.toggle()
                 model.scrolling = false
             }
@@ -172,6 +231,20 @@ private struct PrompterView: View {
                 }
                 .help("Read the script aloud: the prompter follows your voice, without recording")
                 .disabled(model.editing || settings.prompterScript.isEmpty || model.live.recording)
+                if model.editing {
+                    Menu(model.writing == nil ? "Write Script" : "Writing…") {
+                        ForEach(ScriptWriter.Tone.allCases, id: \.self) { tone in
+                            Section(tone.rawValue.capitalized) {
+                                ForEach([1, 2, 3], id: \.self) { minutes in
+                                    Button("About \(minutes) min") { model.writeScript(tone: tone, minutes: minutes) }
+                                }
+                            }
+                        }
+                    }
+                    .fixedSize()
+                    .disabled(model.writing != nil)
+                    .help("Turn your notes into a script to read aloud (on-device Apple Intelligence)")
+                }
             #endif
             Spacer()
             Label("\(Int(settings.prompterWordsPerMinute)) wpm", systemImage: "speedometer").labelStyle(.titleOnly).font(.caption)

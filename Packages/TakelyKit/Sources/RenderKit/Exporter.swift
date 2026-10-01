@@ -14,7 +14,9 @@ public struct Exporter: Sendable {
         let cursorTrack = try bundle.readCursor()
         let transcript = try? bundle.readTranscript()
         let cues = transcript?.cues() ?? []
-        let renderer = FrameRenderer(project: project, cursor: cursorTrack, captions: cues)
+        // An unreadable redactions file fails the export: never export with the blurs silently dropped.
+        let renderer = FrameRenderer(
+            project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions())
         let composition = AVMutableComposition()
         var tracks: [TrackKind: AVMutableCompositionTrack] = [:]
         var cameraCoverage: [CMTimeRange] = []
@@ -46,7 +48,7 @@ public struct Exporter: Sendable {
         let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
         let passthrough =
             !Exporter.needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
-            && !renderer.hasCaptions
+            && !renderer.hasCaptions && !renderer.hasRedactions
             && presentAudioKinds.count <= 1
             && !Exporter.audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
         let preset =
