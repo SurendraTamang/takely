@@ -20,9 +20,12 @@ final class FakeHost: AutomationHost {
         if startFails { errorMessage = "Screen Recording permission missing." } else { phase = .recording }
     }
 
+    var stopThrows = false
     func stopRecording() async {
         phase = .idle
-        if exportFails {
+        if stopThrows {
+            errorMessage = "Couldn't stop: the disk went away"
+        } else if exportFails {
             lastRecording = URL(filePath: "/Movies/a.takely")
             errorMessage = "Recording saved, but export failed: disk full"
         } else {
@@ -33,7 +36,11 @@ final class FakeHost: AutomationHost {
     func togglePause() async { phase = phase == .paused ? .recording : .paused }
     func addMarker() -> Bool { true }
     func retake() async -> Bool { false }
-    func discard() async { phase = .idle }
+    var trashFails = false
+    func discard() async {
+        phase = .idle
+        if trashFails { errorMessage = "Couldn't move the recording to the Trash." }
+    }
 }
 
 @MainActor @Suite struct AutomationCenterTests {
@@ -72,12 +79,36 @@ final class FakeHost: AutomationHost {
         _ = await center.perform(ControlRequest(.start))
         #expect(await center.perform(ControlRequest(.resume)).error == "Not paused.")
         #expect(await center.perform(ControlRequest(.pause)).state == "paused")
-        #expect(await center.perform(ControlRequest(.marker)).error == "Not recording.")
+        #expect(await center.perform(ControlRequest(.marker)).error == "Paused: resume first.")
         #expect(await center.perform(ControlRequest(.resume)).state == "recording")
         #expect(await center.perform(ControlRequest(.marker)).ok)
         #expect(await center.perform(ControlRequest(.retake)).error == "Nothing to take back.")
         let discarded = await center.perform(ControlRequest(.discard))
         #expect(discarded.ok && discarded.state == "idle")
         #expect(await center.perform(ControlRequest(.status)).ok)
+    }
+
+    @Test func refusesWhatItCantDoProperly() async {
+        let host = FakeHost()
+        let center = AutomationCenter(host: host)
+        var bad = ControlRequest(.start)
+        bad.region = [0, 0, -1, 5]
+        let badRegion = await center.perform(bad)
+        #expect(!badRegion.ok && host.started == nil)  // never falls back to recording the whole display
+        host.phase = .starting
+        host.isBusy = true
+        #expect(await center.perform(ControlRequest(.stop)).error == AutomationCenter.starting)
+        #expect(await center.perform(ControlRequest(.discard)).error == AutomationCenter.starting)
+        host.phase = .recording
+        host.isBusy = false
+        host.lastRecording = URL(filePath: "/Movies/old.takely/exports/old.mp4")
+        host.stopThrows = true
+        let stop = await center.perform(ControlRequest(.stop))
+        #expect(!stop.ok && stop.path == nil && stop.error == "Couldn't stop: the disk went away")  // not the old take
+        host.phase = .recording
+        host.trashFails = true
+        #expect(await center.perform(ControlRequest(.discard)).ok == false)
+        host.phase = .paused
+        #expect(await center.perform(ControlRequest(.marker)).error == "Paused: resume first.")
     }
 }

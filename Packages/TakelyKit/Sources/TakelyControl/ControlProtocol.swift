@@ -19,10 +19,14 @@ public struct ControlRequest: Codable, Sendable, Equatable {
         self.region = region.map { [$0.minX, $0.minY, $0.width, $0.height] }
     }
 
+    /// The region, if one was given and it's valid (4 numbers, positive size).
     public var regionRect: CGRect? {
         guard let r = region, r.count == 4, r[2] > 0, r[3] > 0 else { return nil }
         return CGRect(x: r[0], y: r[1], width: r[2], height: r[3])
     }
+
+    /// A region was given but can't be used: refuse rather than record the whole display instead.
+    public var hasInvalidRegion: Bool { region != nil && regionRect == nil }
 }
 
 /// The app's answer: what state it's in now, and for `stop` the finished video.
@@ -53,7 +57,10 @@ public enum ControlSocket {
 }
 
 /// `takely://record/start?countdown=0&x-success=…&x-error=…` — the x-callback-url convention: on success the app
-/// opens `x-success` with `path` (and `duration`) added; on failure `x-error` with `errorMessage`.
+/// opens `x-success` with `state` added; on failure `x-error` with `errorMessage`.
+///
+/// Any web page or app can open a link, so a link is treated as untrusted: callbacks never carry the video's path or
+/// title (use the CLI or Shortcuts for that), and can't open files or web pages.
 public struct ControlURL: Sendable, Equatable {
     public var request: ControlRequest
     public var success: URL?
@@ -69,12 +76,19 @@ public struct ControlURL: Sendable, Equatable {
         var request = ControlRequest(command)
         if let countdown = query["countdown"] { request.countdown = !["0", "false", "no", "off"].contains(countdown.lowercased()) }
         if let region = query["region"] {
-            let numbers = region.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-            if numbers.count == 4 { request.region = numbers }
+            // Kept even when malformed, so the command is refused instead of recording the whole display.
+            request.region = region.split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces)) ?? -1 }
         }
         self.request = request
-        success = query["x-success"].flatMap(URL.init(string:))
-        failure = query["x-error"].flatMap(URL.init(string:))
+        success = query["x-success"].flatMap(URL.init(string:)).flatMap(Self.allowedCallback)
+        failure = query["x-error"].flatMap(URL.init(string:)).flatMap(Self.allowedCallback)
+    }
+
+    /// Callbacks go back to an app (Shortcuts, Raycast…), never to files, web pages, scripts or Takely itself.
+    static func allowedCallback(_ url: URL) -> URL? {
+        let blocked: Set<String> = ["file", "http", "https", "ftp", "data", "javascript", "takely"]
+        guard let scheme = url.scheme?.lowercased(), !blocked.contains(scheme) else { return nil }
+        return url
     }
 
     /// The callback to open for `reply`, if one was given.
@@ -83,8 +97,6 @@ public struct ControlURL: Sendable, Equatable {
         else { return nil }
         var items = components.queryItems ?? []
         if reply.ok {
-            if let path = reply.path { items.append(URLQueryItem(name: "path", value: path)) }
-            if let duration = reply.duration { items.append(URLQueryItem(name: "duration", value: String(format: "%.1f", duration))) }
             items.append(URLQueryItem(name: "state", value: reply.state))
         } else {
             items.append(URLQueryItem(name: "errorMessage", value: reply.error ?? "Failed"))

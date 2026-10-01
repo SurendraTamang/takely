@@ -37,37 +37,49 @@ public final class AutomationCenter {
         case .status:
             return reply(host, path: host.lastRecording)
         case .start:
+            guard !request.hasInvalidRegion else { return fail(host, "The region needs x, y, width and height, with a positive size.") }
             guard host.phase == .idle, !host.isBusy else { return fail(host, isRecording(host) ? "Already recording." : "Takely is busy.") }
             await host.startRecording(countdown: request.countdown, region: request.regionRect)
             return isRecording(host) ? reply(host) : fail(host, host.errorMessage ?? "The recording didn't start.")
         case .stop:
+            if host.phase == .starting { return fail(host, Self.starting) }
             guard isRecording(host), !host.isBusy else { return fail(host, "Not recording.") }
             let before = host.lastRecording
             await host.stopRecording()
-            guard let url = host.lastRecording, url != before || before == nil, url.pathExtension == "mp4" else {
-                return fail(host, host.errorMessage ?? "The recording couldn't be exported.", path: host.lastRecording)
+            let after = host.lastRecording == before ? nil : host.lastRecording  // a failed stop leaves the last take's
+            guard let url = after, url.pathExtension == "mp4" else {
+                return fail(host, host.errorMessage ?? "The recording couldn't be exported.", path: after)
             }
             return reply(host, path: url)
         case .pause:
-            guard host.phase == .recording else { return fail(host, "Not recording.") }
+            guard host.phase == .recording, !host.isBusy else {
+                return fail(host, host.phase == .paused ? "Already paused." : "Not recording.")
+            }
             await host.togglePause()
             return host.phase == .paused ? reply(host) : fail(host, host.errorMessage ?? "Couldn't pause.")
         case .resume:
-            guard host.phase == .paused else { return fail(host, "Not paused.") }
+            guard host.phase == .paused, !host.isBusy else { return fail(host, "Not paused.") }
             await host.togglePause()
             return host.phase == .recording ? reply(host) : fail(host, host.errorMessage ?? "Couldn't resume.")
         case .marker:
-            guard host.phase == .recording else { return fail(host, "Not recording.") }
+            guard host.phase == .recording else { return fail(host, host.phase == .paused ? "Paused: resume first." : "Not recording.") }
             return host.addMarker() ? reply(host) : fail(host, "Couldn't add a marker.")
         case .retake:
-            guard host.phase == .recording else { return fail(host, "Not recording.") }
-            return await host.retake() ? reply(host) : fail(host, "Nothing to take back.")
+            guard host.phase == .recording, !host.isBusy else {
+                return fail(host, host.phase == .paused ? "Paused: resume first." : "Not recording.")
+            }
+            if await host.retake() { return reply(host) }
+            return fail(host, host.phase == .recording ? "Nothing to take back." : host.errorMessage ?? "The retake failed.")
         case .discard:
-            guard isRecording(host) else { return fail(host, "Not recording.") }
+            if host.phase == .starting { return fail(host, Self.starting) }
+            guard isRecording(host), !host.isBusy else { return fail(host, "Not recording.") }
             await host.discard()
-            return host.phase == .idle ? reply(host) : fail(host, host.errorMessage ?? "Couldn't discard.")
+            return host.phase == .idle && host.errorMessage == nil ? reply(host) : fail(host, host.errorMessage ?? "Couldn't discard.")
         }
     }
+
+    /// During the countdown (or while devices start) the recording can't be stopped yet; Esc cancels it.
+    static let starting = "Still starting: wait for the countdown to end (Esc cancels it)."
 
     public static func state(_ phase: RecordingController.Phase) -> String {
         switch phase {

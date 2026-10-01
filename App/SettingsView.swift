@@ -121,6 +121,9 @@ struct SettingsView: View {
                     NSPasteboard.general.setString(installCommand, forType: .string)
                 }
             }
+            Toggle("Let takely:// links control recording without asking", isOn: $settings.allowLinkControl)
+            Text("Off: a link asks you first (any web page or app can open a link). Links never receive the video's location.")
+                .font(.caption).foregroundStyle(.secondary)
             Text(
                 "Shortcuts and Siri: Takely's actions (Start Recording, Stop Recording returns the video, Add Marker…) are in the Shortcuts app. Links: takely://record/start?countdown=0, takely://record/stop (x-callback-url)."
             )

@@ -29,12 +29,13 @@ extension RecordingCoordinator: AutomationHost {
 @MainActor
 final class Automation {
     let center: AutomationCenter
+    private let settings: RecordingSettings
     private var server: SocketServer?
 
-    init(host: any AutomationHost) {
+    init(host: any AutomationHost, settings: RecordingSettings) {
         center = AutomationCenter(host: host)
+        self.settings = settings
         let center = center
-        AppDependencyManager.shared.add(dependency: center)
         server = SocketServer { request in await center.perform(request) }
         do {
             try server?.start()
@@ -46,10 +47,36 @@ final class Automation {
 
     func stop() { server?.stop() }
 
-    /// `takely://record/start?…`: runs the command, then opens the x-success or x-error callback, if any.
+    private func confirm(_ command: ControlRequest.Command) -> Bool {
+        let action =
+            switch command {
+            case .start: "start recording your screen"
+            case .stop: "stop and save the recording"
+            case .discard: "discard the current recording"
+            default: "\(command.rawValue) the recording"
+            }
+        let alert = NSAlert()
+        alert.messageText = "A link wants to \(action)"
+        alert.informativeText =
+            "Only allow this if you opened the link yourself. You can let links control Takely without asking in Settings › Automation."
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Don't Allow")
+        alert.window.level = .floating
+        NSApp.activate()
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// `takely://record/start?…`: runs the command, then opens the x-success or x-error callback, if any. Any web
+    /// page or app can open a link, so anything but `status` asks first unless links are allowed in Settings.
     func open(_ url: URL) {
         guard let command = ControlURL(url) else { return Logger.automation.error("unknown URL \(url.absoluteString)") }
         Task {
+            if command.request.command != .status, !settings.allowLinkControl, !confirm(command.request.command) {
+                if let callback = command.callback(for: ControlReply(ok: false, state: "unknown", error: "Not allowed.")) {
+                    NSWorkspace.shared.open(callback)
+                }
+                return
+            }
             let reply = await center.perform(command.request)
             if let callback = command.callback(for: reply) { NSWorkspace.shared.open(callback) }
         }
@@ -78,7 +105,8 @@ private func run(_ request: ControlRequest, with center: AutomationCenter) async
 struct StartRecordingIntent: AppIntent {
     static let title: LocalizedStringResource = "Start Recording"
     static let description = IntentDescription("Starts recording the screen chosen in Takely.")
-    @Parameter(title: "Countdown", default: true) var countdown: Bool
+    /// Empty: the countdown setting.
+    @Parameter(title: "Countdown") var countdown: Bool?
     @Dependency var center: AutomationCenter
 
     @MainActor

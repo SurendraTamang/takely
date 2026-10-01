@@ -53,6 +53,8 @@ final class RecordingSettings {
     /// shouldn't change unexpectedly).
     var autoZoom: Bool { didSet { defaults.set(autoZoom, forKey: Key.autoZoom) } }
     var removeSilences: Bool { didSet { defaults.set(removeSilences, forKey: Key.removeSilences) } }
+    /// `takely://` links run without asking (any web page or app can open a link, so off by default).
+    var allowLinkControl: Bool { didSet { defaults.set(allowLinkControl, forKey: Key.allowLinkControl) } }
     var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
@@ -95,6 +97,7 @@ final class RecordingSettings {
         burnInCaptions = defaults.bool(forKey: Key.burnInCaptions)
         autoZoom = defaults.bool(forKey: Key.autoZoom)
         removeSilences = defaults.bool(forKey: Key.removeSilences)
+        allowLinkControl = defaults.bool(forKey: Key.allowLinkControl)
         redactSecrets = defaults.object(forKey: Key.redactSecrets) as? Bool ?? true
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
@@ -127,6 +130,7 @@ final class RecordingSettings {
         static let liveCoach = "liveCoach"
         static let burnInCaptions = "burnInCaptions"
         static let redactSecrets = "redactSecrets"
+        static let allowLinkControl = "allowLinkControl"
         static let autoZoom = "autoZoom"
         static let removeSilences = "removeSilences"
         static let prompterScript = "prompterScript"

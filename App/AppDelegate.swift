@@ -1,4 +1,5 @@
 import AppCore
+import AppIntents
 import AppKit
 import OSLog
 import ProjectKit
@@ -57,6 +58,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var quitInProgress = false
     private let log = Logger(subsystem: "app.takely", category: "app")
 
+    /// App Intents can run as soon as the app launches (Shortcuts or Siri launch it): their dependency waits until
+    /// automation is ready.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        AppDependencyManager.shared.add { @MainActor [weak self] () async -> AutomationCenter in
+            while true {
+                if let center = self?.automation?.center { return center }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if canImport(TakelyPro)
             let openEditor: ((ProjectBundle) -> Void)? = { [weak self] bundle in self?.showEditor(bundle) }
@@ -69,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor)
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
-        automation = Automation(host: coordinator)
+        automation = Automation(host: coordinator, settings: settings)
         coordinator.onRecap = { [notifier] recap in notifier.recap = recap }
         notifier.onReview = { [weak self] bundle in self?.showReview(bundle) }
         NSWorkspace.shared.notificationCenter.addObserver(
