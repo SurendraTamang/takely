@@ -14,9 +14,11 @@ public final class FrameRenderer: Sendable {
 
     /// Caption images rendered once up front (one per cue), drawn while their cue is on.
     private let captions: [(cue: CaptionCue, image: CIImage)]
+    /// Areas blurred out (secrets on screen, areas the user chose); only enabled ones are kept.
+    private let redactions: [Redaction]
 
     public init(
-        project: Project, cursor: CursorTrack, captions: [CaptionCue] = [],
+        project: Project, cursor: CursorTrack, captions: [CaptionCue] = [], redactions: [Redaction] = [],
         context: CIContext = CIContext(options: [.cacheIntermediates: false])
     ) {
         self.project = project
@@ -25,7 +27,11 @@ public final class FrameRenderer: Sendable {
         let canvas = CGRect(x: 0, y: 0, width: project.capture.pixelSize.width, height: project.capture.pixelSize.height)
         self.canvas = canvas
         self.captions = project.effects.burnInCaptions == true ? captions.map { ($0, Self.captionImage($0.text, canvas: canvas)) } : []
+        self.redactions = redactions.filter(\.enabled)
     }
+
+    /// Whether anything will be blurred (the export then needs the compositor).
+    public var hasRedactions: Bool { !redactions.isEmpty }
 
     /// Whether any burned-in caption will be drawn (the export then needs the compositor).
     public var hasCaptions: Bool { !captions.isEmpty }
@@ -55,7 +61,7 @@ public final class FrameRenderer: Sendable {
     }
 
     public func compose(screen: CIImage, camera: CIImage?, at t: Double) -> CIImage {
-        var image = screen
+        var image = redact(screen, at: t)
         if project.effects.cursorHighlight, let p = cursor.position(at: t) {
             let r = canvas.height * 0.035
             image = glow(at: point(p), radius: r, color: CIColor(red: 1, green: 0.85, blue: 0, alpha: 0.35))
@@ -79,6 +85,27 @@ public final class FrameRenderer: Sendable {
             image = caption.image.composited(over: image)
         }
         return image.cropped(to: canvas)
+    }
+
+    /// Pixellates, then blurs, each active redaction's box (padded a little): unrecoverable, unlike a light blur.
+    private func redact(_ screen: CIImage, at t: Double) -> CIImage {
+        var image = screen
+        for redaction in redactions {
+            guard let r = redaction.rect(at: t) else { continue }
+            let pad = r.height * canvas.height * 0.15 + 2
+            let box = CGRect(
+                x: r.x * canvas.width - pad, y: (1 - r.y - r.height) * canvas.height - pad, width: r.width * canvas.width + 2 * pad,
+                height: r.height * canvas.height + 2 * pad
+            ).intersection(canvas)
+            guard !box.isNull, box.width > 0, box.height > 0 else { continue }
+            let cell = max(8, box.height / 3)
+            let covered = image.clampedToExtent()
+                .applyingFilter("CIPixellate", parameters: [kCIInputScaleKey: cell, kCIInputCenterKey: CIVector(x: box.minX, y: box.minY)])
+                .applyingGaussianBlur(sigma: cell / 2)
+                .cropped(to: box)
+            image = covered.composited(over: image)
+        }
+        return image
     }
 
     /// Normalized top-left coordinates → Core Image pixels (origin bottom-left).

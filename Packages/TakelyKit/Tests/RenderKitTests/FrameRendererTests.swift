@@ -1,4 +1,5 @@
 import CoreImage
+import CoreImage.CIFilterBuiltins
 import ProjectKit
 import Testing
 
@@ -91,6 +92,26 @@ import Testing
             project: project(camera: false), cursor: CursorTrack(), captions: [CaptionCue(start: 0, end: 5, text: "Hello")],
             context: context)
         #expect(pixel(renderer.compose(screen: red, camera: nil, at: 1), 200, 20) == [255, 0, 0, 255])
+    }
+
+    @Test func redactionsBlurTheirBoxWhileActive() {
+        // 1-px black/white stripes: blurred they turn mid-grey; untouched they stay pure black or white.
+        let stripes = CIFilter.stripesGenerator()
+        stripes.color0 = CIColor(red: 0, green: 0, blue: 0)
+        stripes.color1 = CIColor(red: 1, green: 1, blue: 1)
+        stripes.width = 1
+        let screen = stripes.outputImage!.cropped(to: canvas)
+        let redaction = Redaction(
+            kind: .apiKey, preview: "sk-…", track: [.init(t: 0, rect: NormalizedRect(x: 0.25, y: 0.4, width: 0.5, height: 0.2))])
+        let renderer = FrameRenderer(project: project(camera: false), cursor: CursorTrack(), redactions: [redaction], context: context)
+        #expect(renderer.hasRedactions)
+        // Box centre (200, 125) in CI coordinates.
+        let inside = pixel(renderer.compose(screen: screen, camera: nil, at: 0.2), 200, 125)
+        #expect(inside[0] > 60 && inside[0] < 195, "blurred to grey: \(inside)")
+        let outside = pixel(renderer.compose(screen: screen, camera: nil, at: 0.2), 10, 10)
+        #expect(outside[0] < 5 || outside[0] > 250, "untouched: \(outside)")
+        let later = pixel(renderer.compose(screen: screen, camera: nil, at: 2), 200, 125)
+        #expect(later[0] < 5 || later[0] > 250, "inactive after its time: \(later)")
     }
 
     @Test func clickPulseFadesOut() {
