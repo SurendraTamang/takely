@@ -79,9 +79,10 @@ public actor CaptureSession {
         try await serialized { session in try await session.resumeNow() }
     }
 
-    /// Oops-retake: cuts the recording back to the last pause in the microphone (the segment's start if there is
-    /// none) and keeps recording in a new segment. Returns the recording's new duration.
-    public func retake() async throws -> Double {
+    /// Oops-retake: cuts the recording back to the last pause in the microphone (see `SilenceDetector`) and keeps
+    /// recording in a new segment. Returns the recording's new duration and the host time (seconds) the cut
+    /// corresponds to — live features drop what was heard after it.
+    public func retake() async throws -> (duration: Double, cutHostTime: Double) {
         try await serialized { session in try await session.retakeNow() }
     }
 
@@ -162,10 +163,12 @@ public actor CaptureSession {
         try await closeSegment()
     }
 
-    private func retakeNow() async throws -> Double {
+    private func retakeNow() async throws -> (duration: Double, cutHostTime: Double) {
         guard state == .recording, let router, let bundle else { throw CaptureError.invalidState }
         let segmentStart = project?.duration ?? 0
-        let cut = max(segmentStart, router.retakePoint(at: now()))
+        let requested = now()
+        let cut = max(segmentStart, router.retakePoint(at: requested))
+        let removed = max(0, (router.editedTime(at: requested) ?? cut) - cut)
         do {
             try await closeSegment()
         } catch {
@@ -196,7 +199,7 @@ public actor CaptureSession {
             try? FileManager.default.removeItem(at: bundle.sidecarURL(for: dropped.file))
         }
         try await resumeNow()
-        return project?.duration ?? 0
+        return (project?.duration ?? 0, requested.seconds - removed)
     }
 
     private func resumeNow() async throws {

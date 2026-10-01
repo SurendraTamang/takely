@@ -46,3 +46,14 @@ public struct StoppedRecording: Sendable {
         self.failure = failure
     }
 }
+
+/// Live microphone audio: 48 kHz mono samples and the host-clock time (seconds) of the first one.
+public struct MicAudio: Sendable {
+    public let samples: [Float]
+    public let hostTime: Double
+
+    public init(samples: [Float], hostTime: Double) {
+        self.samples = samples
+        self.hostTime = hostTime
+    }
+}

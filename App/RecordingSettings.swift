@@ -44,6 +44,9 @@ final class RecordingSettings {
     /// Takely Pro: transcript and captions, the AI title/summary, and captions drawn into the video.
     var transcribe: Bool { didSet { defaults.set(transcribe, forKey: Key.transcribe) } }
     var aiSummary: Bool { didSet { defaults.set(aiSummary, forKey: Key.aiSummary) } }
+    /// Takely Pro: the prompter follows the voice; the live coach shows pace and fillers while recording.
+    var prompterFollowsVoice: Bool { didSet { defaults.set(prompterFollowsVoice, forKey: Key.prompterFollowsVoice) } }
+    var liveCoach: Bool { didSet { defaults.set(liveCoach, forKey: Key.liveCoach) } }
     var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
@@ -81,6 +84,8 @@ final class RecordingSettings {
         prompterFollowsRecording = defaults.object(forKey: Key.prompterFollowsRecording) as? Bool ?? true
         transcribe = defaults.object(forKey: Key.transcribe) as? Bool ?? true
         aiSummary = defaults.object(forKey: Key.aiSummary) as? Bool ?? true
+        prompterFollowsVoice = defaults.object(forKey: Key.prompterFollowsVoice) as? Bool ?? true
+        liveCoach = defaults.object(forKey: Key.liveCoach) as? Bool ?? true
         burnInCaptions = defaults.bool(forKey: Key.burnInCaptions)
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
@@ -109,6 +114,8 @@ final class RecordingSettings {
         static let controlsOrigin = "controlsOrigin"
         static let transcribe = "transcribe"
         static let aiSummary = "aiSummary"
+        static let prompterFollowsVoice = "prompterFollowsVoice"
+        static let liveCoach = "liveCoach"
         static let burnInCaptions = "burnInCaptions"
         static let prompterScript = "prompterScript"
         static let prompterWordsPerMinute = "prompterWordsPerMinute"

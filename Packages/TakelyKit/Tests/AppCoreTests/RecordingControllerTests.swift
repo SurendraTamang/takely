@@ -61,9 +61,9 @@ final class FakeSession: RecordingSession {
 
     /// What `retake` reports as the recording's new duration.
     var retakeDuration = 0.0
-    func retake() async throws -> Double {
+    func retake() async throws -> (duration: Double, cutHostTime: Double) {
         calls.append("retake")
-        return retakeDuration
+        return (retakeDuration, 1234.5)
     }
 
     func stop() async throws -> StoppedRecording {
@@ -219,7 +219,7 @@ struct Harness {
         await h.controller.start()
         h.time.advance(.seconds(30))
         h.session.retakeDuration = 12.5
-        await h.controller.retake()
+        #expect(await h.controller.retake() == 1234.5)
         #expect(h.session.calls == ["start", "retake"])
         #expect(h.controller.elapsed == .seconds(12.5))
         #expect(h.controller.phase == .recording)

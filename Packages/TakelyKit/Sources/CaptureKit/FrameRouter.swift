@@ -26,6 +26,8 @@ public final class FrameRouter: Sendable {
     private let state: Mutex<State>
     /// Nil when cancellation is off or AEC3 couldn't start: then `mic` gets the raw microphone.
     private let echo: Mutex<EchoCanceller?>
+    /// Who hears the microphone live (Pro: voice-following prompter, coach), and the converter for raw buffers.
+    private let micListener = Mutex<(listener: (@Sendable (MicAudio) -> Void)?, downmixer: Downmixer?)>((nil, nil))
     /// Pauses in the microphone, for the oops-retake; fed from the audio queue.
     private let silence = Mutex<(detector: SilenceDetector, downmixer: Downmixer?)>((SilenceDetector(), nil))
     private let cancelsEcho: Bool
@@ -76,6 +78,25 @@ public final class FrameRouter: Sendable {
 
     public var markers: [Marker] { state.withLock { $0.markers } }
 
+    /// Hears the microphone exactly as the `mic` track gets it (echo-cancelled when cancellation is on), as 48 kHz
+    /// mono, while a segment is recording. Called on the audio queue: keep it quick. Nil stops it.
+    public func setMicListener(_ listener: (@Sendable (MicAudio) -> Void)?) {
+        micListener.withLock { $0 = (listener, nil) }
+    }
+
+    /// Passes a buffer written to `mic` to the listener, if any and if recording.
+    private func forwardMic(_ buffer: CMSampleBuffer) {
+        // Only audio from the running segment: the echo canceller can release audio from before it started.
+        guard state.withLock({ $0.editedTime(at: buffer.presentationTimeStamp) != nil }) else { return }
+        let delivery = micListener.withLock { m -> (@Sendable (MicAudio) -> Void, [Float])? in
+            guard let listener = m.listener else { return nil }
+            if let format = buffer.formatDescription, m.downmixer?.handles(format) == false { m.downmixer = nil }
+            guard let samples = try? Downmixer.convert(buffer, with: &m.downmixer) else { return nil }
+            return (listener, samples)
+        }
+        if let (listener, samples) = delivery { listener(MicAudio(samples: samples, hostTime: buffer.presentationTimeStamp.seconds)) }
+    }
+
     /// Marks the current moment (host time) on the edited timeline; false before the segment's first frame.
     @discardableResult
     public func addMarker(at hostTime: CMTime) -> Bool {
@@ -85,6 +106,9 @@ public final class FrameRouter: Sendable {
             return true
         }
     }
+
+    /// `hostTime` on the edited timeline of the running segment; nil before its first frame or while paused.
+    func editedTime(at hostTime: CMTime) -> Double? { state.withLock { $0.editedTime(at: hostTime) } }
 
     /// Where an oops-retake requested at `hostTime` should cut (edited time): see `SilenceDetector.cutPoint`.
     func retakePoint(at hostTime: CMTime) -> Double {
@@ -143,6 +167,7 @@ public final class FrameRouter: Sendable {
     public func receive(_ buffer: CMSampleBuffer, kind: TrackKind) {
         if kind == .mic { trackSilence(buffer) }
         if cancelsEcho, kind == .system || kind == .mic { return receiveWithEchoCancellation(buffer, kind: kind) }
+        if kind == .mic { forwardMic(buffer) }
         let (writer, offset) = state.withLock { s -> (SegmentWriter?, Double) in
             // Only keep the newest screen frame, so `prime`'s retimed copy can't clobber a newer live one.
             if kind == .screen, s.lastScreen.map({ buffer.presentationTimeStamp > $0.buffer.presentationTimeStamp }) ?? true {
@@ -178,10 +203,16 @@ public final class FrameRouter: Sendable {
     ) {
         echo.withLock { canceller in
             guard let canceller else {
-                if let raw { writer?.append(raw, as: .mic) }
+                if let raw {
+                    writer?.append(raw, as: .mic)
+                    forwardMic(raw)
+                }
                 return
             }
-            for cleaned in body(canceller) { writer?.append(cleaned, as: .mic) }
+            for cleaned in body(canceller) {
+                writer?.append(cleaned, as: .mic)
+                forwardMic(cleaned)
+            }
         }
     }
 

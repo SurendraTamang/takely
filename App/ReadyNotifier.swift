@@ -9,6 +9,8 @@ import SwiftUI
 final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenterDelegate {
     private let center = UNUserNotificationCenter.current()
     private static let category = "recording-ready"
+    /// A line added to the next Ready notification (the live coach's recap), then cleared.
+    var recap: String?
     private static let copyAction = "copy"
     private static let revealAction = "reveal"
 
@@ -51,6 +53,10 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         content.title = "Recording ready"
         let length = Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))
         content.body = title.map { "\($0) · \(length)" } ?? "\(length) · \(url.lastPathComponent)"
+        if let recap {
+            content.body += "\n\(recap)"
+            self.recap = nil
+        }
         content.categoryIdentifier = Self.category
         content.sound = .default
         content.userInfo = ["path": url.path]
