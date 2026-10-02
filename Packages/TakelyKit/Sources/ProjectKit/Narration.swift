@@ -32,6 +32,12 @@ extension ProjectBundle {
         try JSONEncoder().encode(narration).write(to: narrationIndexURL, options: .atomic)
     }
 
+    /// What the captions say: the transcript, or the narration when nothing was transcribed (no microphone, or
+    /// nothing said into it).
+    public func captionTranscript() -> Transcript? {
+        (try? readTranscript()).flatMap { $0.phrases.isEmpty ? nil : $0 } ?? narrationTranscript()
+    }
+
     /// The narration as a transcript (one phrase per line), for captions when nothing was transcribed.
     public func narrationTranscript() -> Transcript? {
         guard let clips = try? readNarration(), !clips.isEmpty else { return nil }

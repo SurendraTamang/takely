@@ -28,7 +28,7 @@ public struct Exporter: Sendable {
         let cues = built.cues.compactMap { cue in
             map.output(TimeRange(start: cue.start, end: cue.end)).map { CaptionCue(start: $0.start, end: $0.end, text: cue.text) }
         }
-        let transcript = try? bundle.readTranscript()
+        let transcript = bundle.captionTranscript()
 
         // Export under a temporary name and move it into place only when complete, so a crash mid-export
         // never leaves a partial MP4 that looks finished (recovery keys on `hasExport`).
@@ -114,7 +114,8 @@ public struct Exporter: Sendable {
         guard !project.segments.isEmpty else { throw RenderError.emptyRecording }
         let cursorTrack = try bundle.readCursor()
         // Captions: the transcript, or else the narration's own text (exact, nothing to recognize).
-        let cues = ((try? bundle.readTranscript()) ?? bundle.narrationTranscript())?.cues() ?? []
+        let transcript = bundle.captionTranscript()
+        let cues = transcript?.cues() ?? []
         let narration = (try? bundle.readNarration()) ?? []
         let renderer = FrameRenderer(
             project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions(), zooms: edits.zooms)
@@ -167,12 +168,13 @@ public struct Exporter: Sendable {
         }
         guard let screenTrack = tracks[.screen] else { throw RenderError.trackMismatch("no screen track") }
 
-        // Narration: each clip whole, where its line was spoken (a clip whose moment was cut is left out).
+        // Narration: each clip where its line was spoken (one whose moment was cut starts at the join), never past the
+        // end of the video.
         var narrationTrack: AVMutableCompositionTrack?
         var narrationAssets: [AVURLAsset] = []  // referenced until inserted (tracks hold their asset weakly)
         var spoken = CMTime.zero
         for clip in narration {
-            guard let t = map.outputTime(clip.t) else { continue }
+            let t = map.position(clip.t)
             let asset = AVURLAsset(url: bundle.narrationURL.appending(path: clip.file))
             narrationAssets.append(asset)
             guard let source = try? await asset.loadTracks(withMediaType: .audio).first, let range = try? await source.load(.timeRange)
@@ -180,8 +182,11 @@ public struct Exporter: Sendable {
             let track = try narrationTrack ?? addTrack(.mic, to: composition)
             narrationTrack = track
             let at = CMTimeMaximum(CMTime(seconds: t, preferredTimescale: 48_000), spoken)
-            try track.insertTimeRange(range, of: source, at: at)
-            spoken = at + range.duration
+            let room = CMTime(seconds: map.outputDuration, preferredTimescale: 48_000) - at
+            guard room > .zero else { continue }
+            let length = CMTimeMinimum(range.duration, room)
+            try track.insertTimeRange(CMTimeRange(start: range.start, duration: length), of: source, at: at)
+            spoken = at + length
         }
         _ = narrationAssets
 

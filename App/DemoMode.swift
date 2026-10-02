@@ -50,13 +50,23 @@
         }
 
         private func run(_ script: DemoScript, voice: AVSpeechSynthesisVoice?, recorder: AppDemoRecorder) async {
+            guard runner == nil else { return }  // one demo at a time
             guard MacActions.isTrusted(prompt: true) else {
                 model.message = DemoError.accessibilityNeeded.localizedDescription
                 return
             }
+            if !script.riskySteps.isEmpty, !confirmRisky(script.riskySteps) { return }
+            model.running = true
+            defer { model.running = false }
             let runner = DemoRunner(script: script, actions: GuardedActions(), recorder: recorder, narrator: Narrator(voice: voice))
             self.runner = runner
             runner.onFailure = { [weak self] index, error in await self?.askAfterFailure(index, error) ?? .stop }
+            // Once the steps are over, hand the keyboard back (stopping and exporting can take a while).
+            runner.onStepsDone = { [weak self] in
+                KeyboardShortcuts.disable(.stopDemo)
+                self?.banner?.orderOut(nil)
+                self?.banner = nil
+            }
             // Out of the way: the demo's clicks and keys go to the front app, which mustn't be Takely.
             window?.orderOut(nil)
             NSApp.hide(nil)
@@ -70,16 +80,25 @@
             }
             let result = await runner.run()
             observer.cancel()
-            KeyboardShortcuts.disable(.stopDemo)
-            banner?.orderOut(nil)
-            banner = nil
             self.runner = nil
             switch result {
-            case .finished: model.message = "Recorded. The video is being finished — it appears in the Ready notification."
+            case .finished: model.message = "Recorded and saved — see the Ready notification."
+            case .endedEarly: model.message = "The recording stopped before the demo finished; what was recorded is saved."
             case .failed(let message): model.message = message
             case .idle, .running: break
             }
             show()
+        }
+
+        /// Plans that can quit, delete, send, buy or open a terminal run only after a yes.
+        private func confirmRisky(_ steps: [String]) -> Bool {
+            let alert = NSAlert()
+            alert.messageText = "This plan has steps that may be hard to undo"
+            alert.informativeText = steps.joined(separator: "\n") + "\n\nRun it anyway?"
+            alert.addButton(withTitle: "Run")
+            alert.addButton(withTitle: "Cancel")
+            alert.alertStyle = .warning
+            return alert.runModal() == .alertFirstButtonReturn
         }
 
         /// A step failed: Retry, Skip or Stop. The app that was in front comes back afterwards, so a retry lands in it.
@@ -106,12 +125,14 @@
         /// A small banner at the top of the screen (Takely's windows aren't recorded).
         private func showBanner(steps: Int) {
             let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-            let host = NSHostingView(rootView: DemoBanner(model: model) { [weak self] in self?.runner?.cancel() })
+            let host = NSHostingView(rootView: DemoBanner(model: model))
             let size = host.fittingSize
             let panel = OverlayPanel(
                 frame: CGRect(x: screen.midX - size.width / 2, y: screen.maxY - size.height - 8, width: size.width, height: size.height),
                 activating: false, level: .statusBar)
             panel.takesKeys = false
+            panel.ignoresMouseEvents = true  // a click aimed under it goes through (it's not recorded either way)
+            panel.canHide = false  // stays up while Takely is hidden, without bringing its other windows back
             panel.contentView = host
             panel.orderFrontRegardless()
             banner = panel
@@ -162,6 +183,15 @@
 
         var bundle: ProjectBundle? { coordinator.controller.recordingBundle }
 
+        var status: DemoRecordingStatus {
+            switch coordinator.controller.phase {
+            case .recording: .recording
+            case .paused: .paused
+            case .starting: .recording
+            case .idle, .stopping, .exporting: .stopped
+            }
+        }
+
         func now() -> Double? {
             coordinator.session.active?.router.editedTime(at: CMClockGetTime(CMClockGetHostTimeClock()))
         }
@@ -183,6 +213,7 @@
         var message: String?
         var progress = ""
         var planning = false
+        var running = false
         var voices: [AVSpeechSynthesisVoice] = AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language.hasPrefix(Locale.current.language.languageCode?.identifier ?? "en") }
             .sorted { $0.quality.rawValue > $1.quality.rawValue }
@@ -210,7 +241,13 @@
                 defer { planning = false }
                 do {
                     let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.compactMap(\.localizedName)
-                    plan = try await DemoPlanner.plan(goal: goal, apps: apps)
+                    let before = plan
+                    let written = try await DemoPlanner.plan(goal: goal, apps: apps)
+                    guard plan == before else {  // edited while it was being written: keep the person's text
+                        message = "The plan was edited while writing; kept your version."
+                        return
+                    }
+                    plan = written
                     message = "Check the plan before running it."
                 } catch {
                     message = "Couldn't write a plan: \(error.localizedDescription)"
@@ -271,7 +308,7 @@
                     Spacer()
                     Button("Run & Record") { model.start() }
                         .keyboardShortcut(.defaultAction)
-                        .disabled((try? model.parsed.get())?.steps.isEmpty ?? true)
+                        .disabled((try? model.parsed.get())?.steps.isEmpty ?? true || model.running || model.planning)
                 }
                 if let message = model.message { Text(message).font(.callout).foregroundStyle(.secondary) }
                 Text("Takely clicks and types for you while recording. Press Esc to stop; the recording so far is kept.")
@@ -283,13 +320,11 @@
 
     private struct DemoBanner: View {
         let model: DemoModel
-        let stop: () -> Void
 
         var body: some View {
             HStack(spacing: 10) {
                 Image(systemName: "record.circle").foregroundStyle(.red)
                 Text("Demo running · \(model.progress) · Esc to stop").font(.callout)
-                Button("Stop", action: stop).controlSize(.small)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

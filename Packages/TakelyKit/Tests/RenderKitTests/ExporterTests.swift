@@ -291,6 +291,27 @@ import Testing
         #expect(vtt.contains("00:00:01.000 --> 00:00:02.000\nHere is the demo."))
     }
 
+    @Test func narrationInACutStartsAtTheJoinAndNeverOutlastsTheVideo() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 3, tracks: [.screen])], cameraEnabled: false)
+        try FileManager.default.createDirectory(at: bundle.narrationURL, withIntermediateDirectories: true)
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000))
+        buffer.frameLength = 48_000
+        for i in 0..<48_000 { buffer.floatChannelData![0][i] = 0.3 * sin(2 * .pi * 440 * Float(i) / 48_000) }
+        for name in ["a.caf", "b.caf"] {
+            try AVAudioFile(forWriting: bundle.narrationURL.appending(path: name), settings: format.settings).write(from: buffer)
+        }
+        try bundle.write([
+            NarrationClip(t: 0.2, duration: 1, file: "a.caf", text: "Opening line."),  // starts inside the cut
+            NarrationClip(t: 2.3, duration: 1, file: "b.caf", text: "Closing line."),  // runs past the end
+        ])
+        let built = try await Exporter.compose(bundle, edits: Edits(cuts: [TimeRange(start: 0, end: 0.5)]))
+        let narration = try #require(built.composition.tracks(withMediaType: .audio).first)
+        let starts = (narration.segments ?? []).filter { !$0.isEmpty }.map { ($0.timeMapping.target.start.seconds * 100).rounded() / 100 }
+        #expect(starts == [0, 1.8])
+        #expect(narration.timeRange.end.seconds <= built.map.outputDuration + 0.01)  // no frozen tail
+    }
+
     @Test func oddCutsLeaveNoGapsInAnyTrack() async throws {
         let bundle = try await makeBundle(
             segments: [SegSpec(seconds: 2, tracks: [.screen, .mic]), SegSpec(seconds: 2, tracks: [.screen, .mic])], cameraEnabled: false)
