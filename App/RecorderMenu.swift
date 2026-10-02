@@ -1,6 +1,7 @@
 import AppCore
 import CaptureKit
 import ProjectKit
+import ShareKit
 import SwiftUI
 
 struct RecorderMenu: View {
@@ -10,6 +11,7 @@ struct RecorderMenu: View {
     var openEditor: ((ProjectBundle) -> Void)?
     /// Opens Demo Mode (Takely Pro); nil without it.
     var openDemo: (() -> Void)?
+    var sharing: Sharing?
 
     private var controller: RecordingController { model.controller }
 
@@ -31,6 +33,7 @@ struct RecorderMenu: View {
             if let error = controller.errorMessage {
                 warning(error)
             }
+            if let sharing { shareStatus(sharing) }
             Divider()
             HStack {
                 if let url = controller.lastRecording {
@@ -53,6 +56,54 @@ struct RecorderMenu: View {
         }
         .padding(16)
         .frame(width: 320)
+    }
+
+    /// The last recording's sharing: progress, its link (copy, open, stop sharing), or Share Link.
+    @ViewBuilder
+    private func shareStatus(_ sharing: Sharing) -> some View {
+        if controller.phase == .idle, let url = controller.lastRecording, url.pathExtension == "mp4",
+            let bundle = ProjectBundle.containing(url)
+        {
+            let state = sharing.state.bundle == bundle.url ? sharing.state : .idle
+            switch state {
+            case .uploading(_, let progress):
+                ProgressView("Uploading…", value: progress)
+            case .failed(_, let message):
+                warning(message)
+                HStack {
+                    Spacer()
+                    Button("Retry") { sharing.share(bundle) }
+                }
+            case .shared, .idle:
+                if let record = bundle.readShareRecord(), record.complete {
+                    HStack {
+                        Text("Shared").font(.callout).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Copy Link") { Sharing.copy(record.url) }
+                        Button("Stop Sharing") {
+                            if confirmStopSharing() { Task { await sharing.unshare(bundle) } }
+                        }
+                    }
+                } else {
+                    HStack {
+                        Spacer()
+                        Button("Share Link") { sharing.share(bundle) }
+                            .disabled(!sharing.isConfigured)
+                            .help(sharing.isConfigured ? "Upload to your bucket and copy the link" : "Set up sharing in Settings › Share")
+                    }
+                }
+            }
+        }
+    }
+
+    private func confirmStopSharing() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Stop sharing this recording?"
+        alert.informativeText =
+            "Its files are deleted from your bucket and the link stops working. A CDN may keep cached copies for a while."
+        alert.addButton(withTitle: "Stop Sharing")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func warning(_ text: String) -> some View {

@@ -9,12 +9,14 @@ struct SettingsView: View {
     @Bindable var settings: RecordingSettings
     let permissions: Permissions
     let showOnboarding: () -> Void
+    let sharing: Sharing
 
     var body: some View {
         TabView {
             Tab("General", systemImage: "gearshape") { general }
             Tab("Recording", systemImage: "record.circle") { recording }
             Tab("Shortcuts", systemImage: "keyboard") { shortcuts }
+            Tab("Share", systemImage: "link") { ShareSettingsView(sharing: sharing) }
             Tab("Automation", systemImage: "terminal") { automation }
             Tab("Permissions", systemImage: "lock.shield") { permissionsTab }
         }

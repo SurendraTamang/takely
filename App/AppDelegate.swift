@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let settings = RecordingSettings()
     let permissions = Permissions()
     private let notifier = ReadyNotifier()
+    private lazy var sharing = Sharing(settings: settings, notifier: notifier)
     private let camera = CameraController()
     private lazy var session = LiveRecordingSession(settings: settings, camera: camera)
     private(set) lazy var controller = RecordingController(
@@ -85,9 +86,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let openDemo: (() -> Void)? = nil
         #endif
         notifier.onEdit = openEditor
+        notifier.onShare = { [weak self] bundle in
+            guard let self else { return }
+            if sharing.isConfigured { sharing.share(bundle) } else { showSettings() }
+        }
+        notifier.onExported = { [weak self] url in self?.sharing.recordingExported(url) }
         notifier.activate()
         let statusItem = StatusItemController(
-            model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor, openDemo: openDemo)
+            model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor, openDemo: openDemo,
+            sharing: sharing)
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         automation = Automation(host: coordinator, settings: settings)
@@ -241,7 +248,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             settingsWindow
             ?? makeWindow(
                 title: "Takely Settings",
-                content: SettingsView(settings: settings, permissions: permissions) { [weak self] in self?.showOnboarding() })
+                content: SettingsView(
+                    settings: settings, permissions: permissions, showOnboarding: { [weak self] in self?.showOnboarding() },
+                    sharing: sharing))
         settingsWindow = window
         present(window)
     }

@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "RenderKit", targets: ["RenderKit"]),
         .library(name: "AppCore", targets: ["AppCore"]),
         .library(name: "TakelyControl", targets: ["TakelyControl"]),
+        .library(name: "ShareKit", targets: ["ShareKit"]),
         .executable(name: "takely", targets: ["takely"]),
     ],
     targets: [
@@ -23,12 +24,16 @@ let package = Package(
         .target(name: "AppCore", dependencies: ["ProjectKit", "CaptureKit", "RenderKit", "TakelyControl"]),
         // Automation transport (CLI ↔ app); Foundation only, so the CLI stays small.
         .target(name: "TakelyControl"),
+        // Uploading to the user's own S3-compatible bucket (R2, S3, B2, MinIO) with a player page.
+        .target(name: "ShareKit", dependencies: ["ProjectKit"]),
         .executableTarget(name: "takely", dependencies: ["TakelyControl"]),
         .target(name: "TestSupport", path: "Tests/TestSupport"),
         .testTarget(name: "ProjectKitTests", dependencies: ["ProjectKit"]),
         .testTarget(name: "CaptureKitTests", dependencies: ["CaptureKit", "TestSupport", "WebRTCAEC"]),
         .testTarget(name: "RenderKitTests", dependencies: ["RenderKit", "CaptureKit", "TestSupport"]),
-        .testTarget(name: "AppCoreTests", dependencies: ["AppCore", "CaptureKit", "ProjectKit", "RenderKit", "TestSupport", "TakelyControl"]),
+        .testTarget(
+            name: "AppCoreTests", dependencies: ["AppCore", "CaptureKit", "ProjectKit", "RenderKit", "TestSupport", "TakelyControl"]),
         .testTarget(name: "TakelyControlTests", dependencies: ["TakelyControl"]),
+        .testTarget(name: "ShareKitTests", dependencies: ["ShareKit", "ProjectKit"]),
     ]
 )

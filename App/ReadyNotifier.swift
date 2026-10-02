@@ -18,6 +18,11 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
     /// Opens the blur review for a recording's bundle (the notification's Review action).
     var onReview: ((ProjectBundle) -> Void)?
     private static let editAction = "edit"
+    private static let shareAction = "share"
+    private static let linkCategory = "link-ready"
+    /// Uploads a recording to the user's bucket (the Share action), and runs after each export (auto-upload).
+    var onShare: ((ProjectBundle) -> Void)?
+    var onExported: ((URL) -> Void)?
     private static let meetingCategory = "meeting"
     private static let meetingRequest = "meeting-offer"
     private nonisolated static let recordMeetingAction = "record-meeting"
@@ -36,8 +41,10 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
                     UNNotificationAction(identifier: Self.copyAction, title: "Copy"),
                     UNNotificationAction(identifier: Self.revealAction, title: "Reveal in Finder"),
                     UNNotificationAction(identifier: Self.reviewAction, title: "Review Blurs", options: .foreground),
+                    UNNotificationAction(identifier: Self.shareAction, title: "Share Link"),
                 ] + (onEdit == nil ? [] : [UNNotificationAction(identifier: Self.editAction, title: "Edit", options: .foreground)]),
                 intentIdentifiers: []),
+            UNNotificationCategory(identifier: Self.linkCategory, actions: [], intentIdentifiers: []),
             UNNotificationCategory(
                 identifier: Self.meetingCategory,
                 actions: [UNNotificationAction(identifier: Self.recordMeetingAction, title: "Record")],
@@ -58,6 +65,19 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         try? await center.add(UNNotificationRequest(identifier: Self.meetingRequest, content: content, trigger: nil))
     }
 
+    /// "Link copied": the shared recording's link is on the clipboard (clicking opens the page).
+    func linkReady(_ link: URL, title: String) async {
+        announce("Link copied")
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Link copied"
+        content.body = "\(title)\n\(link.absoluteString)"
+        content.categoryIdentifier = Self.linkCategory
+        content.userInfo = ["link": link.absoluteString]
+        try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
     func withdrawMeetingOffer() {
         center.removeDeliveredNotifications(withIdentifiers: [Self.meetingRequest])
     }
@@ -68,6 +88,7 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
 
     func recordingReady(_ url: URL, duration: Double, title: String?) async {
         announce("Recording ready")
+        onExported?(url)
         switch await center.notificationSettings().authorizationStatus {
         case .authorized, .provisional:
             await post(url, duration: duration, title: title)
@@ -132,6 +153,10 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
             if response.actionIdentifier == Self.recordMeetingAction { await MainActor.run { self.onRecordMeeting?() } }
             return
         }
+        if let link = (response.notification.request.content.userInfo["link"] as? String).flatMap(URL.init(string:)) {
+            await MainActor.run { _ = NSWorkspace.shared.open(link) }
+            return
+        }
         guard let path = response.notification.request.content.userInfo["path"] as? String else { return }
         let url = URL(filePath: path)
         let action = response.actionIdentifier
@@ -141,6 +166,7 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
             case Self.revealAction: self.reveal(url)
             case Self.reviewAction: ProjectBundle.containing(url).map { self.onReview?($0) }
             case Self.editAction: ProjectBundle.containing(url).map { self.onEdit?($0) }
+            case Self.shareAction: ProjectBundle.containing(url).map { self.onShare?($0) }
             default: Self.openInQuickTime(url)
             }
         }
