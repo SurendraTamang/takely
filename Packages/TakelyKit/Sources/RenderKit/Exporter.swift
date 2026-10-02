@@ -113,7 +113,9 @@ public struct Exporter: Sendable {
         let project = try bundle.readProject()
         guard !project.segments.isEmpty else { throw RenderError.emptyRecording }
         let cursorTrack = try bundle.readCursor()
-        let cues = (try? bundle.readTranscript())?.cues() ?? []
+        // Captions: the transcript, or else the narration's own text (exact, nothing to recognize).
+        let cues = ((try? bundle.readTranscript()) ?? bundle.narrationTranscript())?.cues() ?? []
+        let narration = (try? bundle.readNarration()) ?? []
         let renderer = FrameRenderer(
             project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions(), zooms: edits.zooms)
         let map = EditMap(cuts: edits.cuts, duration: project.duration)
@@ -165,10 +167,28 @@ public struct Exporter: Sendable {
         }
         guard let screenTrack = tracks[.screen] else { throw RenderError.trackMismatch("no screen track") }
 
+        // Narration: each clip whole, where its line was spoken (a clip whose moment was cut is left out).
+        var narrationTrack: AVMutableCompositionTrack?
+        var narrationAssets: [AVURLAsset] = []  // referenced until inserted (tracks hold their asset weakly)
+        var spoken = CMTime.zero
+        for clip in narration {
+            guard let t = map.outputTime(clip.t) else { continue }
+            let asset = AVURLAsset(url: bundle.narrationURL.appending(path: clip.file))
+            narrationAssets.append(asset)
+            guard let source = try? await asset.loadTracks(withMediaType: .audio).first, let range = try? await source.load(.timeRange)
+            else { continue }
+            let track = try narrationTrack ?? addTrack(.mic, to: composition)
+            narrationTrack = track
+            let at = CMTimeMaximum(CMTime(seconds: t, preferredTimescale: 48_000), spoken)
+            try track.insertTimeRange(range, of: source, at: at)
+            spoken = at + range.duration
+        }
+        _ = narrationAssets
+
         let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
         let passthrough =
             !needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
-            && !renderer.hasCaptions && !renderer.hasRedactions && !renderer.hasZooms && !map.hasCuts
+            && !renderer.hasCaptions && !renderer.hasRedactions && !renderer.hasZooms && !map.hasCuts && narrationTrack == nil
             && presentAudioKinds.count <= 1
             && !audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
         guard !passthrough else {

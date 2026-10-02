@@ -19,6 +19,8 @@ public final class RecordingController {
     public var errorMessage: String?
     /// The last export, or the saved bundle if its export failed.
     public private(set) var lastRecording: URL?
+    /// The bundle being recorded into, while recording.
+    public var recordingBundle: ProjectBundle? { current?.bundle }
     /// True while a command runs; the UI disables its buttons.
     public private(set) var isBusy = false
 

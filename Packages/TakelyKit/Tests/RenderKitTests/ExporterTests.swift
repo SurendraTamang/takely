@@ -274,6 +274,23 @@ import Testing
         #expect(built.map.outputDuration == 1.5 || abs(built.map.outputDuration - 1.5) < 0.05)
     }
 
+    @Test func narrationIsMixedInAndBecomesTheCaptions() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 3, tracks: [.screen])], cameraEnabled: false)
+        try FileManager.default.createDirectory(at: bundle.narrationURL, withIntermediateDirectories: true)
+        // 1 s of a 440 Hz tone, as the speech synthesizer would write it.
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000))
+        buffer.frameLength = 48_000
+        for i in 0..<48_000 { buffer.floatChannelData![0][i] = 0.3 * sin(2 * .pi * 440 * Float(i) / 48_000) }
+        let file = try AVAudioFile(forWriting: bundle.narrationURL.appending(path: "000.caf"), settings: format.settings)
+        try file.write(from: buffer)
+        try bundle.write([NarrationClip(t: 1, duration: 1, file: "000.caf", text: "Here is the demo.")])
+        let asset = AVURLAsset(url: try await Exporter().export(bundle))
+        #expect(try await asset.loadTracks(withMediaType: .audio).count == 1)  // a screen-only recording now has sound
+        let vtt = try String(contentsOf: bundle.captionsURL, encoding: .utf8)
+        #expect(vtt.contains("00:00:01.000 --> 00:00:02.000\nHere is the demo."))
+    }
+
     @Test func oddCutsLeaveNoGapsInAnyTrack() async throws {
         let bundle = try await makeBundle(
             segments: [SegSpec(seconds: 2, tracks: [.screen, .mic]), SegSpec(seconds: 2, tracks: [.screen, .mic])], cameraEnabled: false)

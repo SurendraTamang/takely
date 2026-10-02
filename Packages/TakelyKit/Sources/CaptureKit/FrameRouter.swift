@@ -108,7 +108,7 @@ public final class FrameRouter: Sendable {
     }
 
     /// `hostTime` on the edited timeline of the running segment; nil before its first frame or while paused.
-    func editedTime(at hostTime: CMTime) -> Double? { state.withLock { $0.editedTime(at: hostTime) } }
+    public func editedTime(at hostTime: CMTime) -> Double? { state.withLock { $0.editedTime(at: hostTime) } }
 
     /// Where an oops-retake requested at `hostTime` should cut (edited time): see `SilenceDetector.cutPoint`.
     func retakePoint(at hostTime: CMTime) -> Double {
