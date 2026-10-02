@@ -15,8 +15,13 @@ final class MeetingMonitor {
     private let notifier: ReadyNotifier
     private var watcher = MeetingWatcher()
     private var poller: Task<Void, Never>?
-    /// The meeting Takely is recording (it stops the recording when the call ends).
-    private var recording: Meeting?
+    /// The recording Takely started for the current call (its bundle): only that one is stopped when the call ends,
+    /// never one the person started themselves.
+    private var meetingBundle: URL?
+    /// The call ended while its recording couldn't be stopped yet (busy): try again.
+    private var stopPending = false
+    /// A call that started while Takely was busy (exporting…): offered once it's free, if the call is still on.
+    private var waitingOffer: Meeting?
     private let log = Logger(subsystem: "app.takely", category: "meetings")
 
     init(settings: RecordingSettings, controller: RecordingController, session: LiveRecordingSession, notifier: ReadyNotifier) {
@@ -27,37 +32,67 @@ final class MeetingMonitor {
         notifier.onRecordMeeting = { [weak self] in Task { await self?.recordCurrent() } }
     }
 
-    /// Polls every 2 s (a handful of cheap system queries).
+    /// Polls every 2 s (a few milliseconds of system queries).
     func start() {
         poller = Task { [weak self] in
             while !Task.isCancelled {
-                self?.check()
+                guard let self else { return }
+                self.check()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
     }
 
     private func check() {
-        guard settings.detectMeetings else { return }
+        // The meeting recording is over (stopped by the person, or failed): forget it.
+        if controller.phase == .idle, !controller.isBusy, meetingBundle != nil {
+            meetingBundle = nil
+            stopPending = false
+            session.meetingMode = false
+        }
+        guard settings.detectMeetings else {
+            watcher = MeetingWatcher()  // a call in progress when it's turned back on is a new one
+            waitingOffer = nil
+            return
+        }
+        if stopPending { stopMeetingRecording() }
+        if let waiting = waitingOffer, controller.phase == .idle, !controller.isBusy {
+            waitingOffer = nil
+            if watcher.current == waiting { offer(waiting) }
+        }
         switch watcher.update(Self.snapshot()) {
         case .started(let meeting):
             log.info("meeting started: \(meeting.service)")
-            guard controller.phase == .idle, !controller.isBusy else { return }  // already recording something
-            if settings.autoRecordMeetings {
-                Task { await record(meeting) }
-            } else {
-                Task { await notifier.meetingDetected(meeting.service) }
-            }
+            if controller.phase == .idle, !controller.isBusy { offer(meeting) } else { waitingOffer = meeting }
         case .ended(let meeting):
             log.info("meeting ended: \(meeting.service)")
             notifier.withdrawMeetingOffer()
-            if recording != nil, controller.isRecording {
-                Task { await controller.stop() }
-            }
-            recording = nil
+            waitingOffer = nil
+            stopPending = meetingBundle != nil
+            stopMeetingRecording()
         case nil:
             break
         }
+    }
+
+    private func offer(_ meeting: Meeting) {
+        if settings.autoRecordMeetings {
+            Task { await record(meeting) }
+        } else {
+            Task { await notifier.meetingDetected(meeting.service) }
+        }
+    }
+
+    /// Stops the recording Takely started for the call — only if that's the one running.
+    private func stopMeetingRecording() {
+        guard stopPending, let meetingBundle else { return stopPending = false }
+        guard controller.recordingBundle?.url == meetingBundle, controller.isRecording else {
+            if controller.phase == .idle { stopPending = false }  // already stopped
+            return
+        }
+        guard !controller.isBusy else { return }  // retried on the next poll
+        stopPending = false
+        Task { await controller.stop() }
     }
 
     /// The notification's Record action.
@@ -68,24 +103,30 @@ final class MeetingMonitor {
 
     private func record(_ meeting: Meeting) async {
         guard controller.phase == .idle, !controller.isBusy else { return }
-        if let id = meeting.windowID,
-            let window = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false).windows
-                .first(where: { $0.windowID == id })
-        {
-            session.target = .window(window)
-        } else {
-            session.target = .display
+        // The call's window if it's on screen; else the display.
+        var window: SCWindow?
+        if let id = meeting.windowID {
+            window = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true).windows.first {
+                $0.windowID == id
+            }
         }
+        // The person may have started a recording meanwhile: leave it alone.
+        guard controller.phase == .idle, !controller.isBusy, watcher.current == meeting else { return }
+        session.target = window.map { .window($0) } ?? .display
         session.meetingMode = true
-        recording = meeting
         await controller.start()
-        if !controller.isRecording { recording = nil }
+        if controller.isRecording, let bundle = controller.recordingBundle {
+            meetingBundle = bundle.url
+        } else {
+            session.meetingMode = false  // didn't start (or isn't ours): the next recording is an ordinary one
+        }
     }
 
     // MARK: The Mac's state
 
     static func snapshot() -> MeetingSnapshot {
-        MeetingSnapshot(micUsers: micUsers(), windows: windows())
+        let users = micUsers()
+        return MeetingSnapshot(micUsers: users, windows: users.contains(where: MeetingWatcher.isCandidate) ? windows() : [])
     }
 
     /// Bundle identifiers of the processes with an audio input running (Core Audio's process objects, macOS 14.4+).

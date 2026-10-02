@@ -36,7 +36,8 @@ final class LiveRecordingSession: RecordingSession {
     let countdown = Countdown()
     /// Overrides the countdown setting for the next start only (automation can skip it).
     var countdownOverride: Bool?
-    /// The next start records a call: no camera bubble (the call shows the camera) and no countdown.
+    /// Recording a call (set by the meeting monitor for the whole recording, restarts included): no camera bubble
+    /// (the call shows the camera), no countdown, and both the call's sound and the microphone.
     var meetingMode = false
     let drawing = DrawingOverlay()
     /// Called once the recording runs, to record the bubble's starting place.
@@ -68,10 +69,9 @@ final class LiveRecordingSession: RecordingSession {
 
     private func startNow(in folder: URL) async throws -> RecordingHandle {
         let meeting = meetingMode
-        meetingMode = false
         let useCamera = settings.camera && !meeting
         if useCamera, !(await AVCaptureDevice.requestAccess(for: .video)) { throw LiveSessionError.cameraDenied }
-        if settings.microphone, !(await AVCaptureDevice.requestAccess(for: .audio)) { throw LiveSessionError.microphoneDenied }
+        if settings.microphone || meeting, !(await AVCaptureDevice.requestAccess(for: .audio)) { throw LiveSessionError.microphoneDenied }
         let (filter, captureRect, sourceRect, kind) = try await capture(target)
         let scale = Double(filter.pointPixelScale)
         var config = RecordingConfig(

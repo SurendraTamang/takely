@@ -20,7 +20,7 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
     private static let editAction = "edit"
     private static let meetingCategory = "meeting"
     private static let meetingRequest = "meeting-offer"
-    private static let recordMeetingAction = "record-meeting"
+    private nonisolated static let recordMeetingAction = "record-meeting"
     /// Starts recording the meeting that was just detected (the notification's Record action).
     var onRecordMeeting: (() -> Void)?
     /// Opens the editor (Takely Pro); set before `activate`, which offers the Edit action only when it's set.
@@ -47,7 +47,8 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
 
     /// "Google Meet call started — Record?" (replaced by the next offer; withdrawn when the call ends).
     func meetingDetected(_ service: String) async {
-        let status = await center.notificationSettings().authorizationStatus
+        var status = await center.notificationSettings().authorizationStatus
+        if status == .notDetermined, await requestAuthorization() { status = .authorized }
         guard status == .authorized || status == .provisional else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(service) call started"
@@ -127,9 +128,8 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         if response.notification.request.content.userInfo["meeting"] != nil {
-            // Record (or a click on the notification itself); dismissing does nothing.
-            guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { return }
-            await MainActor.run { self.onRecordMeeting?() }
+            // Only the Record button records: clicking the notification to read or clear it never does.
+            if response.actionIdentifier == Self.recordMeetingAction { await MainActor.run { self.onRecordMeeting?() } }
             return
         }
         guard let path = response.notification.request.content.userInfo["path"] as? String else { return }

@@ -61,10 +61,31 @@ public struct MeetingWatcher: Sendable {
         return nil
     }
 
+    /// Processes that hold the mic for an app: FaceTime's calls run in avconferenced; Safari's pages capture in the
+    /// WebKit GPU process (shared by every app with a web view, so Safari still needs a meeting page in front).
+    static let aliases = ["com.apple.avconferenced": "com.apple.FaceTime", "com.apple.WebKit.GPU": "com.apple.Safari"]
+
     /// A helper process's bundle (com.google.Chrome.helper, us.zoom.CptHost…) as its app's, when it's one we know.
     public static func owningApp(_ bundleID: String) -> String {
+        if let app = aliases[bundleID] { return app }
         let known = Set(apps.keys).union(browsers)
         return known.first { bundleID == $0 || bundleID.hasPrefix($0 + ".") } ?? bundleID
+    }
+
+    /// Whether a mic user could be a call (only then are window titles worth reading).
+    public static func isCandidate(_ bundleID: String) -> Bool { apps[bundleID] != nil || browsers.contains(bundleID) }
+
+    /// The call's own window, for apps whose call window can be told apart by its title; otherwise none (the
+    /// display is recorded rather than, say, Slack's channels).
+    static func callWindow(_ bundleID: String, _ title: String) -> Bool {
+        let t = title.lowercased()
+        switch bundleID {
+        case "us.zoom.xos": return t.contains("zoom meeting") || t.contains("zoom webinar")
+        case "com.apple.FaceTime": return !t.isEmpty
+        case "com.microsoft.teams2", "com.microsoft.teams": return t.contains("meeting") || t.contains("call")
+        case "Cisco-Systems.Spark", "com.cisco.webexmeetingsapp": return t.contains("meeting")
+        default: return false
+        }
     }
 
     public static let startAfter = 3.0
@@ -108,7 +129,10 @@ public struct MeetingWatcher: Sendable {
     static func meeting(in snapshot: MeetingSnapshot) -> Meeting? {
         for bundle in snapshot.micUsers.sorted() {
             if let service = apps[bundle] {
-                let window = snapshot.windows.first { $0.bundleID == bundle && !$0.title.isEmpty }
+                let windows = snapshot.windows.filter { $0.bundleID == bundle }
+                // avconferenced also serves other system audio/video: it's a call only with FaceTime open.
+                if bundle == "com.apple.FaceTime", windows.isEmpty { continue }
+                let window = windows.first { callWindow(bundle, $0.title) }
                 return Meeting(service: service, bundleID: bundle, windowID: window?.id)
             }
             if browsers.contains(bundle),

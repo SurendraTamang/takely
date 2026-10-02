@@ -45,5 +45,17 @@ import Testing
         #expect(MeetingWatcher.webService("Chat | Microsoft Teams") == "Microsoft Teams")
         #expect(MeetingWatcher.owningApp("com.google.Chrome.helper") == "com.google.Chrome")
         #expect(MeetingWatcher.owningApp("us.zoom.xos") == "us.zoom.xos")
+        #expect(MeetingWatcher.owningApp("com.apple.WebKit.GPU") == "com.apple.Safari")
+        // A Slack huddle: the display, not Slack's main window (channels, DMs).
+        let huddle = MeetingSnapshot(
+            micUsers: ["com.tinyspeck.slackmacgap"], windows: [.init(bundleID: "com.tinyspeck.slackmacgap", id: 4, title: "general - Acme")]
+        )
+        #expect(MeetingWatcher.meeting(in: huddle)?.windowID == nil)
+        // avconferenced without FaceTime open isn't a call.
+        #expect(MeetingWatcher.meeting(in: MeetingSnapshot(micUsers: ["com.apple.FaceTime"], windows: [])) == nil)
+        // Safari's web content process with Meet in front is.
+        let safari = MeetingSnapshot(
+            micUsers: ["com.apple.Safari"], windows: [.init(bundleID: "com.apple.Safari", id: 2, title: "Meet - xyz")])
+        #expect(MeetingWatcher.meeting(in: safari)?.service == "Google Meet")
     }
 }

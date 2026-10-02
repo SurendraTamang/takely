@@ -48,7 +48,10 @@ struct SettingsView: View {
             }
             .disabled(!(settings.systemAudio && settings.microphone))
             Toggle("Countdown before recording", isOn: $settings.countdown)
-            Toggle("Offer to record meetings (Zoom, Teams, Google Meet…)", isOn: $settings.detectMeetings)
+            Toggle(isOn: $settings.detectMeetings) {
+                Text("Offer to record meetings (Zoom, Teams, Google Meet…)")
+                Text("Meetings in a browser are recognized by their window title, which needs Screen Recording permission.")
+            }
             Toggle(isOn: $settings.autoRecordMeetings) {
                 Text("Always record meetings, without asking")
                 Text("Tell everyone in the call that you're recording: in many places it's required by law.")
