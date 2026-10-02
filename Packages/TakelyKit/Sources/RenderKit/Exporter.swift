@@ -28,7 +28,7 @@ public struct Exporter: Sendable {
         let cues = built.cues.compactMap { cue in
             map.output(TimeRange(start: cue.start, end: cue.end)).map { CaptionCue(start: $0.start, end: $0.end, text: cue.text) }
         }
-        let transcript = try? bundle.readTranscript()
+        let transcript = bundle.captionTranscript()
 
         // Export under a temporary name and move it into place only when complete, so a crash mid-export
         // never leaves a partial MP4 that looks finished (recovery keys on `hasExport`).
@@ -113,7 +113,10 @@ public struct Exporter: Sendable {
         let project = try bundle.readProject()
         guard !project.segments.isEmpty else { throw RenderError.emptyRecording }
         let cursorTrack = try bundle.readCursor()
-        let cues = (try? bundle.readTranscript())?.cues() ?? []
+        // Captions: the transcript, or else the narration's own text (exact, nothing to recognize).
+        let transcript = bundle.captionTranscript()
+        let cues = transcript?.cues() ?? []
+        let narration = (try? bundle.readNarration()) ?? []
         let renderer = FrameRenderer(
             project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions(), zooms: edits.zooms)
         let map = EditMap(cuts: edits.cuts, duration: project.duration)
@@ -165,10 +168,32 @@ public struct Exporter: Sendable {
         }
         guard let screenTrack = tracks[.screen] else { throw RenderError.trackMismatch("no screen track") }
 
+        // Narration: each clip where its line was spoken (one whose moment was cut starts at the join), never past the
+        // end of the video.
+        var narrationTrack: AVMutableCompositionTrack?
+        var narrationAssets: [AVURLAsset] = []  // referenced until inserted (tracks hold their asset weakly)
+        var spoken = CMTime.zero
+        for clip in narration {
+            let t = map.position(clip.t)
+            let asset = AVURLAsset(url: bundle.narrationURL.appending(path: clip.file))
+            narrationAssets.append(asset)
+            guard let source = try? await asset.loadTracks(withMediaType: .audio).first, let range = try? await source.load(.timeRange)
+            else { continue }
+            let track = try narrationTrack ?? addTrack(.mic, to: composition)
+            narrationTrack = track
+            let at = CMTimeMaximum(CMTime(seconds: t, preferredTimescale: 48_000), spoken)
+            let room = CMTime(seconds: map.outputDuration, preferredTimescale: 48_000) - at
+            guard room > .zero else { continue }
+            let length = CMTimeMinimum(range.duration, room)
+            try track.insertTimeRange(CMTimeRange(start: range.start, duration: length), of: source, at: at)
+            spoken = at + length
+        }
+        _ = narrationAssets
+
         let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
         let passthrough =
             !needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
-            && !renderer.hasCaptions && !renderer.hasRedactions && !renderer.hasZooms && !map.hasCuts
+            && !renderer.hasCaptions && !renderer.hasRedactions && !renderer.hasZooms && !map.hasCuts && narrationTrack == nil
             && presentAudioKinds.count <= 1
             && !audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
         guard !passthrough else {

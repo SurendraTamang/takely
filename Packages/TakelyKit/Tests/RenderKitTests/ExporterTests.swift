@@ -274,6 +274,44 @@ import Testing
         #expect(built.map.outputDuration == 1.5 || abs(built.map.outputDuration - 1.5) < 0.05)
     }
 
+    @Test func narrationIsMixedInAndBecomesTheCaptions() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 3, tracks: [.screen])], cameraEnabled: false)
+        try FileManager.default.createDirectory(at: bundle.narrationURL, withIntermediateDirectories: true)
+        // 1 s of a 440 Hz tone, as the speech synthesizer would write it.
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000))
+        buffer.frameLength = 48_000
+        for i in 0..<48_000 { buffer.floatChannelData![0][i] = 0.3 * sin(2 * .pi * 440 * Float(i) / 48_000) }
+        let file = try AVAudioFile(forWriting: bundle.narrationURL.appending(path: "000.caf"), settings: format.settings)
+        try file.write(from: buffer)
+        try bundle.write([NarrationClip(t: 1, duration: 1, file: "000.caf", text: "Here is the demo.")])
+        let asset = AVURLAsset(url: try await Exporter().export(bundle))
+        #expect(try await asset.loadTracks(withMediaType: .audio).count == 1)  // a screen-only recording now has sound
+        let vtt = try String(contentsOf: bundle.captionsURL, encoding: .utf8)
+        #expect(vtt.contains("00:00:01.000 --> 00:00:02.000\nHere is the demo."))
+    }
+
+    @Test func narrationInACutStartsAtTheJoinAndNeverOutlastsTheVideo() async throws {
+        let bundle = try await makeBundle(segments: [SegSpec(seconds: 3, tracks: [.screen])], cameraEnabled: false)
+        try FileManager.default.createDirectory(at: bundle.narrationURL, withIntermediateDirectories: true)
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000))
+        buffer.frameLength = 48_000
+        for i in 0..<48_000 { buffer.floatChannelData![0][i] = 0.3 * sin(2 * .pi * 440 * Float(i) / 48_000) }
+        for name in ["a.caf", "b.caf"] {
+            try AVAudioFile(forWriting: bundle.narrationURL.appending(path: name), settings: format.settings).write(from: buffer)
+        }
+        try bundle.write([
+            NarrationClip(t: 0.2, duration: 1, file: "a.caf", text: "Opening line."),  // starts inside the cut
+            NarrationClip(t: 2.3, duration: 1, file: "b.caf", text: "Closing line."),  // runs past the end
+        ])
+        let built = try await Exporter.compose(bundle, edits: Edits(cuts: [TimeRange(start: 0, end: 0.5)]))
+        let narration = try #require(built.composition.tracks(withMediaType: .audio).first)
+        let starts = (narration.segments ?? []).filter { !$0.isEmpty }.map { ($0.timeMapping.target.start.seconds * 100).rounded() / 100 }
+        #expect(starts == [0, 1.8])
+        #expect(narration.timeRange.end.seconds <= built.map.outputDuration + 0.01)  // no frozen tail
+    }
+
     @Test func oddCutsLeaveNoGapsInAnyTrack() async throws {
         let bundle = try await makeBundle(
             segments: [SegSpec(seconds: 2, tracks: [.screen, .mic]), SegSpec(seconds: 2, tracks: [.screen, .mic])], cameraEnabled: false)
