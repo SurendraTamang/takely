@@ -18,7 +18,7 @@ struct SettingsView: View {
             Tab("Automation", systemImage: "terminal") { automation }
             Tab("Permissions", systemImage: "lock.shield") { permissionsTab }
         }
-        .frame(width: 480, height: 320)
+        .frame(width: 520, height: 480)
     }
 
     private var general: some View {
@@ -48,6 +48,15 @@ struct SettingsView: View {
             }
             .disabled(!(settings.systemAudio && settings.microphone))
             Toggle("Countdown before recording", isOn: $settings.countdown)
+            Toggle(isOn: $settings.detectMeetings) {
+                Text("Offer to record meetings (Zoom, Teams, Google Meet…)")
+                Text("Meetings in a browser are recognized by their window title, which needs Screen Recording permission.")
+            }
+            Toggle(isOn: $settings.autoRecordMeetings) {
+                Text("Always record meetings, without asking")
+                Text("Tell everyone in the call that you're recording: in many places it's required by law.")
+            }
+            .disabled(!settings.detectMeetings)
             Toggle("Show recording controls", isOn: $settings.showControls)
             Toggle("Scroll the prompter while recording", isOn: $settings.prompterFollowsRecording)
             #if canImport(TakelyPro)

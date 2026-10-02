@@ -36,6 +36,9 @@ final class LiveRecordingSession: RecordingSession {
     let countdown = Countdown()
     /// Overrides the countdown setting for the next start only (automation can skip it).
     var countdownOverride: Bool?
+    /// Recording a call (set by the meeting monitor for the whole recording, restarts included): no camera bubble
+    /// (the call shows the camera), no countdown, and both the call's sound and the microphone.
+    var meetingMode = false
     let drawing = DrawingOverlay()
     /// Called once the recording runs, to record the bubble's starting place.
     var bubbleStart: () -> Void = {}
@@ -65,15 +68,17 @@ final class LiveRecordingSession: RecordingSession {
     }
 
     private func startNow(in folder: URL) async throws -> RecordingHandle {
-        if settings.camera, !(await AVCaptureDevice.requestAccess(for: .video)) { throw LiveSessionError.cameraDenied }
-        if settings.microphone, !(await AVCaptureDevice.requestAccess(for: .audio)) { throw LiveSessionError.microphoneDenied }
+        let meeting = meetingMode
+        let useCamera = settings.camera && !meeting
+        if useCamera, !(await AVCaptureDevice.requestAccess(for: .video)) { throw LiveSessionError.cameraDenied }
+        if settings.microphone || meeting, !(await AVCaptureDevice.requestAccess(for: .audio)) { throw LiveSessionError.microphoneDenied }
         let (filter, captureRect, sourceRect, kind) = try await capture(target)
         let scale = Double(filter.pointPixelScale)
         var config = RecordingConfig(
             target: kind, captureRect: captureRect,
             sourcePixelSize: CaptureGeometry.pixelSize(of: captureRect, scale: scale),
             resolution: settings.resolution, fps: settings.fps, codec: settings.codec,
-            camera: settings.camera, systemAudio: settings.systemAudio, microphone: settings.microphone,
+            camera: useCamera, systemAudio: settings.systemAudio || meeting, microphone: settings.microphone || meeting,
             echoCancellation: settings.removeEcho
         )
         // A saved microphone that's been unplugged falls back to the system default.
@@ -81,7 +86,7 @@ final class LiveRecordingSession: RecordingSession {
         if config.camera { camera.start(deviceID: settings.cameraID) }
         let cameraSession = camera.session
         let cameraQueue = camera.queue
-        let countdown = countdownOverride ?? settings.countdown ? countdown : nil
+        let countdown = !meeting && (countdownOverride ?? settings.countdown) ? countdown : nil
         countdownOverride = nil
         let handle = try await engine.start(
             config: config, in: folder,
