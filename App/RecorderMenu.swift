@@ -8,6 +8,8 @@ struct RecorderMenu: View {
     let openSettings: () -> Void
     /// Opens the editor on a recording (Takely Pro); nil without it.
     var openEditor: ((ProjectBundle) -> Void)?
+    /// Opens Demo Mode (Takely Pro); nil without it.
+    var openDemo: (() -> Void)?
 
     private var controller: RecordingController { model.controller }
 
@@ -38,6 +40,9 @@ struct RecorderMenu: View {
                     }
                 }
                 Spacer()
+                if let openDemo, controller.phase == .idle {
+                    Button("Demo…", action: openDemo)
+                }
                 Button("Settings…", action: openSettings)
                     .keyboardShortcut(",")
                 if controller.phase == .idle {

@@ -44,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private lazy var model = RecorderModel(controller: controller, settings: settings, coordinator: coordinator)
     private var statusItem: StatusItemController?
     private var automation: Automation?
+    #if canImport(TakelyPro)
+        private var demo: DemoMode?
+    #endif
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var reviewWindow: NSWindow?
@@ -72,16 +75,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if canImport(TakelyPro)
             let openEditor: ((ProjectBundle) -> Void)? = { [weak self] bundle in self?.showEditor(bundle) }
+            let openDemo: (() -> Void)? = { [weak self] in
+                self?.statusItem?.closePanel()
+                self?.demo?.show()
+            }
         #else
             let openEditor: ((ProjectBundle) -> Void)? = nil
+            let openDemo: (() -> Void)? = nil
         #endif
         notifier.onEdit = openEditor
         notifier.activate()
         let statusItem = StatusItemController(
-            model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor)
+            model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor, openDemo: openDemo)
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         automation = Automation(host: coordinator, settings: settings)
+        #if canImport(TakelyPro)
+            if let center = automation?.center { demo = DemoMode(center: center, coordinator: coordinator) }
+        #endif
         coordinator.onRecap = { [notifier] recap in notifier.recap = recap }
         notifier.onReview = { [weak self] bundle in self?.showReview(bundle) }
         NSWorkspace.shared.notificationCenter.addObserver(
