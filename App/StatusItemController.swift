@@ -23,12 +23,12 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     init(
         model: RecorderModel, openSettings: @escaping () -> Void, openEditor: ((ProjectBundle) -> Void)? = nil,
-        openDemo: (() -> Void)? = nil
+        openDemo: (() -> Void)? = nil, sharing: Sharing? = nil
     ) {
         self.model = model
         super.init()
         let host = NSHostingController(
-            rootView: RecorderMenu(model: model, openSettings: openSettings, openEditor: openEditor, openDemo: openDemo))
+            rootView: RecorderMenu(model: model, openSettings: openSettings, openEditor: openEditor, openDemo: openDemo, sharing: sharing))
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         popover.behavior = .transient

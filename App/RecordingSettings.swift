@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import Observation
 import ProjectKit
+import ShareKit
 
 /// Everything a recording starts from, persisted so ⌥⇧R works before the panel has ever been opened.
 @MainActor @Observable
@@ -59,6 +60,9 @@ final class RecordingSettings {
     /// `autoRecordMeetings` (off: participants must be told, and some places require their consent).
     var detectMeetings: Bool { didSet { defaults.set(detectMeetings, forKey: Key.detectMeetings) } }
     var autoRecordMeetings: Bool { didSet { defaults.set(autoRecordMeetings, forKey: Key.autoRecordMeetings) } }
+    /// Sharing: the user's bucket (its keys are in the Keychain), and whether each recording is uploaded.
+    var shareBucket: BucketConfig? { didSet { defaults.set(try? JSONEncoder().encode(shareBucket), forKey: Key.shareBucket) } }
+    var shareAutomatically: Bool { didSet { defaults.set(shareAutomatically, forKey: Key.shareAutomatically) } }
     var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
@@ -104,6 +108,8 @@ final class RecordingSettings {
         allowLinkControl = defaults.bool(forKey: Key.allowLinkControl)
         detectMeetings = defaults.object(forKey: Key.detectMeetings) as? Bool ?? true
         autoRecordMeetings = defaults.bool(forKey: Key.autoRecordMeetings)
+        shareBucket = defaults.data(forKey: Key.shareBucket).flatMap { try? JSONDecoder().decode(BucketConfig.self, from: $0) }
+        shareAutomatically = defaults.object(forKey: Key.shareAutomatically) as? Bool ?? true
         redactSecrets = defaults.object(forKey: Key.redactSecrets) as? Bool ?? true
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
@@ -136,6 +142,8 @@ final class RecordingSettings {
         static let liveCoach = "liveCoach"
         static let burnInCaptions = "burnInCaptions"
         static let redactSecrets = "redactSecrets"
+        static let shareBucket = "shareBucket"
+        static let shareAutomatically = "shareAutomatically"
         static let detectMeetings = "detectMeetings"
         static let autoRecordMeetings = "autoRecordMeetings"
         static let allowLinkControl = "allowLinkControl"

@@ -31,7 +31,8 @@ let package = Package(
         .testTarget(name: "ProjectKitTests", dependencies: ["ProjectKit"]),
         .testTarget(name: "CaptureKitTests", dependencies: ["CaptureKit", "TestSupport", "WebRTCAEC"]),
         .testTarget(name: "RenderKitTests", dependencies: ["RenderKit", "CaptureKit", "TestSupport"]),
-        .testTarget(name: "AppCoreTests", dependencies: ["AppCore", "CaptureKit", "ProjectKit", "RenderKit", "TestSupport", "TakelyControl"]),
+        .testTarget(
+            name: "AppCoreTests", dependencies: ["AppCore", "CaptureKit", "ProjectKit", "RenderKit", "TestSupport", "TakelyControl"]),
         .testTarget(name: "TakelyControlTests", dependencies: ["TakelyControl"]),
         .testTarget(name: "ShareKitTests", dependencies: ["ShareKit", "ProjectKit"]),
     ]

@@ -40,6 +40,8 @@ targets:
         product: AppCore
       - package: TakelyKit
         product: TakelyControl
+      - package: TakelyKit
+        product: ShareKit
       # The `takely` command-line tool, shipped inside the app as Contents/Helpers/takely (not in Contents/MacOS:
       # the file system ignores case, so it would replace the app's own `Takely` executable).
       - target: takely-cli

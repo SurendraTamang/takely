@@ -1,6 +1,7 @@
 import AppCore
 import CaptureKit
 import ProjectKit
+import ShareKit
 import SwiftUI
 
 struct RecorderMenu: View {
@@ -10,6 +11,7 @@ struct RecorderMenu: View {
     var openEditor: ((ProjectBundle) -> Void)?
     /// Opens Demo Mode (Takely Pro); nil without it.
     var openDemo: (() -> Void)?
+    var sharing: Sharing?
 
     private var controller: RecordingController { model.controller }
 
@@ -31,6 +33,7 @@ struct RecorderMenu: View {
             if let error = controller.errorMessage {
                 warning(error)
             }
+            if let sharing { shareStatus(sharing) }
             Divider()
             HStack {
                 if let url = controller.lastRecording {
@@ -53,6 +56,36 @@ struct RecorderMenu: View {
         }
         .padding(16)
         .frame(width: 320)
+    }
+
+    @ViewBuilder
+    private func shareStatus(_ sharing: Sharing) -> some View {
+        switch sharing.state {
+        case .uploading(let progress):
+            ProgressView("Uploading…", value: progress)
+        case .shared(let link):
+            HStack {
+                Text("Link copied").font(.callout)
+                Spacer()
+                Button("Copy Again") { Sharing.copy(link) }
+                Button("Open") { NSWorkspace.shared.open(link) }
+            }
+        case .failed(let message):
+            warning(message)
+        case .idle:
+            if controller.phase == .idle, let url = controller.lastRecording, let bundle = ProjectBundle.containing(url),
+                url.pathExtension == "mp4"
+            {
+                HStack {
+                    Spacer()
+                    Button(bundle.readShareRecord() == nil ? "Share Link" : "Copy Link") {
+                        if let record = bundle.readShareRecord() { Sharing.copy(record.url) } else { sharing.share(bundle) }
+                    }
+                    .disabled(!sharing.isConfigured)
+                    .help(sharing.isConfigured ? "Upload to your bucket and copy the link" : "Set up sharing in Settings › Share")
+                }
+            }
+        }
     }
 
     private func warning(_ text: String) -> some View {
