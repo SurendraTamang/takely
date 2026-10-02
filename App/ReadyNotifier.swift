@@ -18,6 +18,11 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
     /// Opens the blur review for a recording's bundle (the notification's Review action).
     var onReview: ((ProjectBundle) -> Void)?
     private static let editAction = "edit"
+    private static let meetingCategory = "meeting"
+    private static let meetingRequest = "meeting-offer"
+    private static let recordMeetingAction = "record-meeting"
+    /// Starts recording the meeting that was just detected (the notification's Record action).
+    var onRecordMeeting: (() -> Void)?
     /// Opens the editor (Takely Pro); set before `activate`, which offers the Edit action only when it's set.
     var onEdit: ((ProjectBundle) -> Void)?
 
@@ -32,8 +37,28 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
                     UNNotificationAction(identifier: Self.revealAction, title: "Reveal in Finder"),
                     UNNotificationAction(identifier: Self.reviewAction, title: "Review Blurs", options: .foreground),
                 ] + (onEdit == nil ? [] : [UNNotificationAction(identifier: Self.editAction, title: "Edit", options: .foreground)]),
-                intentIdentifiers: [])
+                intentIdentifiers: []),
+            UNNotificationCategory(
+                identifier: Self.meetingCategory,
+                actions: [UNNotificationAction(identifier: Self.recordMeetingAction, title: "Record")],
+                intentIdentifiers: []),
         ])
+    }
+
+    /// "Google Meet call started — Record?" (replaced by the next offer; withdrawn when the call ends).
+    func meetingDetected(_ service: String) async {
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(service) call started"
+        content.body = "Record it? Let everyone know you're recording."
+        content.categoryIdentifier = Self.meetingCategory
+        content.userInfo = ["meeting": true]
+        try? await center.add(UNNotificationRequest(identifier: Self.meetingRequest, content: content, trigger: nil))
+    }
+
+    func withdrawMeetingOffer() {
+        center.removeDeliveredNotifications(withIdentifiers: [Self.meetingRequest])
     }
 
     func requestAuthorization() async -> Bool {
@@ -101,6 +126,12 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        if response.notification.request.content.userInfo["meeting"] != nil {
+            // Record (or a click on the notification itself); dismissing does nothing.
+            guard response.actionIdentifier != UNNotificationDismissActionIdentifier else { return }
+            await MainActor.run { self.onRecordMeeting?() }
+            return
+        }
         guard let path = response.notification.request.content.userInfo["path"] as? String else { return }
         let url = URL(filePath: path)
         let action = response.actionIdentifier

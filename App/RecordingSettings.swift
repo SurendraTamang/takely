@@ -55,6 +55,10 @@ final class RecordingSettings {
     var removeSilences: Bool { didSet { defaults.set(removeSilences, forKey: Key.removeSilences) } }
     /// `takely://` links run without asking (any web page or app can open a link, so off by default).
     var allowLinkControl: Bool { didSet { defaults.set(allowLinkControl, forKey: Key.allowLinkControl) } }
+    /// Notice calls (Zoom, Teams, Google Meet…) and offer to record them; record them without asking when
+    /// `autoRecordMeetings` (off: participants must be told, and some places require their consent).
+    var detectMeetings: Bool { didSet { defaults.set(detectMeetings, forKey: Key.detectMeetings) } }
+    var autoRecordMeetings: Bool { didSet { defaults.set(autoRecordMeetings, forKey: Key.autoRecordMeetings) } }
     var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
@@ -98,6 +102,8 @@ final class RecordingSettings {
         autoZoom = defaults.bool(forKey: Key.autoZoom)
         removeSilences = defaults.bool(forKey: Key.removeSilences)
         allowLinkControl = defaults.bool(forKey: Key.allowLinkControl)
+        detectMeetings = defaults.object(forKey: Key.detectMeetings) as? Bool ?? true
+        autoRecordMeetings = defaults.bool(forKey: Key.autoRecordMeetings)
         redactSecrets = defaults.object(forKey: Key.redactSecrets) as? Bool ?? true
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
@@ -130,6 +136,8 @@ final class RecordingSettings {
         static let liveCoach = "liveCoach"
         static let burnInCaptions = "burnInCaptions"
         static let redactSecrets = "redactSecrets"
+        static let detectMeetings = "detectMeetings"
+        static let autoRecordMeetings = "autoRecordMeetings"
         static let allowLinkControl = "allowLinkControl"
         static let autoZoom = "autoZoom"
         static let removeSilences = "removeSilences"

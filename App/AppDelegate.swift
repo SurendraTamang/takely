@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private lazy var model = RecorderModel(controller: controller, settings: settings, coordinator: coordinator)
     private var statusItem: StatusItemController?
     private var automation: Automation?
+    private var meetings: MeetingMonitor?
     #if canImport(TakelyPro)
         private var demo: DemoMode?
     #endif
@@ -90,6 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         automation = Automation(host: coordinator, settings: settings)
+        meetings = MeetingMonitor(settings: settings, controller: controller, session: session, notifier: notifier)
+        meetings?.start()
         #if canImport(TakelyPro)
             if let center = automation?.center { demo = DemoMode(center: center, coordinator: coordinator) }
         #endif
