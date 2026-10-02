@@ -26,7 +26,9 @@ public struct SigV4: Sendable {
         let day = String(amzDate.prefix(8))
         request.setValue(amzDate, forHTTPHeaderField: "x-amz-date")
         request.setValue(payloadHash, forHTTPHeaderField: "x-amz-content-sha256")
-        var headers: [String: String] = ["host": url.port.map { "\(host):\($0)" } ?? host]
+        // The Host header carries a port only when it isn't the scheme's default.
+        let defaultPort = url.scheme == "https" ? 443 : 80
+        var headers: [String: String] = ["host": url.port.flatMap { $0 == defaultPort ? nil : "\(host):\($0)" } ?? host]
         for (name, value) in request.allHTTPHeaderFields ?? [:] {
             let lower = name.lowercased()
             if lower.hasPrefix("x-amz-") || lower == "content-type" || lower == "range" || lower == "content-md5" {

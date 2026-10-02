@@ -14,6 +14,8 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         var aborted: [String] = []
         var failNextPartOnce = Set<Int>()
         var failCompletion = false
+        var failNextPutOnce = false
+        var puts = 0
         var unsigned = 0
     }
     static let state = Mutex(State())
@@ -50,6 +52,11 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
                 s.uploads[id] = nil
                 return (204, "", [:])
             case ("PUT", _, nil):
+                s.puts += 1
+                if s.failNextPutOnce, s.puts == 2 {
+                    s.failNextPutOnce = false
+                    return (403, "<Error><Code>AccessDenied</Code></Error>", [:])
+                }
                 s.objects[key] = body
                 s.contentTypes[key] = request.value(forHTTPHeaderField: "Content-Type")
                 return (200, "", [:])
@@ -116,40 +123,84 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         let client = client()
         FakeS3.state.withLock { $0.failCompletion = true }
         await #expect(throws: S3Error.self) { try await client.upload(try file(bytes: 17 << 20), key: "k", contentType: "video/mp4") }
+        // Aborted in the background.
+        for _ in 0..<40 where FakeS3.state.withLock({ $0.aborted.isEmpty }) { try await Task.sleep(for: .milliseconds(50)) }
         #expect(FakeS3.state.withLock { $0.aborted } == ["up-1"])
     }
 
-    @Test func sharingUploadsThePageLastAndKeepsTheLink() async throws {
-        let client = client()
+    func exportedBundle() throws -> ProjectBundle {
         let bundle = try ProjectBundle.create(in: FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())"))
         try FileManager.default.createDirectory(at: bundle.exportsURL, withIntermediateDirectories: true)
         try Data("not really a movie".utf8).write(to: bundle.exportURL)
         try "WEBVTT\n".write(to: bundle.captionsURL, atomically: true, encoding: .utf8)
+        return bundle
+    }
+
+    @Test func sharingKeepsTheLinkAndReplacesTheOldVersionsFiles() async throws {
+        let client = client()
+        let bundle = try exportedBundle()
         let service = ShareService(client: client)
         let link = try await service.share(bundle)
-        let record = try #require(bundle.readShareRecord())
-        #expect(link == URL(string: "https://share.example.com/takely/\(record.id)/index.html"))
-        #expect(record.id.count == 26)
-        let objects = FakeS3.state.withLock { $0.objects }
-        #expect(
-            Set(objects.keys) == Set(["video.mp4", "captions.vtt", "oembed.json", "index.html"].map { "videos/takely/\(record.id)/\($0)" }))
-        #expect(FakeS3.state.withLock { $0.contentTypes["videos/takely/\(record.id)/index.html"] } == "text/html; charset=utf-8")
-        // Sharing again replaces the files under the same link; unsharing removes them.
+        let first = try #require(bundle.readShareRecord())
+        #expect(link == URL(string: "https://share.example.com/takely/\(first.id)/index.html") && first.complete && first.id.count == 26)
+        let names = Set(FakeS3.state.withLock { $0.objects.keys }.map { $0.components(separatedBy: "/").last! })
+        #expect(names.contains("index.html") && names.contains("oembed.json") && names.count == 4)  // + video-…, captions-…
+        #expect(FakeS3.state.withLock { $0.contentTypes["videos/takely/\(first.id)/index.html"] } == "text/html; charset=utf-8")
+        // Re-sharing (after an edit): same link, new media names, the old ones deleted (a CDN can't serve them).
         #expect(try await service.share(bundle) == link)
+        let second = try #require(bundle.readShareRecord())
+        #expect(
+            Set(second.keys).isDisjoint(
+                with: Set(first.keys).subtracting(["takely/\(first.id)/index.html", "takely/\(first.id)/oembed.json"])))
+        #expect(Set(FakeS3.state.withLock { $0.objects.keys }) == Set(second.keys.map { "videos/" + $0 }))
+        // Without captions/summary: no captions file.
+        _ = try await service.share(bundle, includeText: false)
+        #expect(!(bundle.readShareRecord()!.keys.contains { $0.contains("captions") }))
         try await service.unshare(bundle)
         #expect(FakeS3.state.withLock { $0.objects.isEmpty } && bundle.readShareRecord() == nil)
+    }
+
+    @Test func aFailedFirstShareKeepsItsIDSoNothingIsOrphaned() async throws {
+        let client = client()
+        let bundle = try exportedBundle()
+        FakeS3.state.withLock { $0.failNextPutOnce = true }  // the video goes up, the next file fails…
+        await #expect(throws: (any Error).self) { try await ShareService(client: client).share(bundle) }
+        let failed = try #require(bundle.readShareRecord())
+        #expect(!failed.complete)
+        _ = try await ShareService(client: client).share(bundle)  // …the retry reuses the id and cleans up
+        #expect(bundle.readShareRecord()?.id == failed.id)
+        #expect(Set(FakeS3.state.withLock { $0.objects.keys }) == Set(bundle.readShareRecord()!.keys.map { "videos/" + $0 }))
+    }
+
+    @Test func aRecordingSharedToAnotherBucketIsLeftAlone() async throws {
+        let bundle = try exportedBundle()
+        _ = try await ShareService(client: client()).share(bundle)
+        var other = config
+        other.bucket = "elsewhere"
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FakeS3.self]
+        let moved = ShareService(
+            client: S3Client(config: other, accessKey: "AK", secretKey: "SK", session: URLSession(configuration: configuration)))
+        await #expect(throws: ShareError.self) { try await moved.unshare(bundle) }
+        #expect(bundle.readShareRecord() != nil)
+    }
+
+    @Test func uploadIDsTravelEncodedExactlyAsSigned() {
+        let url = client().url("k", query: [URLQueryItem(name: "uploadId", value: "ab+c/d=e~f")])
+        #expect(url.absoluteString.hasSuffix("?uploadId=ab%2Bc%2Fd%3De~f"))
     }
 
     @Test func thePageUnfurlsAndEscapesWhatItShows() {
         let page = SharePage(
             title: "Fix <script>alert(1)</script> & ship", summary: "How \"we\" did it",
-            chapters: [.init(t: 0, title: "Start"), .init(t: 75, title: "The fix")],
-            duration: 125, width: 1920, height: 1080, hasCaptions: true, base: URL(string: "https://share.example.com/takely/abc")!)
+            chapters: [.init(t: 0, title: "Start"), .init(t: 75, title: "The fix"), .init(t: .nan, title: "Broken")],
+            duration: 125, width: 1920, height: 1080, base: URL(string: "https://share.example.com/takely/abc")!, video: "video-1.mp4",
+            poster: "poster-1.jpg", captions: "captions-1.vtt")
         let html = page.html
-        #expect(html.contains("<meta property=\"og:video\" content=\"https://share.example.com/takely/abc/video.mp4\">"))
-        #expect(html.contains("<meta property=\"og:image\" content=\"https://share.example.com/takely/abc/poster.jpg\">"))
+        #expect(html.contains("<meta property=\"og:video\" content=\"https://share.example.com/takely/abc/video-1.mp4\">"))
+        #expect(html.contains("<meta property=\"og:image\" content=\"https://share.example.com/takely/abc/poster-1.jpg\">"))
         #expect(html.contains("Fix &lt;script&gt;alert(1)&lt;/script&gt; &amp; ship") && !html.contains("<script>alert"))
-        #expect(html.contains("data-t=\"75.0\">1:15</a> The fix") && html.contains("captions.vtt"))
+        #expect(html.contains("data-t=\"75.0\">1:15</a> The fix") && html.contains("captions-1.vtt") && !html.contains("Broken"))
         let oembed = try? JSONSerialization.jsonObject(with: page.oEmbed) as? [String: Any]
         #expect(oembed?["type"] as? String == "video" && oembed?["height"] as? Int == 720)
     }

@@ -14,13 +14,15 @@ public struct SharePage: Sendable, Equatable {
     public var duration: Double
     public var width: Int
     public var height: Int
-    public var hasCaptions: Bool
-    /// The folder's public address (the page is `index.html` in it).
+    /// The folder's public address (the page is `index.html` in it) and the media files' names in it.
     public var base: URL
+    public var video: String
+    public var poster: String?
+    public var captions: String?
 
     var pageURL: URL { base.appending(path: "index.html") }
-    var videoURL: URL { base.appending(path: "video.mp4") }
-    var posterURL: URL { base.appending(path: "poster.jpg") }
+    var videoURL: URL { base.appending(path: video) }
+    var posterURL: URL? { poster.map { base.appending(path: $0) } }
 
     public var html: String {
         let title = Self.escape(title)
@@ -29,10 +31,15 @@ public struct SharePage: Sendable, Equatable {
             chapters.isEmpty
             ? ""
             : "<ol class=\"chapters\">"
-                + chapters.map { "<li><a href=\"#t=\(Int($0.t))\" data-t=\"\($0.t)\">\(Self.time($0.t))</a> \(Self.escape($0.title))</li>" }
-                .joined()
+                + chapters.filter { $0.t.isFinite }.map {
+                    "<li><a href=\"#t=\(Int($0.t))\" data-t=\"\($0.t)\">\(Self.time($0.t))</a> \(Self.escape($0.title))</li>"
+                }.joined()
                 + "</ol>"
-        let track = hasCaptions ? "<track kind=\"captions\" src=\"captions.vtt\" srclang=\"en\" label=\"Captions\" default>" : ""
+        let track = captions.map { "<track kind=\"captions\" src=\"\($0)\" srclang=\"en\" label=\"Captions\" default>" } ?? ""
+        let image =
+            posterURL.map {
+                "<meta property=\"og:image\" content=\"\($0.absoluteString)\">\n<meta name=\"twitter:image\" content=\"\($0.absoluteString)\">"
+            } ?? ""
         return """
             <!doctype html>
             <html lang="en">
@@ -45,7 +52,7 @@ public struct SharePage: Sendable, Equatable {
             <meta property="og:title" content="\(title)">
             <meta property="og:description" content="\(description)">
             <meta property="og:url" content="\(pageURL.absoluteString)">
-            <meta property="og:image" content="\(posterURL.absoluteString)">
+            \(image)
             <meta property="og:video" content="\(videoURL.absoluteString)">
             <meta property="og:video:secure_url" content="\(videoURL.absoluteString)">
             <meta property="og:video:type" content="video/mp4">
@@ -53,7 +60,6 @@ public struct SharePage: Sendable, Equatable {
             <meta property="og:video:height" content="\(height)">
             <meta name="twitter:card" content="summary_large_image">
             <meta name="twitter:title" content="\(title)">
-            <meta name="twitter:image" content="\(posterURL.absoluteString)">
             <link rel="alternate" type="application/json+oembed" href="\(base.appending(path: "oembed.json").absoluteString)" title="\(title)">
             <style>
             :root { color-scheme: light dark; --bg: #fafafa; --fg: #1c1c1e; --muted: #6e6e73; }
@@ -71,7 +77,7 @@ public struct SharePage: Sendable, Equatable {
             </head>
             <body>
             <main>
-            <video controls playsinline preload="metadata" poster="poster.jpg" src="video.mp4">\(track)</video>
+            <video controls playsinline preload="metadata"\(poster.map { " poster=\"\($0)\"" } ?? "") src="\(video)">\(track)</video>
             <h1>\(title)</h1>
             \(summary.map { "<p>\(Self.escape($0))</p>" } ?? "")
             \(chapterList)
@@ -95,7 +101,7 @@ public struct SharePage: Sendable, Equatable {
         let embedHeight = width > 0 ? embedWidth * height / width : 720
         let object: [String: Any] = [
             "version": "1.0", "type": "video", "provider_name": "Takely", "title": title,
-            "width": embedWidth, "height": embedHeight, "thumbnail_url": posterURL.absoluteString,
+            "width": embedWidth, "height": embedHeight, "thumbnail_url": posterURL?.absoluteString ?? "",
             "html":
                 "<iframe src=\"\(pageURL.absoluteString)?embed=1\" width=\"\(embedWidth)\" height=\"\(embedHeight)\" frameborder=\"0\" allow=\"fullscreen; picture-in-picture\" allowfullscreen></iframe>",
         ]
@@ -110,7 +116,7 @@ public struct SharePage: Sendable, Equatable {
     }
 
     static func time(_ t: Double) -> String {
-        let s = Int(t.rounded(.down))
+        let s = t.isFinite ? Int(max(0, t).rounded(.down)) : 0
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
 }

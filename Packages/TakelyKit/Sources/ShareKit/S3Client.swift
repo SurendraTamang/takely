@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Where uploads go: an S3-compatible bucket and the public address its objects are served from.
 public struct BucketConfig: Codable, Sendable, Equatable {
@@ -39,7 +40,9 @@ public struct BucketConfig: Codable, Sendable, Equatable {
         case .r2: return URL(string: "https://\(value).r2.cloudflarestorage.com")
         case .s3: return URL(string: "https://s3.\(value).amazonaws.com")
         case .b2: return URL(string: "https://s3.\(value).backblazeb2.com")
-        case .other: return URL(string: value)
+        case .other:
+            guard let url = URL(string: value), ["https", "http"].contains(url.scheme ?? ""), url.host() != nil else { return nil }
+            return url
         }
     }
 }
@@ -79,9 +82,11 @@ public struct S3Client: Sendable {
     }
 
     func url(_ key: String, query: [URLQueryItem] = []) -> URL {
-        var url = config.endpoint.appending(path: config.bucket).appending(path: key)
-        if !query.isEmpty { url.append(queryItems: query) }
-        return url
+        let url = config.endpoint.appending(path: config.bucket).appending(path: key)
+        guard !query.isEmpty, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        // Encoded exactly as signed: a `+` in an upload ID must travel as %2B, not be read as a space.
+        components.percentEncodedQuery = query.map { "\(SigV4.encode($0.name))=\(SigV4.encode($0.value ?? ""))" }.joined(separator: "&")
+        return components.url ?? url
     }
 
     @discardableResult
@@ -114,19 +119,27 @@ public struct S3Client: Sendable {
     /// Uploads a file, in parts when it's large; `progress` gets the fraction sent. A failed or cancelled upload
     /// is aborted, so no unfinished parts stay billed in the bucket.
     public func upload(
-        _ file: URL, key: String, contentType: String, progress: @escaping @Sendable (Double) -> Void = { _ in }
+        _ file: URL, key: String, contentType: String, cacheControl: String? = nil,
+        progress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws {
         let size = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
         guard size > Self.multipartThreshold else {
-            try await put(key, data: try Data(contentsOf: file), contentType: contentType)
+            try await put(key, data: try Data(contentsOf: file), contentType: contentType, cacheControl: cacheControl)
             return progress(1)
         }
+        var initial = ["Content-Type": contentType]
+        if let cacheControl { initial["Cache-Control"] = cacheControl }
+        let headers = initial
         let (created, _) = try await retrying {
-            try await send("POST", url(key, query: [URLQueryItem(name: "uploads", value: nil)]), headers: ["Content-Type": contentType])
+            try await send("POST", url(key, query: [URLQueryItem(name: "uploads", value: nil)]), headers: headers)
         }
         guard let uploadID = Self.tag("UploadId", in: created) else { throw URLError(.cannotParseResponse) }
-        let parts = (size + Self.partSize - 1) / Self.partSize
+        // S3 allows at most 10,000 parts: very large files get bigger parts.
+        let partSize = max(Self.partSize, (size + 9_999) / 10_000)
+        let parts = (size + partSize - 1) / partSize
         let sent = SentCounter(total: size, progress: progress)
+        // One open file for every part: if the file is replaced meanwhile, all parts still come from one version.
+        let reader = try PartReader(file)
         do {
             var etags = [String](repeating: "", count: parts)
             try await withThrowingTaskGroup(of: (Int, String).self) { group in
@@ -135,7 +148,7 @@ public struct S3Client: Sendable {
                     let number = next + 1
                     next += 1
                     group.addTask {
-                        let data = try Self.read(file, offset: (number - 1) * Self.partSize, length: Self.partSize)
+                        let data = try reader.read(offset: (number - 1) * partSize, length: partSize)
                         let query = [
                             URLQueryItem(name: "partNumber", value: String(number)), URLQueryItem(name: "uploadId", value: uploadID),
                         ]
@@ -154,17 +167,28 @@ public struct S3Client: Sendable {
                 "<CompleteMultipartUpload>"
                 + etags.enumerated().map { "<Part><PartNumber>\($0.offset + 1)</PartNumber><ETag>\($0.element)</ETag></Part>" }.joined()
                 + "</CompleteMultipartUpload>"
-            let (completed, _) = try await retrying {
-                try await send("POST", url(key, query: [URLQueryItem(name: "uploadId", value: uploadID)]), body: Data(body.utf8))
+            let completion = url(key, query: [URLQueryItem(name: "uploadId", value: uploadID)])
+            let attempt = Mutex(0)
+            let completed: Data
+            do {
+                (completed, _) = try await retrying {
+                    attempt.withLock { $0 += 1 }
+                    return try await send("POST", completion, body: Data(body.utf8))
+                }
+            } catch let error as S3Error where error.code == "NoSuchUpload" && attempt.withLock({ $0 }) > 1 {
+                return progress(1)  // an earlier attempt completed it; only its answer was lost
             }
             // S3 can report a failed completion inside a 200 response.
             if let code = Self.tag("Code", in: completed) {
                 throw S3Error(status: 200, code: code, message: Self.tag("Message", in: completed) ?? "")
             }
         } catch {
-            try? await send("DELETE", url(key, query: [URLQueryItem(name: "uploadId", value: uploadID)]))
+            // Detached, so it still runs when the upload was cancelled: unfinished parts would stay billed.
+            let abort = url(key, query: [URLQueryItem(name: "uploadId", value: uploadID)])
+            Task.detached { [self] in _ = try? await send("DELETE", abort) }
             throw error
         }
+        progress(1)
     }
 
     /// Retries network failures and 5xx/429 answers with backoff (1 s, 2 s); other errors at once.
@@ -179,13 +203,6 @@ public struct S3Client: Sendable {
             try await Task.sleep(for: .seconds(1 << (attempt - 1)))
             attempt += 1
         }
-    }
-
-    static func read(_ file: URL, offset: Int, length: Int) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: file)
-        defer { try? handle.close() }
-        try handle.seek(toOffset: UInt64(offset))
-        return try handle.read(upToCount: length) ?? Data()
     }
 
     static func error(_ data: Data, status: Int) -> S3Error {
@@ -219,5 +236,24 @@ private final class SentCounter: @unchecked Sendable {
             return Double(sent) / Double(max(total, 1))
         }
         progress(min(1, fraction))
+    }
+}
+
+/// Reads parts of one open file (positioned reads, safe from several tasks at once).
+private final class PartReader: Sendable {
+    let descriptor: Int32
+
+    init(_ file: URL) throws {
+        descriptor = open(file.path, O_RDONLY)
+        guard descriptor >= 0 else { throw CocoaError(.fileReadNoSuchFile) }
+    }
+
+    deinit { close(descriptor) }
+
+    func read(offset: Int, length: Int) throws -> Data {
+        var data = Data(count: length)
+        let count = data.withUnsafeMutableBytes { pread(descriptor, $0.baseAddress, length, off_t(offset)) }
+        guard count >= 0 else { throw CocoaError(.fileReadUnknown) }
+        return data.prefix(count)
     }
 }

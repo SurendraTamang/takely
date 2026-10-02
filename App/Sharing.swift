@@ -20,87 +20,130 @@ enum ShareKeychain {
         return String(decoding: data, as: UTF8.self)
     }
 
-    @discardableResult
+    /// Updates the item in place (adding it the first time), so a failure never loses the key already saved.
     static func write(_ value: String, for account: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
-        guard !value.isEmpty else { return true }
+        guard !value.isEmpty else {
+            let status = SecItemDelete(query as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        let data = Data(value.utf8)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        guard status == errSecItemNotFound else { return status == errSecSuccess }
         var attributes = query
-        attributes[kSecValueData as String] = Data(value.utf8)
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        attributes[kSecValueData as String] = data
         return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
     }
 }
 
-/// Sharing recordings to the user's bucket: the upload in progress, its link, and the setup.
+/// Sharing recordings to the user's bucket: uploads (one at a time, the latest request per recording wins), their
+/// links, and taking them down.
 @MainActor @Observable
 final class Sharing {
     enum State: Equatable {
         case idle
-        case uploading(Double)
-        case shared(URL)
-        case failed(String)
+        case uploading(URL, Double)
+        case shared(URL, URL)
+        case failed(URL, String)
+
+        /// The recording (bundle URL) this is about.
+        var bundle: URL? {
+            switch self {
+            case .idle: nil
+            case .uploading(let bundle, _), .shared(let bundle, _), .failed(let bundle, _): bundle
+            }
+        }
     }
 
     private(set) var state = State.idle
     let settings: RecordingSettings
     private let notifier: ReadyNotifier
     private var upload: Task<Void, Never>?
+    /// A request that came while uploading (a re-export after a blur review…): runs next, replacing older requests.
+    private var queued: ProjectBundle?
+    /// Read from the Keychain once (and when saved), not on every menu redraw.
+    private(set) var credentials: (access: String, secret: String)?
     private let log = Logger(subsystem: "app.takely", category: "share")
 
     init(settings: RecordingSettings, notifier: ReadyNotifier) {
         self.settings = settings
         self.notifier = notifier
+        reloadCredentials()
     }
 
-    var isConfigured: Bool { service != nil }
+    func reloadCredentials() {
+        if let access = ShareKeychain.read("access-key"), let secret = ShareKeychain.read("secret"), !access.isEmpty, !secret.isEmpty {
+            credentials = (access, secret)
+        } else {
+            credentials = nil
+        }
+    }
+
+    var isConfigured: Bool { settings.shareBucket != nil && credentials != nil }
 
     private var service: ShareService? {
-        guard let config = settings.shareBucket, let access = ShareKeychain.read("access-key"), let secret = ShareKeychain.read("secret"),
-            !access.isEmpty, !secret.isEmpty
-        else { return nil }
-        return ShareService(client: S3Client(config: config, accessKey: access, secretKey: secret))
+        guard let config = settings.shareBucket, let credentials else { return nil }
+        return ShareService(client: S3Client(config: config, accessKey: credentials.access, secretKey: credentials.secret))
     }
 
-    /// After an export: uploads it when sharing is set up and "Upload after recording" is on.
+    /// After an export. A recording already shared is updated (its link then shows this version: after a blur
+    /// review, the reviewed one). A new one is uploaded when "Upload after recording" is on — unless secrets were
+    /// found on screen: the person reviews the blurs first, then shares.
     func recordingExported(_ export: URL) {
-        guard settings.shareAutomatically, isConfigured, let bundle = ProjectBundle.containing(export) else { return }
+        guard isConfigured, let bundle = ProjectBundle.containing(export) else { return }
+        if bundle.readShareRecord() != nil { return share(bundle) }
+        guard settings.shareAutomatically else { return }
+        let blurred = ((try? bundle.readRedactions()) ?? []).contains { $0.enabled && $0.kind != .manual }
+        guard !blurred else { return log.info("not uploaded automatically: secrets were blurred, review first") }
         share(bundle)
     }
 
     /// Uploads (or re-uploads, keeping the link), then copies the link and says so.
     func share(_ bundle: ProjectBundle) {
         guard let service else {
-            state = .failed(ShareError.notConfigured.localizedDescription)
+            state = .failed(bundle.url, ShareError.notConfigured.localizedDescription)
             return
         }
-        guard upload == nil else { return }  // one at a time
-        state = .uploading(0)
+        guard upload == nil else {
+            queued = bundle
+            return
+        }
+        state = .uploading(bundle.url, 0)
+        let includeText = settings.sharePublishText
         upload = Task {
-            defer { upload = nil }
             do {
-                let link = try await service.share(bundle) { progress in
+                let link = try await service.share(bundle, includeText: includeText) { progress in
                     Task { @MainActor [weak self] in
-                        if case .uploading = self?.state { self?.state = .uploading(progress) }
+                        if case .uploading(bundle.url, _) = self?.state { self?.state = .uploading(bundle.url, progress) }
                     }
                 }
                 Self.copy(link)
-                state = .shared(link)
+                state = .shared(bundle.url, link)
                 await notifier.linkReady(link, title: (try? bundle.readProject())?.title ?? bundle.name)
             } catch {
                 log.error("sharing failed: \(String(describing: error))")
-                state = .failed("Upload failed: \(error.localizedDescription)")
+                state = .failed(bundle.url, "Upload failed: \(error.localizedDescription)")
                 await notifier.recordingFailed("Upload failed: \(error.localizedDescription)")
+            }
+            upload = nil
+            if let next = queued {
+                queued = nil
+                share(next)
             }
         }
     }
 
-    func unshare(_ bundle: ProjectBundle) async throws {
-        guard let service else { throw ShareError.notConfigured }
-        try await service.unshare(bundle)
-        state = .idle
+    /// Deletes the shared copy: the link stops working (a CDN may keep cached copies for a while).
+    func unshare(_ bundle: ProjectBundle) async {
+        guard let service else { return state = .failed(bundle.url, ShareError.notConfigured.localizedDescription) }
+        do {
+            try await service.unshare(bundle)
+            state = .idle
+        } catch {
+            state = .failed(bundle.url, "Couldn't stop sharing: \(error.localizedDescription)")
+        }
     }
 
     func testConnection() async -> String {
@@ -129,6 +172,7 @@ struct ShareSettingsView: View {
     @State private var publicURL = ""
     @State private var accessKey = ShareKeychain.read("access-key") ?? ""
     @State private var secret = ShareKeychain.read("secret") ?? ""
+    @State private var region = ""
     @State private var status: String?
     @State private var testing = false
 
@@ -142,13 +186,21 @@ struct ShareSettingsView: View {
             TextField("Bucket", text: $bucket)
             TextField("Access key ID", text: $accessKey)
             SecureField("Secret access key", text: $secret)
+            if provider == .other { TextField("Region", text: $region, prompt: Text("us-east-1")) }
             TextField("Public URL", text: $publicURL, prompt: Text("https://share.example.com"))
             Text(hint).font(.caption).foregroundStyle(.secondary)
-            Toggle("Upload after recording and copy the link", isOn: $settings.shareAutomatically)
+            Toggle(isOn: $settings.shareAutomatically) {
+                Text("Upload after recording and copy the link")
+                Text("Not when secrets were blurred: review the blurs, then use Share Link.")
+            }
+            Toggle(isOn: $settings.sharePublishText) {
+                Text("Show captions, title and summary on the page")
+                Text("They come from what was said: turn off if you speak sensitive details.")
+            }
             HStack {
-                Button("Save") { save() }.keyboardShortcut(.defaultAction)
+                Button("Save") { _ = save() }.keyboardShortcut(.defaultAction)
                 Button(testing ? "Testing…" : "Test Connection") {
-                    save()
+                    guard save() else { return }
                     testing = true
                     Task {
                         status = await sharing.testConnection()
@@ -184,7 +236,7 @@ struct ShareSettingsView: View {
     private var hint: String {
         switch provider {
         case .r2:
-            "R2: create an API token with Object Read & Write for this bucket. For the public URL, connect a custom domain to the bucket (the r2.dev address is rate-limited). Viewing is free: R2 has no egress fees."
+            "R2: create an API token with Object Read & Write for this bucket. For the public URL, connect a custom domain to the bucket (the r2.dev address is rate-limited). Viewing is free: R2 has no egress fees. Recommended: a lifecycle rule that aborts incomplete multipart uploads after 1 day."
         case .s3: "S3: the bucket (or a CloudFront distribution in front of it) must allow public reads of takely/*."
         case .b2: "B2: an application key for this bucket; the bucket must be public."
         case .other: "Any S3-compatible service; objects are addressed path-style."
@@ -199,28 +251,36 @@ struct ShareSettingsView: View {
         switch config.provider {
         case .r2: location = config.endpoint.host()?.components(separatedBy: ".").first ?? ""
         case .s3, .b2: location = config.region
-        case .other: location = config.endpoint.absoluteString
+        case .other:
+            location = config.endpoint.absoluteString
+            region = config.region
         }
     }
 
-    private func save() {
-        ShareKeychain.write(accessKey.trimmingCharacters(in: .whitespaces), for: "access-key")
-        ShareKeychain.write(secret.trimmingCharacters(in: .whitespaces), for: "secret")
-        guard let endpoint = BucketConfig.endpoint(for: provider, accountOrRegion: location),
-            let base = URL(string: publicURL.trimmingCharacters(in: .whitespaces)), base.scheme == "https" || base.scheme == "http",
-            !bucket.trimmingCharacters(in: .whitespaces).isEmpty
+    /// Saves the bucket and keys; false (with the reason shown) when something's missing or the Keychain refused.
+    private func save() -> Bool {
+        let clean = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard let endpoint = BucketConfig.endpoint(for: provider, accountOrRegion: clean(location)),
+            let base = URL(string: clean(publicURL)), base.scheme == "https", base.host() != nil, !clean(bucket).isEmpty
         else {
             status = "Fill in the \(locationLabel.lowercased()), the bucket and a public URL starting with https://."
-            return
+            return false
         }
+        guard ShareKeychain.write(clean(accessKey), for: "access-key"), ShareKeychain.write(clean(secret), for: "secret") else {
+            status = "Couldn't save the keys in the Keychain."
+            return false
+        }
+        sharing.reloadCredentials()
         let region =
             switch provider {
             case .r2: "auto"
-            case .s3, .b2: location.trimmingCharacters(in: .whitespaces)
-            case .other: "us-east-1"
+            case .s3, .b2: clean(location)
+            case .other: clean(self.region).isEmpty ? "us-east-1" : clean(self.region)
             }
         sharing.settings.shareBucket = BucketConfig(
-            provider: provider, endpoint: endpoint, region: region, bucket: bucket.trimmingCharacters(in: .whitespaces), publicURL: base)
+            provider: provider, endpoint: endpoint, region: region, bucket: clean(bucket), publicURL: base)
         status = "Saved."
+        return true
     }
+
 }

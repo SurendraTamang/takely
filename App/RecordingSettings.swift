@@ -63,6 +63,7 @@ final class RecordingSettings {
     /// Sharing: the user's bucket (its keys are in the Keychain), and whether each recording is uploaded.
     var shareBucket: BucketConfig? { didSet { defaults.set(try? JSONEncoder().encode(shareBucket), forKey: Key.shareBucket) } }
     var shareAutomatically: Bool { didSet { defaults.set(shareAutomatically, forKey: Key.shareAutomatically) } }
+    var sharePublishText: Bool { didSet { defaults.set(sharePublishText, forKey: Key.sharePublishText) } }
     var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
@@ -110,6 +111,7 @@ final class RecordingSettings {
         autoRecordMeetings = defaults.bool(forKey: Key.autoRecordMeetings)
         shareBucket = defaults.data(forKey: Key.shareBucket).flatMap { try? JSONDecoder().decode(BucketConfig.self, from: $0) }
         shareAutomatically = defaults.object(forKey: Key.shareAutomatically) as? Bool ?? true
+        sharePublishText = defaults.object(forKey: Key.sharePublishText) as? Bool ?? true
         redactSecrets = defaults.object(forKey: Key.redactSecrets) as? Bool ?? true
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
@@ -144,6 +146,7 @@ final class RecordingSettings {
         static let redactSecrets = "redactSecrets"
         static let shareBucket = "shareBucket"
         static let shareAutomatically = "shareAutomatically"
+        static let sharePublishText = "sharePublishText"
         static let detectMeetings = "detectMeetings"
         static let autoRecordMeetings = "autoRecordMeetings"
         static let allowLinkControl = "allowLinkControl"
