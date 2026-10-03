@@ -24,7 +24,8 @@ fi
 
 if [[ -f project.yml ]]; then
     echo "==> xcodebuild"
-    xcodegen generate --quiet
+    # With Takely Pro when it's here (the private checkout), else the open-source app.
+    if [[ -d Packages/TakelyPro ]]; then xcodegen generate --quiet --spec project.pro.yml; else xcodegen generate --quiet; fi
     xcodebuild -project Takely.xcodeproj -scheme Takely -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath build build -quiet
 fi
 echo "==> all checks passed"
