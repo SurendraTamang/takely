@@ -89,7 +89,8 @@ final class TakelyCompositor: NSObject, AVVideoCompositing, @unchecked Sendable 
             camera = nil
         }
         let image = instruction.renderer.compose(
-            screen: CIImage(cvPixelBuffer: screen), camera: camera, at: instruction.map.sourceTime(request.compositionTime.seconds))
+            screen: CIImage(cvPixelBuffer: screen), camera: camera, at: instruction.map.sourceTime(request.compositionTime.seconds),
+            outputTime: request.compositionTime.seconds)
         instruction.renderer.context.render(image, to: output)
         request.finish(withComposedVideoFrame: output)
     }

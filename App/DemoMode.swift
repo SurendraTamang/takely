@@ -4,6 +4,7 @@
     import AppKit
     import ImageIO
     import KeyboardShortcuts
+    import OSLog
     import ProjectKit
     import SwiftUI
     import TakelyControl
@@ -179,9 +180,14 @@
         func start() async throws {
             let reply = await center.perform(ControlRequest(.start, countdown: false))
             guard reply.ok else { throw Failed(errorDescription: reply.error) }
-            if let avatar, let bundle {
-                try? FileManager.default.copyItem(at: avatar.appending(path: "avatar.png"), to: bundle.avatarImageURL)
-                try? FileManager.default.copyItem(at: avatar.appending(path: "avatar.json"), to: bundle.avatarFaceURL)
+            // The avatar stands in for the camera: only in recordings made without it.
+            if let avatar, let bundle, (try? bundle.readProject())?.camera.enabled == false {
+                do {
+                    try FileManager.default.copyItem(at: avatar.appending(path: "avatar.png"), to: bundle.avatarImageURL)
+                    try FileManager.default.copyItem(at: avatar.appending(path: "avatar.json"), to: bundle.avatarFaceURL)
+                } catch {
+                    Logger(subsystem: "app.takely", category: "demo").error("avatar not added: \(error.localizedDescription)")
+                }
             }
         }
 
@@ -246,7 +252,8 @@
         private func confirmOwnFace() -> Bool {
             let alert = NSAlert()
             alert.messageText = "Use only a picture of yourself"
-            alert.informativeText = "Your avatar speaks for you in recordings. Don't use anyone else's face. The picture stays on this Mac."
+            alert.informativeText =
+                "Your avatar speaks for you in recordings. Don't use anyone else's face. It's kept on this Mac and goes into the demos you record with it (and their exports)."
             alert.addButton(withTitle: "It's Me")
             alert.addButton(withTitle: "Cancel")
             return alert.runModal() == .alertFirstButtonReturn
@@ -259,26 +266,32 @@
             return panel.runModal() == .OK ? panel.url : nil
         }
 
-        /// From a picture of the person (`generate`: Image Playground draws a stylized portrait from it first).
+        /// From a picture of the person (`generate`: Image Playground draws a stylized portrait from it first). The
+        /// work runs off the main thread; the avatar's two files are replaced together.
         func makeAvatar(generate: Bool) {
             guard let url = pickImage(), confirmOwnFace() else { return }
             makingAvatar = true
-            message = generate ? "Drawing your portrait…" : nil
+            message = generate ? "Drawing your portrait…" : "Finding your face…"
+            let style = avatarStyle
             Task {
                 defer { makingAvatar = false }
                 do {
-                    let avatar: AvatarMaker.Avatar
-                    if generate {
-                        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                            let photo = CGImageSourceCreateImageAtIndex(source, 0, nil)
-                        else { throw AvatarMaker.Failure.unreadable }
-                        avatar = try await AvatarMaker.generate(from: photo, style: avatarStyle)
+                    let avatar = try await Task.detached {
+                        let picture = try AvatarMaker.load(url)
+                        return generate ? try await AvatarMaker.generate(from: picture, style: style) : try AvatarMaker.make(from: picture)
+                    }.value
+                    let staging = FileManager.default.temporaryDirectory.appending(
+                        path: "takely-avatar-\(UUID().uuidString)", directoryHint: .isDirectory)
+                    try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+                    try avatar.png.write(to: staging.appending(path: "avatar.png"))
+                    try JSONEncoder().encode(avatar.face).write(to: staging.appending(path: "avatar.json"))
+                    try FileManager.default.createDirectory(
+                        at: Self.avatarFolder.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if FileManager.default.fileExists(atPath: Self.avatarFolder.path) {
+                        _ = try FileManager.default.replaceItemAt(Self.avatarFolder, withItemAt: staging)
                     } else {
-                        avatar = try AvatarMaker.make(from: url)
+                        try FileManager.default.moveItem(at: staging, to: Self.avatarFolder)
                     }
-                    try FileManager.default.createDirectory(at: Self.avatarFolder, withIntermediateDirectories: true)
-                    try avatar.png.write(to: Self.avatarFolder.appending(path: "avatar.png"))
-                    try JSONEncoder().encode(avatar.face).write(to: Self.avatarFolder.appending(path: "avatar.json"))
                     avatarImage = NSImage(data: avatar.png)
                     hasAvatar = true
                     message = "Avatar ready: it appears in the bubble of demos recorded without the camera."
@@ -292,6 +305,7 @@
             try? FileManager.default.removeItem(at: Self.avatarFolder)
             hasAvatar = false
             avatarImage = nil
+            message = "Avatar removed. Demos already recorded keep theirs."
         }
 
         /// The plan, or why it can't run.

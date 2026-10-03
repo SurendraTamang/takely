@@ -46,6 +46,7 @@ public final class FrameRenderer: Sendable {
 
     /// Whether the avatar will be drawn (the export then needs the compositor).
     public var hasAvatar: Bool { avatar != nil }
+    var avatarVoice: VoiceLevels? { avatar?.voice }
 
     /// Whether any zoom will be drawn (the export then needs the compositor).
     public var hasZooms: Bool { !zooms.isEmpty }
@@ -95,7 +96,9 @@ public final class FrameRenderer: Sendable {
         return caption.transformed(by: CGAffineTransform(translationX: x, y: y))
     }
 
-    public func compose(screen: CIImage, camera: CIImage?, at t: Double) -> CIImage {
+    /// `t` is recording time; `outputTime` (where this frame is in the export, after cuts) times the avatar's
+    /// mouth to the narration as it plays.
+    public func compose(screen: CIImage, camera: CIImage?, at t: Double, outputTime: Double? = nil) -> CIImage {
         var image = redact(screen, at: t)
         if project.effects.cursorHighlight, let p = cursor.position(at: t) {
             let r = canvas.height * 0.035
@@ -117,7 +120,7 @@ public final class FrameRenderer: Sendable {
         if project.camera.enabled, let camera, let center = project.camera.bubbleCenter(at: t) {
             image = bubble(camera, center: point(center)).composited(over: image)
         } else if let avatar, let center = project.camera.bubbleCenter(at: t) {
-            image = bubble(avatarFrame(avatar, at: t), center: point(center)).composited(over: image)
+            image = bubble(avatarFrame(avatar, at: t, voiceAt: outputTime ?? t), center: point(center)).composited(over: image)
         }
         if let caption = captions.first(where: { $0.cue.start <= t && t < $0.cue.end }) {
             image = caption.image.composited(over: image)
@@ -126,7 +129,7 @@ public final class FrameRenderer: Sendable {
     }
 
     /// The portrait at `t`: mouth opened by the narration's loudness, eyelids closed while blinking, a gentle bob.
-    func avatarFrame(_ avatar: (image: CIImage, face: AvatarFace, voice: VoiceLevels), at t: Double) -> CIImage {
+    func avatarFrame(_ avatar: (image: CIImage, face: AvatarFace, voice: VoiceLevels), at t: Double, voiceAt: Double? = nil) -> CIImage {
         let extent = avatar.image.extent
         let (w, h) = (extent.width, extent.height)
         let face = avatar.face
@@ -145,7 +148,7 @@ public final class FrameRenderer: Sendable {
                 .transformed(by: CGAffineTransform(translationX: center.x, y: center.y))
         }
         var image = avatar.image
-        let level = avatar.voice.level(at: t)
+        let level = avatar.voice.level(at: voiceAt ?? t)
         let mouth = face.mouth
         image = ellipse(
             around: mouth, width: mouth.width * w * 0.8, height: mouth.height * h * 1.4 * level,

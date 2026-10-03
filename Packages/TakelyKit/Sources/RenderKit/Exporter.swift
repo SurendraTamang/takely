@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import ImageIO
 import OSLog
 import ProjectKit
 
@@ -97,6 +98,7 @@ public struct Exporter: Sendable {
         /// Captions on the recording timeline.
         let cues: [CaptionCue]
         let passthrough: Bool
+        let renderer: FrameRenderer
 
         /// A player item for previewing: plays exactly what the export would write.
         public func playerItem() -> AVPlayerItem {
@@ -118,9 +120,7 @@ public struct Exporter: Sendable {
         let transcript = bundle.captionTranscript()
         let cues = transcript?.cues() ?? []
         let narration = (try? bundle.readNarration()) ?? []
-        let renderer = FrameRenderer(
-            project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions(), zooms: edits.zooms,
-            avatar: project.camera.enabled ? nil : await Self.avatar(bundle, duration: project.duration))
+        let redactions = try bundle.readRedactions()
         let map = EditMap(cuts: edits.cuts, duration: project.duration)
         guard map.outputDuration > 0 else { throw RenderError.emptyRecording }
         let composition = AVMutableComposition()
@@ -174,6 +174,7 @@ public struct Exporter: Sendable {
         // end of the video.
         var narrationTrack: AVMutableCompositionTrack?
         var narrationAssets: [AVURLAsset] = []  // referenced until inserted (tracks hold their asset weakly)
+        var spokenLines: [(t: Double, rms: [Float])] = []  // where each line plays in the output (moves the avatar's mouth)
         var spoken = CMTime.zero
         for clip in narration {
             let t = map.position(clip.t)
@@ -189,8 +190,16 @@ public struct Exporter: Sendable {
             let length = CMTimeMinimum(range.duration, room)
             try track.insertTimeRange(CMTimeRange(start: range.start, duration: length), of: source, at: at)
             spoken = at + length
+            if let rms = Self.loudness(of: asset.url) {
+                spokenLines.append((at.seconds, Array(rms.prefix(Int((length.seconds * VoiceLevels.rate).rounded(.up))))))
+            }
         }
         _ = narrationAssets
+        // The avatar stands in for a camera that wasn't recorded, and talks when the narration does (output time).
+        let avatar = tracks[.camera] == nil && !spokenLines.isEmpty ? Self.avatarImage(bundle) : nil
+        let renderer = FrameRenderer(
+            project: project, cursor: cursorTrack, captions: cues, redactions: redactions, zooms: edits.zooms,
+            avatar: avatar.map { ($0.image, $0.face, VoiceLevels.place(spokenLines, duration: map.outputDuration)) })
 
         let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
         let passthrough =
@@ -202,7 +211,7 @@ public struct Exporter: Sendable {
         guard !passthrough else {
             return Built(
                 composition: composition, videoComposition: nil, audioMix: nil, project: project, map: map, cues: cues,
-                passthrough: true)
+                passthrough: true, renderer: renderer)
         }
         let instruction = TakelyInstruction(
             timeRange: CMTimeRange(start: .zero, duration: composition.duration),
@@ -241,7 +250,7 @@ public struct Exporter: Sendable {
         }
         return Built(
             composition: composition, videoComposition: AVVideoComposition(configuration: configuration), audioMix: mix,
-            project: project, map: map, cues: cues, passthrough: false)
+            project: project, map: map, cues: cues, passthrough: false, renderer: renderer)
     }
 
     /// Chapters on the output timeline: one whose start was cut begins where the cut joins; one cut entirely (or
@@ -257,17 +266,12 @@ public struct Exporter: Sendable {
         return result
     }
 
-    /// The bundle's avatar, with the narration's loudness to move its mouth (none without both).
-    static func avatar(_ bundle: ProjectBundle, duration: Double) async -> (image: CIImage, face: AvatarFace, voice: VoiceLevels)? {
-        guard let face = bundle.readAvatarFace(), let image = CIImage(contentsOf: bundle.avatarImageURL) else { return nil }
-        let clips = ((try? bundle.readNarration()) ?? []).compactMap { clip -> (t: Double, rms: [Float])? in
-            loudness(of: bundle.narrationURL.appending(path: clip.file)).map { (clip.t, $0) }
-        }
-        guard !clips.isEmpty else { return nil }
-        return (
-            image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)), face,
-            VoiceLevels.place(clips, duration: duration)
-        )
+    /// The bundle's avatar portrait and face, decoded once.
+    static func avatarImage(_ bundle: ProjectBundle) -> (image: CIImage, face: AvatarFace)? {
+        guard let face = bundle.readAvatarFace(), let source = CGImageSourceCreateWithURL(bundle.avatarImageURL as CFURL, nil),
+            let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        return (CIImage(cgImage: image), face)
     }
 
     /// RMS loudness of an audio file, `VoiceLevels.rate` values a second.
