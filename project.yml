@@ -10,10 +10,6 @@ configFiles:
 packages:
   TakelyKit:
     path: Packages/TakelyKit
-  # Proprietary (see Packages/TakelyPro/LICENSE). The open-source build removes this package and the TakelyPro
-  # dependency below; the app compiles without it (`#if canImport(TakelyPro)`), with no transcript/AI pass.
-  TakelyPro:
-    path: Packages/TakelyPro
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     exactVersion: 3.1.0
@@ -48,8 +44,6 @@ targets:
         copy:
           destination: wrapper
           subpath: Contents/Helpers
-      - package: TakelyPro
-        product: TakelyPro
       - package: KeyboardShortcuts
     info:
       path: App/Info.plist

@@ -1,0 +1,17 @@
+Takely
+Copyright (C) 2026 Surendra Tamang
+Licensed under the GNU Affero General Public License v3.0 (see LICENSE).
+
+This product includes third-party software:
+
+WebRTC audio processing (AEC3), prebuilt as Packages/TakelyKit/Vendor/WebRTCAEC.xcframework
+by scripts/build-webrtc-apm.sh from https://webrtc.googlesource.com/src
+  Copyright (c) 2011, The WebRTC project authors. All rights reserved.
+  BSD 3-Clause License, with an additional patent grant.
+  It includes, each under its own license (texts in Packages/TakelyKit/Vendor/webrtc-aec/licenses/):
+  Abseil (Apache License 2.0), PFFFT (BSD-like), Ooura FFT, RNNoise (BSD 3-Clause), spl_sqrt_floor,
+  and the webrtc-audio-processing packaging (BSD 3-Clause).
+
+KeyboardShortcuts — https://github.com/sindresorhus/KeyboardShortcuts
+  Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
+  MIT License
