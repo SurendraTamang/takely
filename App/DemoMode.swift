@@ -2,6 +2,7 @@
     import AVFoundation
     import AppCore
     import AppKit
+    import ImageIO
     import KeyboardShortcuts
     import ProjectKit
     import SwiftUI
@@ -26,7 +27,9 @@
             model = DemoModel()
             model.run = { [weak self] script, voice in
                 guard let self else { return }
-                await self.run(script, voice: voice, recorder: AppDemoRecorder(center: center, coordinator: coordinator))
+                let recorder = AppDemoRecorder(center: center, coordinator: coordinator)
+                if self.model.showAvatar, self.model.hasAvatar { recorder.avatar = DemoModel.avatarFolder }
+                await self.run(script, voice: voice, recorder: recorder)
             }
             KeyboardShortcuts.disable(.stopDemo)
             KeyboardShortcuts.onKeyUp(for: .stopDemo) { [weak self] in self?.runner?.cancel() }
@@ -170,9 +173,16 @@
             let errorDescription: String?
         }
 
+        /// The avatar to put in the bubble of this recording (when there's no camera), if the person chose one.
+        var avatar: URL?
+
         func start() async throws {
             let reply = await center.perform(ControlRequest(.start, countdown: false))
             guard reply.ok else { throw Failed(errorDescription: reply.error) }
+            if let avatar, let bundle {
+                try? FileManager.default.copyItem(at: avatar.appending(path: "avatar.png"), to: bundle.avatarImageURL)
+                try? FileManager.default.copyItem(at: avatar.appending(path: "avatar.json"), to: bundle.avatarFaceURL)
+            }
         }
 
         func stop() async throws -> URL {
@@ -219,6 +229,70 @@
             .sorted { $0.quality.rawValue > $1.quality.rawValue }
         var voiceID: String?
         @ObservationIgnored var run: (DemoScript, AVSpeechSynthesisVoice?) async -> Void = { _, _ in }
+
+        // MARK: Avatar
+
+        /// Where the person's avatar is kept (only on this Mac).
+        static let avatarFolder = URL.applicationSupportDirectory.appending(path: "Takely/Avatar", directoryHint: .isDirectory)
+        var hasAvatar = FileManager.default.fileExists(atPath: avatarFolder.appending(path: "avatar.json").path)
+        var avatarImage: NSImage? = NSImage(contentsOf: avatarFolder.appending(path: "avatar.png"))
+        var showAvatar = UserDefaults.standard.object(forKey: "demoShowAvatar") as? Bool ?? true {
+            didSet { UserDefaults.standard.set(showAvatar, forKey: "demoShowAvatar") }
+        }
+        var avatarStyle = AvatarMaker.Style.animation
+        var makingAvatar = false
+
+        /// Only the person's own face: asked before any picture is used.
+        private func confirmOwnFace() -> Bool {
+            let alert = NSAlert()
+            alert.messageText = "Use only a picture of yourself"
+            alert.informativeText = "Your avatar speaks for you in recordings. Don't use anyone else's face. The picture stays on this Mac."
+            alert.addButton(withTitle: "It's Me")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+
+        private func pickImage() -> URL? {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.image]
+            panel.message = "Choose a portrait of yourself, facing the camera"
+            return panel.runModal() == .OK ? panel.url : nil
+        }
+
+        /// From a picture of the person (`generate`: Image Playground draws a stylized portrait from it first).
+        func makeAvatar(generate: Bool) {
+            guard let url = pickImage(), confirmOwnFace() else { return }
+            makingAvatar = true
+            message = generate ? "Drawing your portrait…" : nil
+            Task {
+                defer { makingAvatar = false }
+                do {
+                    let avatar: AvatarMaker.Avatar
+                    if generate {
+                        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                            let photo = CGImageSourceCreateImageAtIndex(source, 0, nil)
+                        else { throw AvatarMaker.Failure.unreadable }
+                        avatar = try await AvatarMaker.generate(from: photo, style: avatarStyle)
+                    } else {
+                        avatar = try AvatarMaker.make(from: url)
+                    }
+                    try FileManager.default.createDirectory(at: Self.avatarFolder, withIntermediateDirectories: true)
+                    try avatar.png.write(to: Self.avatarFolder.appending(path: "avatar.png"))
+                    try JSONEncoder().encode(avatar.face).write(to: Self.avatarFolder.appending(path: "avatar.json"))
+                    avatarImage = NSImage(data: avatar.png)
+                    hasAvatar = true
+                    message = "Avatar ready: it appears in the bubble of demos recorded without the camera."
+                } catch {
+                    message = error.localizedDescription
+                }
+            }
+        }
+
+        func removeAvatar() {
+            try? FileManager.default.removeItem(at: Self.avatarFolder)
+            hasAvatar = false
+            avatarImage = nil
+        }
 
         /// The plan, or why it can't run.
         var parsed: Result<DemoScript, DemoScript.ParseError> {
@@ -276,7 +350,7 @@
         }
     }
 
-    private struct DemoView: View {
+    struct DemoView: View {
         @Bindable var model: DemoModel
 
         var body: some View {
@@ -310,11 +384,36 @@
                         .keyboardShortcut(.defaultAction)
                         .disabled((try? model.parsed.get())?.steps.isEmpty ?? true || model.running || model.planning)
                 }
+                avatarRow
                 if let message = model.message { Text(message).font(.callout).foregroundStyle(.secondary) }
                 Text("Takely clicks and types for you while recording. Press Esc to stop; the recording so far is kept.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding()
+        }
+    }
+
+    extension DemoView {
+        /// The talking portrait shown in the bubble of demos recorded without the camera.
+        var avatarRow: some View {
+            HStack(spacing: 10) {
+                if let image = model.avatarImage {
+                    Image(nsImage: image).resizable().frame(width: 40, height: 40).clipShape(Circle())
+                }
+                Toggle("Avatar", isOn: $model.showAvatar).disabled(!model.hasAvatar)
+                Spacer()
+                Picker("Style", selection: $model.avatarStyle) {
+                    ForEach(AvatarMaker.Style.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                }
+                .frame(width: 150)
+                Button("Generate from Photo…") { model.makeAvatar(generate: true) }
+                    .help("Image Playground draws a stylized portrait from your photo (needs Apple Intelligence)")
+                Button("Use Picture…") { model.makeAvatar(generate: false) }
+                    .help("Use a portrait or drawing of yourself as it is")
+                if model.hasAvatar { Button("Remove") { model.removeAvatar() } }
+            }
+            .disabled(model.makingAvatar || model.running)
+            .controlSize(.small)
         }
     }
 

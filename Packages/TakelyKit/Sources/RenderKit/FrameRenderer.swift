@@ -149,11 +149,13 @@ public final class FrameRenderer: Sendable {
         let mouth = face.mouth
         image = ellipse(
             around: mouth, width: mouth.width * w * 0.8, height: mouth.height * h * 1.4 * level,
-            color: CIColor(red: 0.22, green: 0.05, blue: 0.06)
+            color: CIColor(red: 0.09, green: 0.04, blue: 0.04)  // a mouth's dark inside, not a colour of its own
         ).composited(over: image)
         let closed = AvatarMotion.blink(at: t)
         if closed > 0.05 {
-            let skin = CIColor(red: face.skin[safe: 0] ?? 0.85, green: face.skin[safe: 1] ?? 0.7, blue: face.skin[safe: 2] ?? 0.6)
+            // An eyelid is the skin above the eye, a little shaded.
+            let skin = CIColor(
+                red: (face.skin[safe: 0] ?? 0.85) * 0.9, green: (face.skin[safe: 1] ?? 0.7) * 0.9, blue: (face.skin[safe: 2] ?? 0.6) * 0.9)
             for eye in [face.leftEye, face.rightEye] {
                 image = ellipse(around: eye, width: eye.width * w * 1.4, height: eye.height * h * 1.8 * closed, color: skin)
                     .composited(over: image)
