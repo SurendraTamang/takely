@@ -13,6 +13,10 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     exactVersion: 3.1.0
+  # Updates (EdDSA-signed appcast). Off unless TAKELY_APPCAST_URL and TAKELY_SPARKLE_PUBLIC_KEY are set.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -45,17 +49,21 @@ targets:
           destination: wrapper
           subpath: Contents/Helpers
       - package: KeyboardShortcuts
+      - package: Sparkle
     info:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Takely
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
         LSApplicationCategoryType: public.app-category.productivity
         LSUIElement: true
         NSScreenCaptureUsageDescription: Takely records your screen when you start a recording.
         NSCameraUsageDescription: Takely shows your camera in a bubble on your recordings.
         NSMicrophoneUsageDescription: Takely records your voice with your recordings.
+        SUFeedURL: $(TAKELY_APPCAST_URL)
+        SUPublicEDKey: $(TAKELY_SPARKLE_PUBLIC_KEY)
+        SUEnableAutomaticChecks: true
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleURLTypes:
           - CFBundleURLName: app.takely.automation
             CFBundleURLSchemes: [takely]
@@ -85,5 +93,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: takely
+        # Copied into the app (Contents/Helpers), not installed on its own: an archive must hold only the app.
+        SKIP_INSTALL: YES
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic

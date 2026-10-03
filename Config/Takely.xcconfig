@@ -3,4 +3,13 @@
 // `CODE_SIGN_IDENTITY = Apple Development` in Config/Local.xcconfig (gitignored).
 CODE_SIGN_IDENTITY = -
 DEVELOPMENT_TEAM =
+// Version (scripts/release.sh sets these for a release).
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+// Updates and licensing: empty here (off); set in Local.xcconfig or by the release script.
+TAKELY_APPCAST_URL =
+TAKELY_SPARKLE_PUBLIC_KEY =
+TAKELY_LICENSE_STORE_ID =
+TAKELY_LICENSE_PRODUCT_IDS =
+TAKELY_BUY_URL =
 #include? "Local.xcconfig"
