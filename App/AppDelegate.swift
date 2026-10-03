@@ -45,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private lazy var model = RecorderModel(controller: controller, settings: settings, coordinator: coordinator)
     private var statusItem: StatusItemController?
     private var automation: Automation?
+    private let updates = Updates()
+    #if canImport(TakelyPro)
+        /// Takely Pro's trial or license; re-checked at launch and daily.
+        private let license = LicenseManager()
+    #endif
     private var meetings: MeetingMonitor?
     #if canImport(TakelyPro)
         private var demo: DemoMode?
@@ -76,10 +81,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if canImport(TakelyPro)
-            let openEditor: ((ProjectBundle) -> Void)? = { [weak self] bundle in self?.showEditor(bundle) }
+            let openEditor: ((ProjectBundle) -> Void)? = { [weak self] bundle in
+                guard let self, ProUnlock.allowed(openSettings: showSettings) else { return }
+                showEditor(bundle)
+            }
             let openDemo: (() -> Void)? = { [weak self] in
-                self?.statusItem?.closePanel()
-                self?.demo?.show()
+                guard let self, ProUnlock.allowed(openSettings: showSettings) else { return }
+                self.statusItem?.closePanel()
+                self.demo?.show()
             }
         #else
             let openEditor: ((ProjectBundle) -> Void)? = nil
@@ -94,10 +103,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         notifier.activate()
         let statusItem = StatusItemController(
             model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor, openDemo: openDemo,
-            sharing: sharing)
+            sharing: sharing, checkForUpdates: updates.isAvailable ? { [updates] in updates.check() } : nil)
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         automation = Automation(host: coordinator, settings: settings)
+        #if canImport(TakelyPro)
+            Task { [license] in
+                while !Task.isCancelled {
+                    await license.refresh()
+                    try? await Task.sleep(for: .seconds(86_400))
+                }
+            }
+        #endif
         meetings = MeetingMonitor(settings: settings, controller: controller, session: session, notifier: notifier)
         meetings?.start()
         #if canImport(TakelyPro)
@@ -242,6 +259,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: Windows
 
+    private var licenseView: AnyView? {
+        #if canImport(TakelyPro)
+            AnyView(LicenseView(license: license))
+        #else
+            nil
+        #endif
+    }
+
     func showSettings() {
         statusItem?.closePanel()
         let window =
@@ -250,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 title: "Takely Settings",
                 content: SettingsView(
                     settings: settings, permissions: permissions, showOnboarding: { [weak self] in self?.showOnboarding() },
-                    sharing: sharing))
+                    sharing: sharing, license: licenseView))
         settingsWindow = window
         present(window)
     }

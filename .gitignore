@@ -19,3 +19,7 @@ scripts/aec-bench/out/
 
 # Local design notes and plans (not committed)
 docs/superpowers/
+
+# Release builds and their secrets
+dist/
+.env.release

@@ -10,6 +10,8 @@ struct SettingsView: View {
     let permissions: Permissions
     let showOnboarding: () -> Void
     let sharing: Sharing
+    /// Settings › License, in Takely Pro builds.
+    var license: AnyView?
 
     var body: some View {
         TabView {
@@ -18,6 +20,7 @@ struct SettingsView: View {
             Tab("Shortcuts", systemImage: "keyboard") { shortcuts }
             Tab("Share", systemImage: "link") { ShareSettingsView(sharing: sharing) }
             Tab("Automation", systemImage: "terminal") { automation }
+            if let license { Tab("License", systemImage: "key") { license } }
             Tab("Permissions", systemImage: "lock.shield") { permissionsTab }
         }
         .frame(width: 520, height: 480)

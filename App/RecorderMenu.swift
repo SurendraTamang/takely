@@ -12,6 +12,8 @@ struct RecorderMenu: View {
     /// Opens Demo Mode (Takely Pro); nil without it.
     var openDemo: (() -> Void)?
     var sharing: Sharing?
+    /// "Check for Updates…" (builds with an update feed).
+    var checkForUpdates: (() -> Void)?
 
     private var controller: RecordingController { model.controller }
 
@@ -43,6 +45,9 @@ struct RecorderMenu: View {
                     }
                 }
                 Spacer()
+                if let checkForUpdates, controller.phase == .idle {
+                    Button("Check for Updates…", action: checkForUpdates)
+                }
                 if let openDemo, controller.phase == .idle {
                     Button("Demo…", action: openDemo)
                 }
