@@ -2,7 +2,9 @@
     import AVFoundation
     import AppCore
     import AppKit
+    import ImageIO
     import KeyboardShortcuts
+    import OSLog
     import ProjectKit
     import SwiftUI
     import TakelyControl
@@ -26,7 +28,9 @@
             model = DemoModel()
             model.run = { [weak self] script, voice in
                 guard let self else { return }
-                await self.run(script, voice: voice, recorder: AppDemoRecorder(center: center, coordinator: coordinator))
+                let recorder = AppDemoRecorder(center: center, coordinator: coordinator)
+                if self.model.showAvatar, self.model.hasAvatar { recorder.avatar = DemoModel.avatarFolder }
+                await self.run(script, voice: voice, recorder: recorder)
             }
             KeyboardShortcuts.disable(.stopDemo)
             KeyboardShortcuts.onKeyUp(for: .stopDemo) { [weak self] in self?.runner?.cancel() }
@@ -170,9 +174,21 @@
             let errorDescription: String?
         }
 
+        /// The avatar to put in the bubble of this recording (when there's no camera), if the person chose one.
+        var avatar: URL?
+
         func start() async throws {
             let reply = await center.perform(ControlRequest(.start, countdown: false))
             guard reply.ok else { throw Failed(errorDescription: reply.error) }
+            // The avatar stands in for the camera: only in recordings made without it.
+            if let avatar, let bundle, (try? bundle.readProject())?.camera.enabled == false {
+                do {
+                    try FileManager.default.copyItem(at: avatar.appending(path: "avatar.png"), to: bundle.avatarImageURL)
+                    try FileManager.default.copyItem(at: avatar.appending(path: "avatar.json"), to: bundle.avatarFaceURL)
+                } catch {
+                    Logger(subsystem: "app.takely", category: "demo").error("avatar not added: \(error.localizedDescription)")
+                }
+            }
         }
 
         func stop() async throws -> URL {
@@ -219,6 +235,78 @@
             .sorted { $0.quality.rawValue > $1.quality.rawValue }
         var voiceID: String?
         @ObservationIgnored var run: (DemoScript, AVSpeechSynthesisVoice?) async -> Void = { _, _ in }
+
+        // MARK: Avatar
+
+        /// Where the person's avatar is kept (only on this Mac).
+        static let avatarFolder = URL.applicationSupportDirectory.appending(path: "Takely/Avatar", directoryHint: .isDirectory)
+        var hasAvatar = FileManager.default.fileExists(atPath: avatarFolder.appending(path: "avatar.json").path)
+        var avatarImage: NSImage? = NSImage(contentsOf: avatarFolder.appending(path: "avatar.png"))
+        var showAvatar = UserDefaults.standard.object(forKey: "demoShowAvatar") as? Bool ?? true {
+            didSet { UserDefaults.standard.set(showAvatar, forKey: "demoShowAvatar") }
+        }
+        var avatarStyle = AvatarMaker.Style.animation
+        var makingAvatar = false
+
+        /// Only the person's own face: asked before any picture is used.
+        private func confirmOwnFace() -> Bool {
+            let alert = NSAlert()
+            alert.messageText = "Use only a picture of yourself"
+            alert.informativeText =
+                "Your avatar speaks for you in recordings. Don't use anyone else's face. It's kept on this Mac and goes into the demos you record with it (and their exports)."
+            alert.addButton(withTitle: "It's Me")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+
+        private func pickImage() -> URL? {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.image]
+            panel.message = "Choose a portrait of yourself, facing the camera"
+            return panel.runModal() == .OK ? panel.url : nil
+        }
+
+        /// From a picture of the person (`generate`: Image Playground draws a stylized portrait from it first). The
+        /// work runs off the main thread; the avatar's two files are replaced together.
+        func makeAvatar(generate: Bool) {
+            guard let url = pickImage(), confirmOwnFace() else { return }
+            makingAvatar = true
+            message = generate ? "Drawing your portrait…" : "Finding your face…"
+            let style = avatarStyle
+            Task {
+                defer { makingAvatar = false }
+                do {
+                    let avatar = try await Task.detached {
+                        let picture = try AvatarMaker.load(url)
+                        return generate ? try await AvatarMaker.generate(from: picture, style: style) : try AvatarMaker.make(from: picture)
+                    }.value
+                    let staging = FileManager.default.temporaryDirectory.appending(
+                        path: "takely-avatar-\(UUID().uuidString)", directoryHint: .isDirectory)
+                    try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+                    try avatar.png.write(to: staging.appending(path: "avatar.png"))
+                    try JSONEncoder().encode(avatar.face).write(to: staging.appending(path: "avatar.json"))
+                    try FileManager.default.createDirectory(
+                        at: Self.avatarFolder.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    if FileManager.default.fileExists(atPath: Self.avatarFolder.path) {
+                        _ = try FileManager.default.replaceItemAt(Self.avatarFolder, withItemAt: staging)
+                    } else {
+                        try FileManager.default.moveItem(at: staging, to: Self.avatarFolder)
+                    }
+                    avatarImage = NSImage(data: avatar.png)
+                    hasAvatar = true
+                    message = "Avatar ready: it appears in the bubble of demos recorded without the camera."
+                } catch {
+                    message = error.localizedDescription
+                }
+            }
+        }
+
+        func removeAvatar() {
+            try? FileManager.default.removeItem(at: Self.avatarFolder)
+            hasAvatar = false
+            avatarImage = nil
+            message = "Avatar removed. Demos already recorded keep theirs."
+        }
 
         /// The plan, or why it can't run.
         var parsed: Result<DemoScript, DemoScript.ParseError> {
@@ -276,7 +364,7 @@
         }
     }
 
-    private struct DemoView: View {
+    struct DemoView: View {
         @Bindable var model: DemoModel
 
         var body: some View {
@@ -310,11 +398,36 @@
                         .keyboardShortcut(.defaultAction)
                         .disabled((try? model.parsed.get())?.steps.isEmpty ?? true || model.running || model.planning)
                 }
+                avatarRow
                 if let message = model.message { Text(message).font(.callout).foregroundStyle(.secondary) }
                 Text("Takely clicks and types for you while recording. Press Esc to stop; the recording so far is kept.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding()
+        }
+    }
+
+    extension DemoView {
+        /// The talking portrait shown in the bubble of demos recorded without the camera.
+        var avatarRow: some View {
+            HStack(spacing: 10) {
+                if let image = model.avatarImage {
+                    Image(nsImage: image).resizable().frame(width: 40, height: 40).clipShape(Circle())
+                }
+                Toggle("Avatar", isOn: $model.showAvatar).disabled(!model.hasAvatar)
+                Spacer()
+                Picker("Style", selection: $model.avatarStyle) {
+                    ForEach(AvatarMaker.Style.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                }
+                .frame(width: 150)
+                Button("Generate from Photo…") { model.makeAvatar(generate: true) }
+                    .help("Image Playground draws a stylized portrait from your photo (needs Apple Intelligence)")
+                Button("Use Picture…") { model.makeAvatar(generate: false) }
+                    .help("Use a portrait or drawing of yourself as it is")
+                if model.hasAvatar { Button("Remove") { model.removeAvatar() } }
+            }
+            .disabled(model.makingAvatar || model.running)
+            .controlSize(.small)
         }
     }
 

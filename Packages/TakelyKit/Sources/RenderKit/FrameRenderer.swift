@@ -18,6 +18,8 @@ public final class FrameRenderer: Sendable {
     /// Areas blurred out (secrets on screen, areas the user chose); only enabled ones are kept.
     private let redactions: [Redaction]
     private let zooms: [Zoom]
+    /// A talking portrait in the bubble instead of the camera (Demo Mode narration).
+    private let avatar: (image: CIImage, face: AvatarFace, voice: VoiceLevels)?
     /// The cursor, smoothed, sampled every `1 / pathRate` s (for zooms that follow it). Precomputed: frames are
     /// rendered concurrently and out of order, so each must depend only on its time.
     private let cursorPath: [NormalizedPoint]
@@ -27,6 +29,7 @@ public final class FrameRenderer: Sendable {
 
     public init(
         project: Project, cursor: CursorTrack, captions: [CaptionCue] = [], redactions: [Redaction] = [], zooms: [Zoom] = [],
+        avatar: (image: CIImage, face: AvatarFace, voice: VoiceLevels)? = nil,
         context: CIContext = CIContext(options: [.cacheIntermediates: false])
     ) {
         self.project = project
@@ -37,8 +40,13 @@ public final class FrameRenderer: Sendable {
         self.captions = project.effects.burnInCaptions == true ? captions.map { ($0, Self.captionImage($0.text, canvas: canvas)) } : []
         self.redactions = redactions.filter(\.enabled)
         self.zooms = zooms.filter { $0.end > $0.start && $0.scale > 1 }
+        self.avatar = avatar
         cursorPath = self.zooms.contains { $0.focus == .cursor } ? Self.smoothedPath(cursor, duration: project.duration) : []
     }
+
+    /// Whether the avatar will be drawn (the export then needs the compositor).
+    public var hasAvatar: Bool { avatar != nil }
+    var avatarVoice: VoiceLevels? { avatar?.voice }
 
     /// Whether any zoom will be drawn (the export then needs the compositor).
     public var hasZooms: Bool { !zooms.isEmpty }
@@ -88,7 +96,9 @@ public final class FrameRenderer: Sendable {
         return caption.transformed(by: CGAffineTransform(translationX: x, y: y))
     }
 
-    public func compose(screen: CIImage, camera: CIImage?, at t: Double) -> CIImage {
+    /// `t` is recording time; `outputTime` (where this frame is in the export, after cuts) times the avatar's
+    /// mouth to the narration as it plays.
+    public func compose(screen: CIImage, camera: CIImage?, at t: Double, outputTime: Double? = nil) -> CIImage {
         var image = redact(screen, at: t)
         if project.effects.cursorHighlight, let p = cursor.position(at: t) {
             let r = canvas.height * 0.035
@@ -109,11 +119,53 @@ public final class FrameRenderer: Sendable {
         image = zoom(image.cropped(to: canvas), at: t)
         if project.camera.enabled, let camera, let center = project.camera.bubbleCenter(at: t) {
             image = bubble(camera, center: point(center)).composited(over: image)
+        } else if let avatar, let center = project.camera.bubbleCenter(at: t) {
+            image = bubble(avatarFrame(avatar, at: t, voiceAt: outputTime ?? t), center: point(center)).composited(over: image)
         }
         if let caption = captions.first(where: { $0.cue.start <= t && t < $0.cue.end }) {
             image = caption.image.composited(over: image)
         }
         return image.cropped(to: canvas)
+    }
+
+    /// The portrait at `t`: mouth opened by the narration's loudness, eyelids closed while blinking, a gentle bob.
+    func avatarFrame(_ avatar: (image: CIImage, face: AvatarFace, voice: VoiceLevels), at t: Double, voiceAt: Double? = nil) -> CIImage {
+        let extent = avatar.image.extent
+        let (w, h) = (extent.width, extent.height)
+        let face = avatar.face
+        /// A soft-edged filled ellipse in image coordinates (origin bottom-left).
+        func ellipse(around r: NormalizedRect, width: Double, height: Double, color: CIColor) -> CIImage {
+            guard width > 0.5, height > 0.5 else { return .empty() }
+            let gradient = CIFilter.radialGradient()
+            gradient.center = .zero
+            gradient.radius0 = 80
+            gradient.radius1 = 100
+            gradient.color0 = color
+            gradient.color1 = CIColor(red: color.red, green: color.green, blue: color.blue, alpha: 0)
+            let center = CGPoint(x: extent.minX + (r.x + r.width / 2) * w, y: extent.minY + (1 - r.y - r.height / 2) * h)
+            return gradient.outputImage!.cropped(to: CGRect(x: -100, y: -100, width: 200, height: 200))
+                .transformed(by: CGAffineTransform(scaleX: width / 200, y: height / 200))
+                .transformed(by: CGAffineTransform(translationX: center.x, y: center.y))
+        }
+        var image = avatar.image
+        let level = avatar.voice.level(at: voiceAt ?? t)
+        let mouth = face.mouth
+        image = ellipse(
+            around: mouth, width: mouth.width * w * 0.8, height: mouth.height * h * 1.4 * level,
+            color: CIColor(red: 0.09, green: 0.04, blue: 0.04)  // a mouth's dark inside, not a colour of its own
+        ).composited(over: image)
+        let closed = AvatarMotion.blink(at: t)
+        if closed > 0.05 {
+            // An eyelid is the skin above the eye, a little shaded.
+            let skin = CIColor(
+                red: (face.skin[safe: 0] ?? 0.85) * 0.9, green: (face.skin[safe: 1] ?? 0.7) * 0.9, blue: (face.skin[safe: 2] ?? 0.6) * 0.9)
+            for eye in [face.leftEye, face.rightEye] {
+                image = ellipse(around: eye, width: eye.width * w * 1.4, height: eye.height * h * 1.8 * closed, color: skin)
+                    .composited(over: image)
+            }
+        }
+        let rise = AvatarMotion.bob(at: t, level: level) * h
+        return image.clampedToExtent().transformed(by: CGAffineTransform(translationX: 0, y: rise)).cropped(to: extent)
     }
 
     /// Scales the screen around the zoom's focus, keeping the view inside the screen.
@@ -218,4 +270,8 @@ public final class FrameRenderer: Sendable {
         case .square: 0
         }
     }
+}
+
+extension Array {
+    fileprivate subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
