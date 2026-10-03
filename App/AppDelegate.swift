@@ -82,11 +82,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if canImport(TakelyPro)
             let openEditor: ((ProjectBundle) -> Void)? = { [weak self] bundle in
-                guard let self, ProUnlock.allowed(openSettings: showSettings) else { return }
+                guard let self, ProUnlock.allowed(license, openSettings: showSettings) else { return }
                 showEditor(bundle)
             }
             let openDemo: (() -> Void)? = { [weak self] in
-                guard let self, ProUnlock.allowed(openSettings: showSettings) else { return }
+                guard let self, ProUnlock.allowed(license, openSettings: showSettings) else { return }
                 self.statusItem?.closePanel()
                 self.demo?.show()
             }
@@ -108,11 +108,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         automation = Automation(host: coordinator, settings: settings)
         #if canImport(TakelyPro)
+            // Hourly: the trial's end and the offline grace take effect on time (the key itself is checked weekly).
             Task { [license] in
                 while !Task.isCancelled {
                     await license.refresh()
-                    try? await Task.sleep(for: .seconds(86_400))
+                    try? await Task.sleep(for: .seconds(3600))
                 }
+            }
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) {
+                [license] _ in Task { @MainActor in await license.refresh() }
             }
         #endif
         meetings = MeetingMonitor(settings: settings, controller: controller, session: session, notifier: notifier)

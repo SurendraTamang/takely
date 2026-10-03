@@ -21,8 +21,12 @@
                     }
                 }
                 if license.hasKey {
-                    Button(working ? "Working…" : "Deactivate on This Mac") { run { try await license.deactivate() } }
-                        .disabled(working)
+                    HStack {
+                        Button(working ? "Working…" : "Check Again") { run { await license.refresh(force: true) } }
+                            .disabled(working)
+                        Button("Deactivate on This Mac") { run { try await license.deactivate() } }
+                            .disabled(working)
+                    }
                     Text("Frees this Mac's activation so you can use the key on another Mac.").font(.caption).foregroundStyle(.secondary)
                 } else {
                     TextField("License key", text: $key, prompt: Text("From your purchase email"))
@@ -62,11 +66,12 @@
 
     enum ProUnlock {
         /// Before a Pro action: true when Pro is available; otherwise offers to unlock it.
-        @MainActor static func allowed(openSettings: () -> Void) -> Bool {
+        @MainActor static func allowed(_ license: LicenseManager, openSettings: () -> Void) -> Bool {
             guard !ProAccess.isUnlocked else { return true }
             let alert = NSAlert()
             alert.messageText = "This is a Takely Pro feature"
-            alert.informativeText = "Your trial has ended. Enter a license key, or buy Takely Pro, in Settings › License."
+            let reason = if case .locked(let reason) = license.state { reason } else { "" }
+            alert.informativeText = "\(reason) Enter a license key, or buy Takely Pro, in Settings › License."
             alert.addButton(withTitle: "Open License Settings")
             alert.addButton(withTitle: "Not Now")
             NSApp.activate()

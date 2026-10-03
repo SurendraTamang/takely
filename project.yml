@@ -93,5 +93,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: takely
+        # Copied into the app (Contents/Helpers), not installed on its own: an archive must hold only the app.
+        SKIP_INSTALL: YES
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic

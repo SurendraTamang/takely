@@ -23,6 +23,8 @@ dry=0
 [[ "${2:-}" == "--dry-run" ]] && dry=1
 build_number="${BUILD_NUMBER:-$(date -u +%Y%m%d%H%M)}"
 dist="dist/$version"
+# Every release's DMG stays here, so the appcast lists them all (and Sparkle can make deltas).
+updates="dist/updates"
 app="$dist/export/Takely.app"
 dmg="$dist/Takely-$version.dmg"
 
@@ -49,6 +51,7 @@ need() {
 
 need DEVELOPER_ID TEAM_ID NOTARY_PROFILE TAKELY_APPCAST_URL TAKELY_SPARKLE_PUBLIC_KEY TAKELY_DOWNLOAD_BASE \
     TAKELY_LICENSE_STORE_ID TAKELY_LICENSE_PRODUCT_IDS TAKELY_BUY_URL
+((dry)) || [[ "$TAKELY_DOWNLOAD_BASE" == */ ]] || { echo "error: TAKELY_DOWNLOAD_BASE must end with /" >&2; exit 1; }
 [[ -d Packages/TakelyPro ]] || { echo "error: releases include Takely Pro (Packages/TakelyPro is missing)" >&2; exit 1; }
 if ((!dry)) && ! security find-identity -v -p codesigning | grep -qF "$DEVELOPER_ID"; then
     echo "error: no \"$DEVELOPER_ID\" certificate in the keychain. Developer ID certificates need the Apple Developer Program." >&2
@@ -56,9 +59,24 @@ if ((!dry)) && ! security find-identity -v -p codesigning | grep -qF "$DEVELOPER
 fi
 sparkle_bin="build/SourcePackages/artifacts/sparkle/Sparkle/bin"
 
+# notarytool can exit 0 with an "Invalid" result: check the status, and show Apple's log when it isn't Accepted.
+notarize() {
+    echo "+ xcrun notarytool submit $1 --keychain-profile <profile> --wait"
+    ((dry)) && return
+    local result id status
+    result=$(xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)
+    id=$(plutil -extract id raw - <<<"$result")
+    status=$(plutil -extract status raw - <<<"$result")
+    if [[ "$status" != "Accepted" ]]; then
+        echo "error: notarization $status" >&2
+        xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+        exit 1
+    fi
+}
+
 echo "==> Takely $version ($build_number)"
 run rm -rf "$dist"
-run mkdir -p "$dist/updates"
+run mkdir -p "$dist" "$updates"
 run xcodegen generate --quiet --spec project.pro.yml
 
 echo "==> Archive (Developer ID, hardened runtime, secure timestamp)"
@@ -89,18 +107,18 @@ run codesign --verify --deep --strict --verbose=2 "$app"
 
 echo "==> Notarize the app"
 run ditto -c -k --keepParent "$app" "$dist/Takely.zip"
-run xcrun notarytool submit "$dist/Takely.zip" --keychain-profile "$NOTARY_PROFILE" --wait
+notarize "$dist/Takely.zip"
 run xcrun stapler staple "$app"
 
 echo "==> DMG"
 run hdiutil create -volname "Takely" -srcfolder "$app" -ov -format UDZO "$dmg"
 run codesign --sign "$DEVELOPER_ID" --timestamp "$dmg"
-run xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait
+notarize "$dmg"
 run xcrun stapler staple "$dmg"
 run spctl --assess --type open --context context:primary-signature --verbose "$dmg"
 
 echo "==> Sparkle appcast (EdDSA signatures from the private key in your keychain)"
-run cp "$dmg" "$dist/updates/"
-run "$sparkle_bin/generate_appcast" --download-url-prefix "$TAKELY_DOWNLOAD_BASE" "$dist/updates"
+run cp "$dmg" "$updates/"
+run "$sparkle_bin/generate_appcast" --download-url-prefix "$TAKELY_DOWNLOAD_BASE" "$updates"
 
-echo "==> Done: upload $dist/updates/ (the DMG and appcast.xml) to $TAKELY_DOWNLOAD_BASE"
+echo "==> Done: upload $updates/ (the DMGs and appcast.xml) to $TAKELY_DOWNLOAD_BASE"
