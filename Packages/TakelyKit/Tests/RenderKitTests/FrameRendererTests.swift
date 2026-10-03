@@ -135,6 +135,29 @@ import Testing
         #expect(path[90].x > 0.88)  // caught up
     }
 
+    @Test func theAvatarTalksAndBlinks() {
+        // A 100×100 skin-coloured face with black eyes; the mouth box is where it should open.
+        let skin = CIImage(color: CIColor(red: 0.9, green: 0.75, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let eyes = CIImage(color: .black).cropped(to: CGRect(x: 25, y: 60, width: 10, height: 6))
+            .composited(over: CIImage(color: .black).cropped(to: CGRect(x: 65, y: 60, width: 10, height: 6)))
+        let face = AvatarFace(
+            mouth: NormalizedRect(x: 0.35, y: 0.7, width: 0.3, height: 0.1),
+            leftEye: NormalizedRect(x: 0.25, y: 0.34, width: 0.1, height: 0.06),
+            rightEye: NormalizedRect(x: 0.65, y: 0.34, width: 0.1, height: 0.06), skin: [0.9, 0.75, 0.6])
+        let voice = VoiceLevels(samples: [Float](repeating: 1, count: 30) + [Float](repeating: 0, count: 300))
+        let renderer = FrameRenderer(
+            project: project(camera: false), cursor: CursorTrack(), avatar: (eyes.composited(over: skin), face, voice), context: context)
+        #expect(renderer.hasAvatar)
+        let image = eyes.composited(over: skin)
+        let talking = renderer.avatarFrame((image, face, voice), at: 0.5)
+        let quiet = renderer.avatarFrame((image, face, voice), at: 5)
+        #expect(pixel(talking, 50, 25)[0] < 120, "mouth open: \(pixel(talking, 50, 25))")
+        #expect(pixel(quiet, 50, 25)[0] > 200, "mouth closed: \(pixel(quiet, 50, 25))")
+        let blinkTime = stride(from: 0.0, to: 10, by: 0.01).first { AvatarMotion.blink(at: $0) > 0.95 }!
+        #expect(pixel(renderer.avatarFrame((image, face, voice), at: blinkTime), 30, 63)[0] > 150, "eyelid closed")
+        #expect(pixel(quiet, 30, 63)[0] < 60, "eye open")
+    }
+
     @Test func clickPulseFadesOut() {
         let cursor = CursorTrack(clicks: [ClickEvent(t: 1, x: 0.5, y: 0.5)])
         let renderer = FrameRenderer(project: project(camera: false, ripples: true), cursor: cursor, context: context)

@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import OSLog
 import ProjectKit
 
@@ -118,7 +119,8 @@ public struct Exporter: Sendable {
         let cues = transcript?.cues() ?? []
         let narration = (try? bundle.readNarration()) ?? []
         let renderer = FrameRenderer(
-            project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions(), zooms: edits.zooms)
+            project: project, cursor: cursorTrack, captions: cues, redactions: try bundle.readRedactions(), zooms: edits.zooms,
+            avatar: project.camera.enabled ? nil : await Self.avatar(bundle, duration: project.duration))
         let map = EditMap(cuts: edits.cuts, duration: project.duration)
         guard map.outputDuration > 0 else { throw RenderError.emptyRecording }
         let composition = AVMutableComposition()
@@ -194,6 +196,7 @@ public struct Exporter: Sendable {
         let passthrough =
             !needsCompositing(project: project, cursor: cursorTrack, hasCameraTrack: tracks[.camera] != nil)
             && !renderer.hasCaptions && !renderer.hasRedactions && !renderer.hasZooms && !map.hasCuts && narrationTrack == nil
+            && !renderer.hasAvatar
             && presentAudioKinds.count <= 1
             && !audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
         guard !passthrough else {
@@ -252,6 +255,35 @@ public struct Exporter: Sendable {
             result.append(Marker(t: span.start, title: marker.title))
         }
         return result
+    }
+
+    /// The bundle's avatar, with the narration's loudness to move its mouth (none without both).
+    static func avatar(_ bundle: ProjectBundle, duration: Double) async -> (image: CIImage, face: AvatarFace, voice: VoiceLevels)? {
+        guard let face = bundle.readAvatarFace(), let image = CIImage(contentsOf: bundle.avatarImageURL) else { return nil }
+        let clips = ((try? bundle.readNarration()) ?? []).compactMap { clip -> (t: Double, rms: [Float])? in
+            loudness(of: bundle.narrationURL.appending(path: clip.file)).map { (clip.t, $0) }
+        }
+        guard !clips.isEmpty else { return nil }
+        return (
+            image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)), face,
+            VoiceLevels.place(clips, duration: duration)
+        )
+    }
+
+    /// RMS loudness of an audio file, `VoiceLevels.rate` values a second.
+    static func loudness(of url: URL) -> [Float]? {
+        guard let file = try? AVAudioFile(forReading: url),
+            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+            (try? file.read(into: buffer)) != nil, let channel = buffer.floatChannelData?[0]
+        else { return nil }
+        let window = max(1, Int(file.processingFormat.sampleRate / VoiceLevels.rate))
+        let frames = Int(buffer.frameLength)
+        return stride(from: 0, to: frames, by: window).map { start in
+            let end = min(frames, start + window)
+            var sum: Float = 0
+            for i in start..<end { sum += channel[i] * channel[i] }
+            return (sum / Float(max(1, end - start))).squareRoot()
+        }
     }
 
     /// Whether frames must go through the compositor, judged by the data actually present.

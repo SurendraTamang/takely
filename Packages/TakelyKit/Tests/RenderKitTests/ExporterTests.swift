@@ -312,6 +312,30 @@ import Testing
         #expect(narration.timeRange.end.seconds <= built.map.outputDuration + 0.01)  // no frozen tail
     }
 
+    @Test func anAvatarComesWithItsNarrationsLoudness() async throws {
+        let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
+        #expect(await Exporter.avatar(bundle, duration: 3) == nil)  // none without one
+        let image = CIImage(color: CIColor(red: 0.9, green: 0.7, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64))
+        let cg = try #require(CIContext().createCGImage(image, from: image.extent))
+        let destination = try #require(CGImageDestinationCreateWithURL(bundle.avatarImageURL as CFURL, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, cg, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        let face = AvatarFace(
+            mouth: .init(x: 0.4, y: 0.7, width: 0.2, height: 0.1), leftEye: .init(x: 0.3, y: 0.3, width: 0.1, height: 0.05),
+            rightEye: .init(x: 0.6, y: 0.3, width: 0.1, height: 0.05), skin: [0.9, 0.7, 0.6])
+        try JSONEncoder().encode(face).write(to: bundle.avatarFaceURL)
+        #expect(await Exporter.avatar(bundle, duration: 3) == nil)  // nothing said: no avatar
+        try FileManager.default.createDirectory(at: bundle.narrationURL, withIntermediateDirectories: true)
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000))
+        buffer.frameLength = 48_000
+        for i in 0..<48_000 { buffer.floatChannelData![0][i] = 0.3 * sin(2 * .pi * 220 * Float(i) / 48_000) }
+        try AVAudioFile(forWriting: bundle.narrationURL.appending(path: "a.caf"), settings: format.settings).write(from: buffer)
+        try bundle.write([NarrationClip(t: 1, duration: 1, file: "a.caf", text: "Hi")])
+        let avatar = try #require(await Exporter.avatar(bundle, duration: 3))
+        #expect(avatar.face == face && avatar.voice.level(at: 1.5) > 0.5 && avatar.voice.level(at: 0.5) == 0)
+    }
+
     @Test func oddCutsLeaveNoGapsInAnyTrack() async throws {
         let bundle = try await makeBundle(
             segments: [SegSpec(seconds: 2, tracks: [.screen, .mic]), SegSpec(seconds: 2, tracks: [.screen, .mic])], cameraEnabled: false)
