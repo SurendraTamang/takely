@@ -11,6 +11,10 @@ public final class SocketServer: @unchecked Sendable {
     private let path: String
     private let handler: Handler
     private let state = Mutex<(listener: Int32, stopped: Bool, inode: ino_t)>((-1, false, 0))
+    /// Clients still sending their request: more than `maxReading` at once are turned away, so a few slow ones can't
+    /// tie up the system's threads.
+    private let reading = Mutex(0)
+    static let maxReading = 4
     private let log = Logger(subsystem: "app.takely", category: "control")
     /// A client gets this long to send its request (and to take its reply): a silent one can't hold the server.
     static let timeout = timeval(tv_sec: 5, tv_usec: 0)
@@ -89,8 +93,19 @@ public final class SocketServer: @unchecked Sendable {
             // blocking reads never sit on the async thread pool.
             let handler = handler
             let log = log
+            let admitted = reading.withLock { count in
+                guard count < Self.maxReading else { return false }
+                count += 1
+                return true
+            }
+            guard admitted else {
+                close(connection)
+                continue
+            }
             DispatchQueue.global(qos: .userInitiated).async {
-                guard let line = LineIO.readLine(connection) else {
+                let line = LineIO.readLine(connection, deadline: .now + .seconds(Int(Self.timeout.tv_sec)))
+                self.reading.withLock { $0 -= 1 }
+                guard let line else {
                     close(connection)  // hung up or said nothing (e.g. another instance checking the socket is live)
                     return
                 }
@@ -176,11 +191,13 @@ public enum SocketError: Error, LocalizedError, Equatable {
 
 /// Newline-framed messages over a blocking socket.
 enum LineIO {
-    /// Up to the first newline (or the end); nil if nothing arrived. Requests and replies are small.
-    static func readLine(_ fd: Int32, limit: Int = 1 << 20) -> Data? {
+    /// Up to the first newline (or the end); nil if nothing arrived. Requests and replies are small. `deadline` bounds
+    /// the whole line (the socket's timeout bounds each read, so a byte-at-a-time sender is cut off here).
+    static func readLine(_ fd: Int32, limit: Int = 1 << 20, deadline: ContinuousClock.Instant? = nil) -> Data? {
         var data = Data()
         var byte: UInt8 = 0
         while data.count < limit {
+            if let deadline, ContinuousClock.now >= deadline { return nil }
             let n = read(fd, &byte, 1)
             if n < 0, errno == EINTR { continue }
             if n <= 0 || byte == UInt8(ascii: "\n") { break }

@@ -89,4 +89,16 @@ import Testing
         #expect(reply.ok)
         #expect(ContinuousClock.now - started < .seconds(2))
     }
+
+    @Test func aLineSentByteByByteIsCutOffAtTheDeadline() throws {
+        var fds: [Int32] = [0, 0]
+        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        defer { fds.forEach { close($0) } }
+        _ = write(fds[1], "x", 1)  // then nothing more: the read would wait for the newline
+        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
+        setsockopt(fds[0], SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        let started = ContinuousClock.now
+        #expect(LineIO.readLine(fds[0], deadline: .now) == nil)
+        #expect(ContinuousClock.now - started < .seconds(1))
+    }
 }
