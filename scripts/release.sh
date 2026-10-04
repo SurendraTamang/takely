@@ -12,7 +12,7 @@
 #   TAKELY_APPCAST_URL    where appcast.xml will be served, e.g. https://updates.example.com/appcast.xml
 #   TAKELY_SPARKLE_PUBLIC_KEY  from Sparkle's generate_keys (the private key stays in your keychain)
 #   TAKELY_DOWNLOAD_BASE  where the DMGs will be served, e.g. https://updates.example.com/
-#   TAKELY_LICENSE_STORE_ID, TAKELY_LICENSE_PRODUCT_IDS, TAKELY_BUY_URL — the Lemon Squeezy store
+#   TAKELY_LICENSE_URL (license server), TAKELY_LICENSE_PRODUCT_IDS (Paddle pro_… IDs), TAKELY_BUY_URL (website buy page)
 # Sparkle's tools (generate_keys, sign_update, generate_appcast) come with the Sparkle package:
 #   build/SourcePackages/artifacts/sparkle/Sparkle/bin/  (after one build)
 set -euo pipefail
@@ -50,7 +50,7 @@ need() {
 }
 
 need DEVELOPER_ID TEAM_ID NOTARY_PROFILE TAKELY_APPCAST_URL TAKELY_SPARKLE_PUBLIC_KEY TAKELY_DOWNLOAD_BASE \
-    TAKELY_LICENSE_STORE_ID TAKELY_LICENSE_PRODUCT_IDS TAKELY_BUY_URL
+    TAKELY_LICENSE_URL TAKELY_LICENSE_PRODUCT_IDS TAKELY_BUY_URL
 ((dry)) || [[ "$TAKELY_DOWNLOAD_BASE" == */ ]] || { echo "error: TAKELY_DOWNLOAD_BASE must end with /" >&2; exit 1; }
 [[ -d Packages/TakelyPro ]] || { echo "error: releases include Takely Pro (Packages/TakelyPro is missing)" >&2; exit 1; }
 if ((!dry)) && ! security find-identity -v -p codesigning | grep -qF "$DEVELOPER_ID"; then
@@ -86,7 +86,7 @@ run xcodebuild archive -project Takely.xcodeproj -scheme Takely -configuration R
     CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$DEVELOPER_ID" DEVELOPMENT_TEAM="$TEAM_ID" \
     ENABLE_HARDENED_RUNTIME=YES OTHER_CODE_SIGN_FLAGS=--timestamp \
     TAKELY_APPCAST_URL="$TAKELY_APPCAST_URL" TAKELY_SPARKLE_PUBLIC_KEY="$TAKELY_SPARKLE_PUBLIC_KEY" \
-    TAKELY_LICENSE_STORE_ID="$TAKELY_LICENSE_STORE_ID" TAKELY_LICENSE_PRODUCT_IDS="$TAKELY_LICENSE_PRODUCT_IDS" \
+    TAKELY_LICENSE_URL="$TAKELY_LICENSE_URL" TAKELY_LICENSE_PRODUCT_IDS="$TAKELY_LICENSE_PRODUCT_IDS" \
     TAKELY_BUY_URL="$TAKELY_BUY_URL"
 
 options="$dist/ExportOptions.plist"
