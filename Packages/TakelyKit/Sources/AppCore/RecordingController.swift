@@ -193,6 +193,7 @@ public final class RecordingController {
             errorMessage = "Finish the current recording first."
             return
         }
+        errorMessage = nil  // a Retry after a failed export starts clean
         isBusy = true
         defer { finishBusy() }
         await exportAndReport(bundle)

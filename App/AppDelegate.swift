@@ -73,8 +73,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // One Takely at a time: a second copy would offer to "recover" the first one's live recording and fight
         // it for the hotkeys and the automation socket.
-        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
-            .filter { $0.processIdentifier != getpid() }
+        let me = NSRunningApplication.current
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "").filter { other in
+            guard other.processIdentifier != getpid(), !other.isTerminated else { return false }
+            #if DEBUG
+                if other.bundleURL != Bundle.main.bundleURL { return false }  // a development build beside the installed app
+            #endif
+            // Two launched at once (login item and a click): the older one stays.
+            let theirs = other.launchDate ?? .distantPast
+            let mine = me.launchDate ?? .distantFuture
+            return theirs < mine || (theirs == mine && other.processIdentifier < getpid())
+        }
         if let other = others.first {
             let alert = NSAlert()
             alert.messageText = "Takely is already running"

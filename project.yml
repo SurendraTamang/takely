@@ -36,6 +36,8 @@ targets:
         buildPhase: resources
       - path: NOTICE
         buildPhase: resources
+      - path: LICENSE
+        buildPhase: resources
     dependencies:
       - package: TakelyKit
         product: ProjectKit

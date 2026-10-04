@@ -31,6 +31,11 @@ enum Acknowledgements {
         {
             parts.append(text)
         }
+        if let license = Bundle.main.url(forResource: "LICENSE", withExtension: nil),
+            let text = try? String(contentsOf: license, encoding: .utf8)
+        {
+            parts.append("── Takely (open-source parts): GNU Affero General Public License v3.0 ──\n\n\(text)")
+        }
         if let folder = Bundle.main.url(forResource: "Licenses", withExtension: nil),
             let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
         {

@@ -80,7 +80,10 @@ struct SettingsView: View {
                         .disabled(!settings.transcribe)
                     Toggle("AI title, summary and chapter names", isOn: $settings.aiSummary)
                         .disabled(!settings.transcribe)
-                    Toggle("Hide secrets on screen and in captions (keys, emails, card numbers)", isOn: $settings.redactSecrets)
+                    Toggle(isOn: $settings.redactSecrets) {
+                        Text("Hide secrets on screen and in captions (keys, emails, card numbers)")
+                        Text("On screen they're blurred (review them after recording); in the transcript they're masked for good.")
+                    }
                     Toggle("Zoom in on clicks automatically", isOn: $settings.autoZoom)
                     Toggle("Remove long pauses automatically", isOn: $settings.removeSilences)
                         .disabled(!settings.transcribe)
