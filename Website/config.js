@@ -10,6 +10,6 @@ window.TAKELY = {
   paddleEnvironment: "sandbox", // "production" when your account is approved
   paddleClientToken: "",
   priceId: "",
-  // The license server (Packages/TakelyPro/Server/license), e.g. https://takely-license.you.workers.dev
+  // The license server (a Cloudflare Worker), e.g. https://takely-license.you.workers.dev
   licenseServer: "",
 };
