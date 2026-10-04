@@ -97,7 +97,7 @@ final class MeetingMonitor {
 
     /// The notification's Record action.
     private func recordCurrent() async {
-        guard let meeting = watcher.current else { return }
+        guard let meeting = watcher.current, !watcher.isEnding else { return }  // the call is ending: nothing to record
         await record(meeting)
     }
 
@@ -111,7 +111,7 @@ final class MeetingMonitor {
             }
         }
         // The person may have started a recording meanwhile: leave it alone.
-        guard controller.phase == .idle, !controller.isBusy, watcher.current == meeting else { return }
+        guard controller.phase == .idle, !controller.isBusy, watcher.current == meeting, !watcher.isEnding else { return }
         session.target = window.map { .window($0) } ?? .display
         session.meetingMode = true
         await controller.start()
@@ -165,7 +165,8 @@ final class MeetingMonitor {
             guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, let id = info[kCGWindowNumber as String] as? UInt32,
                 (info[kCGWindowLayer as String] as? Int) == 0
             else { return nil }
-            let bundle = bundles[pid] ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+            // As its app's, like the mic users: an installed web app's windows (com.google.Chrome.app.<id>) are Chrome's.
+            let bundle = bundles[pid] ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier.map(MeetingWatcher.owningApp)
             bundles[pid] = bundle
             guard let bundle else { return nil }
             return MeetingSnapshot.Window(bundleID: bundle, id: id, title: info[kCGWindowName as String] as? String ?? "")

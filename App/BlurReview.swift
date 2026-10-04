@@ -10,6 +10,8 @@ final class BlurReviewModel {
     /// Why `redactions.json` couldn't be read: saving is then off, so it isn't replaced with an empty list.
     let loadError: String?
     let duration: Double
+    /// Why the scan for secrets didn't finish (the recording's "blur" note): an empty list then isn't "nothing found".
+    let scanNote: String?
     var thumbnails: [UUID: CGImage] = [:]
     /// Adding an area: the frame shown and its time.
     var addTime = 0.0
@@ -26,6 +28,7 @@ final class BlurReviewModel {
         }
         let project = try? bundle.readProject()
         duration = project?.duration ?? 0
+        scanNote = project?.notes?["blur"]
         segments = project?.segments ?? []
     }
 
@@ -74,7 +77,8 @@ struct BlurReviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if model.redactions.isEmpty && !adding {
-                Text("Nothing is blurred in this recording.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80)
+                Text(model.scanNote ?? "Nothing is blurred in this recording.").foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 80)
             } else if !adding {
                 List($model.redactions) { $redaction in row($redaction) }
                     .frame(minHeight: 240)

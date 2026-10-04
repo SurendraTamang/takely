@@ -20,10 +20,11 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
     private static let editAction = "edit"
     private static let shareAction = "share"
     private static let failedExportCategory = "export-failed"
-    private static let retryAction = "retry"
+    private nonisolated static let retryAction = "retry"
     /// Exports a saved recording again (the failure notification's Retry).
     var onRetryExport: ((ProjectBundle) -> Void)?
     private static let linkCategory = "link-ready"
+    private static let failedUploadCategory = "upload-failed"
     /// Uploads a recording to the user's bucket (the Share action), and runs after each export (auto-upload).
     var onShare: ((ProjectBundle) -> Void)?
     var onExported: ((URL) -> Void)?
@@ -55,6 +56,9 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
                     UNNotificationAction(identifier: Self.retryAction, title: "Retry"),
                     UNNotificationAction(identifier: Self.revealAction, title: "Show in Finder"),
                 ], intentIdentifiers: []),
+            UNNotificationCategory(
+                identifier: Self.failedUploadCategory,
+                actions: [UNNotificationAction(identifier: Self.retryAction, title: "Retry")], intentIdentifiers: []),
             UNNotificationCategory(
                 identifier: Self.meetingCategory,
                 actions: [UNNotificationAction(identifier: Self.recordMeetingAction, title: "Record")],
@@ -152,6 +156,20 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
+    /// "Upload failed" with Retry (uploads the recording again, through `onShare`).
+    func uploadFailed(_ message: String, bundle: ProjectBundle) async {
+        announce(message)
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional else { return onUnseenFailure?() ?? () }
+        let content = UNMutableNotificationContent()
+        content.title = "Upload failed"
+        content.body = message
+        content.sound = .default
+        content.categoryIdentifier = Self.failedUploadCategory
+        content.userInfo = ["path": bundle.url.path, "failedUpload": true]
+        try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
     /// Shows a failure some other way when notifications aren't allowed (the app opens its panel, which shows it).
     var onUnseenFailure: (() -> Void)?
 
@@ -188,6 +206,13 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
             return
         }
         guard let path = response.notification.request.content.userInfo["path"] as? String else { return }
+        if response.notification.request.content.userInfo["failedUpload"] != nil {
+            // Only Retry uploads: clicking the notification to read or clear it never does.
+            guard response.actionIdentifier == Self.retryAction else { return }
+            let bundle = ProjectBundle(url: URL(filePath: path))
+            await MainActor.run { self.onShare?(bundle) }
+            return
+        }
         if response.notification.request.content.userInfo["failedExport"] != nil {
             let bundle = ProjectBundle(url: URL(filePath: path))
             let action = response.actionIdentifier

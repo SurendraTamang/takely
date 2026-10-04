@@ -76,4 +76,17 @@ import Testing
         let reply = try await Task.detached { try SocketClient.send(ControlRequest(.status), path: path) }.value
         #expect(reply.ok)
     }
+
+    @Test func aSilentClientDoesNotDelayOthers() async throws {
+        let path = Self.socketPath()
+        let server = SocketServer(path: path) { _ in ControlReply(ok: true, state: "idle") }
+        try server.start()
+        defer { server.stop() }
+        let silent = try SocketClient.connect(path)  // connects, never writes
+        defer { close(silent) }
+        let started = ContinuousClock.now
+        let reply = try await Task.detached { try SocketClient.send(ControlRequest(.status), path: path) }.value
+        #expect(reply.ok)
+        #expect(ContinuousClock.now - started < .seconds(2))
+    }
 }

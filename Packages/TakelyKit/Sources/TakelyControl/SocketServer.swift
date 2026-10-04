@@ -85,23 +85,26 @@ public final class SocketServer: @unchecked Sendable {
             setsockopt(connection, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
             setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
             setsockopt(connection, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-            // The request is read here (bounded by the timeout), so blocking reads never sit on the async thread pool.
-            guard let line = LineIO.readLine(connection) else {
-                close(connection)  // hung up or said nothing (e.g. another instance checking the socket is live)
-                continue
-            }
+            // Each client is read on its own queue (bounded by the timeout): a silent one delays only itself, and
+            // blocking reads never sit on the async thread pool.
             let handler = handler
             let log = log
-            Task.detached {
-                defer { close(connection) }
-                let reply: ControlReply
-                if let request = try? JSONDecoder().decode(ControlRequest.self, from: line) {
-                    reply = await handler(request)
-                } else {
-                    reply = ControlReply(ok: false, state: "unknown", error: "Couldn't read the request")
-                    log.error("bad control request")
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let line = LineIO.readLine(connection) else {
+                    close(connection)  // hung up or said nothing (e.g. another instance checking the socket is live)
+                    return
                 }
-                if let data = try? JSONEncoder().encode(reply) { LineIO.write(data, to: connection) }
+                Task.detached {
+                    defer { close(connection) }
+                    let reply: ControlReply
+                    if let request = try? JSONDecoder().decode(ControlRequest.self, from: line) {
+                        reply = await handler(request)
+                    } else {
+                        reply = ControlReply(ok: false, state: "unknown", error: "Couldn't read the request")
+                        log.error("bad control request")
+                    }
+                    if let data = try? JSONEncoder().encode(reply) { LineIO.write(data, to: connection) }
+                }
             }
         }
     }
