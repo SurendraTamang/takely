@@ -48,7 +48,7 @@ public enum RecoveryService {
                 switch project.status {
                 case .recording: return RecoveryCandidate(bundle: bundle, kind: .crashed, createdAt: project.createdAt)
                 case .finished:
-                    if bundle.hasExport { return nil }
+                    if bundle.hasExport || project.exportedAt != nil { return nil }
                     return RecoveryCandidate(
                         bundle: bundle, kind: project.segments.isEmpty ? .empty : .unexported, createdAt: project.createdAt)
                 }

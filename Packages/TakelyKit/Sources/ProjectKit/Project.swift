@@ -142,6 +142,8 @@ public struct Project: Codable, Sendable, Equatable {
     /// Written by the AI summary (Pro) after a recording; absent in older manifests.
     public var title: String?
     public var summary: String?
+    /// When the last export finished: the recording counts as done even if its MP4 was moved out of the bundle.
+    public var exportedAt: Date?
 
     public init(
         status: Status = .recording, createdAt: Date = .now, capture: Capture, segments: [Segment] = [], camera: Camera,

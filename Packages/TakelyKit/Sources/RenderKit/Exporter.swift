@@ -83,6 +83,11 @@ public struct Exporter: Sendable {
         }
         // Swaps atomically: a failed replace keeps the previous export.
         _ = try FileManager.default.replaceItemAt(output, withItemAt: partial)
+        // Done: recovery won't offer it again even if the MP4 is moved out of the bundle later.
+        if var finished = try? bundle.readProject() {
+            finished.exportedAt = .now
+            try? bundle.write(finished)
+        }
         progress(1)
         return output
     }

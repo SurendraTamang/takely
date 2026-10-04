@@ -126,6 +126,11 @@ enum RecoveryFixture {
         let exported = try make(.finished, at: 3, segments: [Project.Segment(file: "segment-000.mov", duration: 1, tracks: [.screen])])
         try Data().write(to: exported.exportURL)
         let empty = try make(.finished, at: 4)
+        // Exported once, then its MP4 dragged out of the bundle: still done.
+        let moved = try make(.finished, at: 5, segments: [Project.Segment(file: "segment-000.mov", duration: 1, tracks: [.screen])])
+        var project = try moved.readProject()
+        project.exportedAt = .now
+        try moved.write(project)
 
         let found = RecoveryService.scan(folder)
         #expect(found.map(\.bundle) == [crashed, unexported, empty])  // oldest first

@@ -71,6 +71,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// App Intents can run as soon as the app launches (Shortcuts or Siri launch it): their dependency waits until
     /// automation is ready.
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // One Takely at a time: a second copy would offer to "recover" the first one's live recording and fight
+        // it for the hotkeys and the automation socket.
+        let me = NSRunningApplication.current
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "").filter { other in
+            guard other.processIdentifier != getpid(), !other.isTerminated else { return false }
+            #if DEBUG
+                if other.bundleURL != Bundle.main.bundleURL { return false }  // a development build beside the installed app
+            #endif
+            // Two launched at once (login item and a click): the older one stays.
+            let theirs = other.launchDate ?? .distantPast
+            let mine = me.launchDate ?? .distantFuture
+            return theirs < mine || (theirs == mine && other.processIdentifier < getpid())
+        }
+        if let other = others.first {
+            let alert = NSAlert()
+            alert.messageText = "Takely is already running"
+            alert.informativeText =
+                "Use the Takely icon in the menu bar\(other.bundleURL.map { " (\($0.path(percentEncoded: false)))" } ?? "")."
+            NSApp.activate()
+            alert.runModal()
+            exit(0)  // before anything starts: nothing to save
+        }
         AppDependencyManager.shared.add { @MainActor [weak self] () async -> AutomationCenter in
             while true {
                 if let center = self?.automation?.center { return center }
@@ -100,6 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if sharing.isConfigured { sharing.share(bundle) } else { showSettings() }
         }
         notifier.onExported = { [weak self] url in self?.sharing.recordingExported(url) }
+        notifier.onRetryExport = { [weak self] bundle in
+            guard let self else { return }
+            Task { await self.controller.export(bundle) }
+        }
         notifier.activate()
         let statusItem = StatusItemController(
             model: model, openSettings: { [weak self] in self?.showSettings() }, openEditor: openEditor, openDemo: openDemo,

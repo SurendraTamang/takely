@@ -7,7 +7,7 @@ import ProjectKit
 @preconcurrency import ScreenCaptureKit
 
 enum LiveSessionError: Error, LocalizedError {
-    case noDisplay, windowGone, areaGone, cameraDenied, microphoneDenied
+    case noDisplay, windowGone, areaGone, cameraDenied, microphoneDenied, screenDenied
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +16,8 @@ enum LiveSessionError: Error, LocalizedError {
         case .areaGone: "That area is no longer on a connected display. Choose the area again."
         case .cameraDenied: "Allow Camera access in System Settings, or turn the camera off."
         case .microphoneDenied: "Allow Microphone access in System Settings, or turn the microphone off."
+        case .screenDenied:
+            "Screen Recording is off for Takely: allow it in System Settings › Privacy & Security › Screen & System Audio Recording, then reopen Takely. (A rebuilt copy needs its old entry removed first, or `tccutil reset ScreenCapture app.takely.Takely`.)"
         }
     }
 }
@@ -72,7 +74,12 @@ final class LiveRecordingSession: RecordingSession {
         let useCamera = settings.camera && !meeting
         if useCamera, !(await AVCaptureDevice.requestAccess(for: .video)) { throw LiveSessionError.cameraDenied }
         if settings.microphone || meeting, !(await AVCaptureDevice.requestAccess(for: .audio)) { throw LiveSessionError.microphoneDenied }
-        let (filter, captureRect, sourceRect, kind) = try await capture(target)
+        let (filter, captureRect, sourceRect, kind): (SCContentFilter, CGRect, CGRect?, CaptureTarget)
+        do {
+            (filter, captureRect, sourceRect, kind) = try await capture(target)
+        } catch let error as NSError where error.domain == SCStreamErrorDomain && error.code == SCStreamError.Code.userDeclined.rawValue {
+            throw LiveSessionError.screenDenied  // ScreenCaptureKit's own text ("declined TCCs") says nothing useful
+        }
         let scale = Double(filter.pointPixelScale)
         var config = RecordingConfig(
             target: kind, captureRect: captureRect,
