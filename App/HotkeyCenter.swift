@@ -44,3 +44,22 @@ enum HotkeyCenter {
         }
     }
 }
+
+/// The panel's and welcome window's shortcut hints, from the shortcuts actually set (they're rebindable).
+@MainActor
+enum HotkeyHints {
+    static func key(_ name: KeyboardShortcuts.Name) -> String? { KeyboardShortcuts.getShortcut(for: name)?.description }
+
+    static func join(_ items: [(KeyboardShortcuts.Name, String)]) -> String {
+        items.compactMap { name, what in key(name).map { "\($0) \(what)" } }.joined(separator: " · ")
+    }
+
+    static var setup: String {
+        join([
+            (.toggleRecording, "records from anywhere"), (.togglePanel, "opens this panel"), (.toggleCamera, "camera"),
+            (.togglePrompter, "prompter"),
+        ])
+    }
+
+    static var recording: String { join([(.retake, "oops, retake"), (.addMarker, "marker"), (.toggleDrawing, "draw on screen")]) }
+}

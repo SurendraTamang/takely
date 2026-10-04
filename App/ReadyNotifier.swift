@@ -121,6 +121,9 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         let blurred =
             ProjectBundle.containing(url).flatMap { try? $0.readRedactions() }?.filter { $0.enabled && $0.kind != .manual }.count ?? 0
         if blurred > 0 { content.body += "\n\(blurred) secret\(blurred == 1 ? "" : "s") blurred" }
+        for note in (ProjectBundle.containing(url).flatMap { try? $0.readProject() }?.notes ?? [:]).sorted(by: { $0.key < $1.key }) {
+            content.body += "\n\(note.value)"
+        }
         if let recap {
             content.body += "\n\(recap)"
             self.recap = nil

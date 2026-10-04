@@ -45,6 +45,7 @@ final class EchoCanceller {
     private var skew: Int64 = 0
     /// Set when AEC3 fails: the microphone then passes through unprocessed, sample for sample.
     private var bypassing = false
+    var isBypassing: Bool { bypassing }
     private static let log = Logger(subsystem: "app.takely", category: "capture")
 
     /// Nil if AEC3 can't be created.

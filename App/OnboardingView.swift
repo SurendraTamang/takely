@@ -9,7 +9,7 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Welcome to Takely").font(.largeTitle.bold())
             Text(
-                "Takely lives in your menu bar. If you can't see its icon (it can hide behind the notch), press **⌥⇧T** anytime to open it, and **⌥⇧R** to start or stop recording."
+                "Takely lives in your menu bar. If you can't see its icon (it can hide behind the notch), press **\(HotkeyHints.key(.togglePanel) ?? "the panel shortcut")** anytime to open it, and **\(HotkeyHints.key(.toggleRecording) ?? "the recording shortcut")** to start or stop recording."
             )
             .fixedSize(horizontal: false, vertical: true)
             Divider()

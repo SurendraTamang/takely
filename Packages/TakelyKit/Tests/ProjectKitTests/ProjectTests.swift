@@ -34,4 +34,8 @@ import Testing
         project.segments.append(.init(file: "segment-001.mov", duration: 2.5, tracks: [.screen]))
         #expect(project.duration == 7.0)
     }
+
+    @Test func schemaVersionsBelowOneAreRefused() {
+        #expect(throws: ProjectError.unsupportedSchemaVersion(0)) { try Project.decode(Data(#"{"schemaVersion":0}"#.utf8)) }
+    }
 }

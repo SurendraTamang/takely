@@ -117,6 +117,7 @@ public actor CaptureSession {
             sources = try makeSources(router)
             for source in sources { try await source.start() }
             try await armed()
+            if let failure = router.streamFailureBeforeStart { throw failure }
             let w = try openSegment(index: 0, in: bundle, config: config)
             writer = w
             router.attach(w, offset: 0)
@@ -167,6 +168,7 @@ public actor CaptureSession {
         guard state == .recording, let router, let bundle else { throw CaptureError.invalidState }
         let segmentStart = project?.duration ?? 0
         let requested = now()
+        router.flushEchoCancellation()  // speech still inside the canceller would hide that a pause had ended
         let cut = max(segmentStart, router.retakePoint(at: requested))
         let removed = max(0, (router.editedTime(at: requested) ?? cut) - cut)
         do {
@@ -251,6 +253,13 @@ public actor CaptureSession {
         let dropped = writer.droppedFrames
         if !dropped.isEmpty { log.info("\(file) dropped frames: \(String(describing: dropped))") }
         project?.camera = router.camera
+        switch router.echoCancellation {
+        case .neverStarted: project?.setNote("echo", "Echo removal couldn't start: the microphone wasn't cleaned (the original is kept).")
+        case .stopped:
+            project?.setNote(
+                "echo", "Echo removal stopped working during this recording: the microphone wasn't cleaned (the original is kept).")
+        case .off, .running: break
+        }
         if let project { try bundle.write(project) }
         try bundle.write(router.cursor)
         try bundle.write(router.markers)

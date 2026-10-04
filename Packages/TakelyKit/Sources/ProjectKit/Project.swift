@@ -144,6 +144,15 @@ public struct Project: Codable, Sendable, Equatable {
     public var summary: String?
     /// When the last export finished: the recording counts as done even if its MP4 was moved out of the bundle.
     public var exportedAt: Date?
+    /// What the person should know about this recording (why there are no captions, echo removal failing…), each
+    /// under its own key so one can be cleared without the others; shown with the Ready notification.
+    public var notes: [String: String]?
+
+    public mutating func setNote(_ key: String, _ text: String?) {
+        var all = notes ?? [:]
+        all[key] = text
+        notes = all.isEmpty ? nil : all
+    }
 
     public init(
         status: Status = .recording, createdAt: Date = .now, capture: Capture, segments: [Segment] = [], camera: Camera,
@@ -164,7 +173,7 @@ public struct Project: Codable, Sendable, Equatable {
     public static func decode(_ data: Data) throws -> Project {
         struct Header: Decodable { let schemaVersion: Int }
         let version = try JSONDecoder().decode(Header.self, from: data).schemaVersion
-        guard version <= currentSchemaVersion else { throw ProjectError.unsupportedSchemaVersion(version) }
+        guard (1...currentSchemaVersion).contains(version) else { throw ProjectError.unsupportedSchemaVersion(version) }
         // ponytail: v1 is the only schema; add stepwise `migrate(from:)` cases when v2 lands.
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

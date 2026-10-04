@@ -106,8 +106,8 @@ final class LiveRecordingSession: RecordingSession {
         active = (handle.router, captureRect)
         bubbleStart()
         let router = handle.router
-        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { _ in
-            router.recordClick(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
+            router.recordClick(at: CMClockGetTime(CMClockGetHostTimeClock()), location: event.cgEvent?.location)
         }
         return handle
     }
