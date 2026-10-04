@@ -171,7 +171,7 @@ struct RecorderMenu: View {
             } label: {
                 Label("Prompter", systemImage: "text.alignleft").frame(maxWidth: .infinity)
             }
-            Text("⌥⇧R records from anywhere · ⌥⇧T opens this panel · ⌥⇧C camera · ⌥⇧S prompter")
+            Text(model.setupHint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -224,7 +224,7 @@ struct RecorderMenu: View {
             }
             .controlSize(.large)
             .disabled(controller.isBusy)
-            Text("⌥⇧Z oops, retake · ⌥⇧M marker · ⌥⇧D draw on screen")
+            Text(model.recordingHint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

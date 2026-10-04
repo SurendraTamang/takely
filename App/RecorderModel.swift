@@ -25,6 +25,9 @@ final class RecorderModel {
     private(set) var cameras: [Device] = []
     /// True when ScreenCaptureKit can't be reached, e.g. Screen Recording isn't granted.
     private(set) var screenPermissionDenied = false
+    /// The hotkey hints, with the shortcuts as the person set them (refreshed when the panel opens).
+    private(set) var setupHint = HotkeyHints.setup
+    private(set) var recordingHint = HotkeyHints.recording
 
     init(controller: RecordingController, settings: RecordingSettings, coordinator: RecordingCoordinator) {
         self.controller = controller
@@ -34,6 +37,8 @@ final class RecorderModel {
 
     /// Runs whenever the panel opens; never touches the controller's error, so it survives reopening.
     func refresh() async {
+        setupHint = HotkeyHints.setup
+        recordingHint = HotkeyHints.recording
         refreshDevices()
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)

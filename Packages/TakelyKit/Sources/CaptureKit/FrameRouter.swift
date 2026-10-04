@@ -61,8 +61,18 @@ public final class FrameRouter: Sendable {
 
     /// Called by a source whose stream stopped on its own.
     public func reportStreamStopped(_ error: any Error, userInitiated: Bool) {
+        // Before recording began (during the countdown): the start fails instead of starting a dead recording.
+        if state.withLock({ $0.writer == nil }) { earlyFailure.withLock { $0 = $0 ?? error } }
         report(.streamStopped(userInitiated: userInitiated), error)
     }
+
+    private let earlyFailure = Mutex<(any Error)?>(nil)
+
+    /// Echo removal was asked for but isn't running (AEC3 couldn't start, or failed mid-recording): `mic` is raw.
+    var echoCancellationFailed: Bool { cancelsEcho && echo.withLock { $0?.isBypassing ?? true } }
+
+    /// A stream that stopped before the first segment opened (checked when the countdown ends).
+    var streamFailureBeforeStart: (any Error)? { earlyFailure.withLock { $0 } }
 
     /// Drops everything recorded at or after edited time `t` (cursor, clicks, bubble moves, markers, pauses):
     /// a segment starting at `t` couldn't be saved, or a retake cut there.
@@ -86,6 +96,9 @@ public final class FrameRouter: Sendable {
 
     /// Passes a buffer written to `mic` to the listener, if any and if recording.
     private func forwardMic(_ buffer: CMSampleBuffer) {
+        // Pauses are found in the microphone as written: echo-cancelled when cancellation is on, so speakers playing
+        // don't hide them (the oops-retake cuts back to one).
+        trackSilence(buffer)
         // Only audio from the running segment: the echo canceller can release audio from before it started.
         guard state.withLock({ $0.editedTime(at: buffer.presentationTimeStamp) != nil }) else { return }
         let delivery = micListener.withLock { m -> (@Sendable (MicAudio) -> Void, [Float])? in
@@ -165,7 +178,6 @@ public final class FrameRouter: Sendable {
     }
 
     public func receive(_ buffer: CMSampleBuffer, kind: TrackKind) {
-        if kind == .mic { trackSilence(buffer) }
         if cancelsEcho, kind == .system || kind == .mic { return receiveWithEchoCancellation(buffer, kind: kind) }
         if kind == .mic { forwardMic(buffer) }
         let (writer, offset) = state.withLock { s -> (SegmentWriter?, Double) in
@@ -222,9 +234,10 @@ public final class FrameRouter: Sendable {
         receive(retimed, kind: .screen)
     }
 
-    /// Records a click at host time `hostTime` if a segment is running.
-    public func recordClick(at hostTime: CMTime) {
-        guard let point = normalizedCursor() else { return }
+    /// Records a click at host time `hostTime` if a segment is running, where it happened (`location`: global points,
+    /// origin top-left — the event's own, since the cursor may have moved on by now).
+    public func recordClick(at hostTime: CMTime, location: CGPoint? = nil) {
+        guard let point = normalized(location ?? cursorLocation()) else { return }
         state.withLock { s in
             guard let start = s.writer?.startTime, hostTime >= start else { return }
             let t = s.offset + (hostTime - start).seconds
@@ -233,8 +246,10 @@ public final class FrameRouter: Sendable {
     }
 
     /// Positions outside the capture area are kept (they render off-canvas).
-    private func normalizedCursor() -> NormalizedPoint? {
-        guard let p = cursorLocation(), captureRect.width > 0, captureRect.height > 0 else { return nil }
+    private func normalizedCursor() -> NormalizedPoint? { normalized(cursorLocation()) }
+
+    private func normalized(_ location: CGPoint?) -> NormalizedPoint? {
+        guard let p = location, captureRect.width > 0, captureRect.height > 0 else { return nil }
         return NormalizedPoint(
             x: (p.x - captureRect.minX) / captureRect.width,
             y: (p.y - captureRect.minY) / captureRect.height

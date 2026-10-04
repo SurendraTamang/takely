@@ -216,6 +216,25 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(await session.state == .idle)
     }
 
+    @Test func aStreamThatStopsDuringTheCountdownFailsTheStart() async throws {
+        struct DisplayUnplugged: Error {}
+        let (session, _) = makeSession()
+        let folder = Synthetic.temporaryFolder()
+        let fake = Mutex<FakeSource?>(nil)
+        await #expect(throws: DisplayUnplugged.self) {
+            try await session.start(
+                config: config, in: folder,
+                sources: { router in
+                    let source = FakeSource(router: router)
+                    fake.withLock { $0 = source }
+                    return [source]
+                },
+                armed: { fake.withLock { $0 }?.router.reportStreamStopped(DisplayUnplugged(), userInitiated: false) })
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)  // no dead recording left
+        #expect(await session.state == .idle)
+    }
+
     /// Speaks into the router's microphone input: `pattern` of (seconds, speaking?) from host time `from`.
     func speak(_ router: FrameRouter, from: Double, _ pattern: [(Double, Bool)]) {
         let samples = SilenceDetectorTests.audio(pattern)

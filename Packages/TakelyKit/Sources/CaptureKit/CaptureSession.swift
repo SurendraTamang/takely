@@ -117,6 +117,7 @@ public actor CaptureSession {
             sources = try makeSources(router)
             for source in sources { try await source.start() }
             try await armed()
+            if let failure = router.streamFailureBeforeStart { throw failure }
             let w = try openSegment(index: 0, in: bundle, config: config)
             writer = w
             router.attach(w, offset: 0)
@@ -251,6 +252,9 @@ public actor CaptureSession {
         let dropped = writer.droppedFrames
         if !dropped.isEmpty { log.info("\(file) dropped frames: \(String(describing: dropped))") }
         project?.camera = router.camera
+        if router.echoCancellationFailed, project?.note == nil {
+            project?.note = "Echo removal stopped working during this recording: the microphone wasn't cleaned (the original is kept)."
+        }
         if let project { try bundle.write(project) }
         try bundle.write(router.cursor)
         try bundle.write(router.markers)

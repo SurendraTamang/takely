@@ -89,4 +89,17 @@ struct StreamBroke: Error {}
         #expect(router.cursor.samples.isEmpty)
         #expect(router.cursor.clicks.isEmpty)
     }
+
+    @Test func aClickIsRecordedWhereItHappenedNotWhereTheCursorIsNow() throws {
+        let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100)) { CGPoint(x: 90, y: 90) }  // moved on
+        let writer = try SegmentWriter(
+            url: Synthetic.temporaryFolder().appending(path: "s.mov"),
+            config: WriterConfig(
+                tracks: [.screen], screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30, videoBitrate: 500_000))
+        router.attach(writer, offset: 0)
+        router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
+        router.recordClick(at: Synthetic.seconds(50.1), location: CGPoint(x: 20, y: 30))
+        router.recordClick(at: Synthetic.seconds(50.2))
+        #expect(router.cursor.clicks.map(\.x) == [0.2, 0.9] && router.cursor.clicks.map(\.y) == [0.3, 0.9])
+    }
 }
