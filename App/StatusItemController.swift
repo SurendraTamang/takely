@@ -49,8 +49,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         }
     }
 
-    func showPanel() {
+    /// `revealBubble`: false when the panel opens to show a problem, not because the person opened it (so the
+    /// camera doesn't switch on).
+    func showPanel(revealBubble: Bool = true) {
         guard let button = item.button else { return }
+        self.revealBubble = revealBubble
         NSApp.activate()
         if Self.isBehindNotch(button) {
             showFromFallbackAnchor()
@@ -66,8 +69,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     /// An NSPopover keeps its SwiftUI view alive, so refresh here rather than in the view's `.task`.
+    private var revealBubble = true
+
     func popoverWillShow(_ notification: Notification) {
-        model.coordinator.panelDidOpen()
+        model.coordinator.panelDidOpen(revealBubble: revealBubble)
+        revealBubble = true
         Task { await model.refresh() }
     }
 

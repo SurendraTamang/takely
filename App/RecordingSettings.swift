@@ -20,7 +20,17 @@ final class RecordingSettings {
     var resolution: Resolution { didSet { defaults.set(resolution.rawValue, forKey: Key.resolution) } }
     var fps: Int { didSet { defaults.set(fps, forKey: Key.fps) } }
     var codec: VideoCodec { didSet { defaults.set(codec.rawValue, forKey: Key.codec) } }
-    var saveFolder: URL { didSet { defaults.set(saveFolder.path, forKey: Key.saveFolder) } }
+    var saveFolder: URL {
+        didSet {
+            defaults.set(saveFolder.path, forKey: Key.saveFolder)
+            // The old folder may hold an unfinished recording: recovery keeps looking there.
+            if oldValue != saveFolder {
+                pastSaveFolders = Array(([oldValue.path] + pastSaveFolders).filter { $0 != saveFolder.path }.prefix(5))
+            }
+        }
+    }
+    /// Folders recordings were saved to before (most recent first, at most 5).
+    var pastSaveFolders: [String] { didSet { defaults.set(pastSaveFolders, forKey: Key.pastSaveFolders) } }
     var hasOnboarded: Bool { didSet { defaults.set(hasOnboarded, forKey: Key.hasOnboarded) } }
     var target: CaptureTarget { didSet { defaults.set(target.rawValue, forKey: Key.target) } }
     /// The last region, in global points (origin top-left); offered again by the region picker.
@@ -64,6 +74,9 @@ final class RecordingSettings {
     var shareBucket: BucketConfig? { didSet { defaults.set(try? JSONEncoder().encode(shareBucket), forKey: Key.shareBucket) } }
     var shareAutomatically: Bool { didSet { defaults.set(shareAutomatically, forKey: Key.shareAutomatically) } }
     var sharePublishText: Bool { didSet { defaults.set(sharePublishText, forKey: Key.sharePublishText) } }
+    /// The language spoken in recordings (a locale identifier; empty: the system's), for captions and voice features.
+    var transcriptionLanguage: String { didSet { defaults.set(transcriptionLanguage, forKey: Key.transcriptionLanguage) } }
+    var transcriptionLocale: Locale { transcriptionLanguage.isEmpty ? .current : Locale(identifier: transcriptionLanguage) }
     var burnInCaptions: Bool { didSet { defaults.set(burnInCaptions, forKey: Key.burnInCaptions) } }
     var controlsOrigin: CGPoint? { didSet { defaults.set(controlsOrigin.map { [$0.x, $0.y] }, forKey: Key.controlsOrigin) } }
 
@@ -79,6 +92,7 @@ final class RecordingSettings {
         resolution = defaults.string(forKey: Key.resolution).flatMap(Resolution.init(rawValue:)) ?? .p1080
         fps = defaults.object(forKey: Key.fps) as? Int ?? 30
         codec = defaults.string(forKey: Key.codec).flatMap(VideoCodec.init(rawValue:)) ?? .hevc
+        pastSaveFolders = defaults.stringArray(forKey: Key.pastSaveFolders) ?? []
         saveFolder =
             defaults.string(forKey: Key.saveFolder).map { URL(filePath: $0, directoryHint: .isDirectory) } ?? Self.defaultSaveFolder
         hasOnboarded = defaults.bool(forKey: Key.hasOnboarded)
@@ -112,6 +126,7 @@ final class RecordingSettings {
         shareBucket = defaults.data(forKey: Key.shareBucket).flatMap { try? JSONDecoder().decode(BucketConfig.self, from: $0) }
         shareAutomatically = defaults.object(forKey: Key.shareAutomatically) as? Bool ?? true
         sharePublishText = defaults.object(forKey: Key.sharePublishText) as? Bool ?? true
+        transcriptionLanguage = defaults.string(forKey: Key.transcriptionLanguage) ?? ""
         redactSecrets = defaults.object(forKey: Key.redactSecrets) as? Bool ?? true
         controlsOrigin = (defaults.array(forKey: Key.controlsOrigin) as? [Double]).flatMap {
             $0.count == 2 ? CGPoint(x: $0[0], y: $0[1]) : nil
@@ -128,6 +143,7 @@ final class RecordingSettings {
         static let fps = "fps"
         static let codec = "codec"
         static let saveFolder = "saveFolder"
+        static let pastSaveFolders = "pastSaveFolders"
         static let target = "target"
         static let region = "region"
         static let microphoneID = "microphoneID"
@@ -144,6 +160,7 @@ final class RecordingSettings {
         static let liveCoach = "liveCoach"
         static let burnInCaptions = "burnInCaptions"
         static let redactSecrets = "redactSecrets"
+        static let transcriptionLanguage = "transcriptionLanguage"
         static let shareBucket = "shareBucket"
         static let shareAutomatically = "shareAutomatically"
         static let sharePublishText = "sharePublishText"

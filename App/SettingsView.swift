@@ -14,6 +14,8 @@ struct SettingsView: View {
     let permissions: Permissions
     let showOnboarding: () -> Void
     let sharing: Sharing
+    /// Languages this Mac can transcribe (Takely Pro), loaded when Settings opens.
+    @State private var languages: [Locale] = []
     /// Settings › License, in Takely Pro builds.
     var license: AnyView?
 
@@ -76,6 +78,22 @@ struct SettingsView: View {
                             .font(.callout).foregroundStyle(.orange)
                     }
                     Toggle("Transcribe recordings (captions)", isOn: $settings.transcribe)
+                    Picker("Language spoken", selection: $settings.transcriptionLanguage) {
+                        Text("System language").tag("")
+                        ForEach(languages, id: \.identifier) { locale in
+                            Text(Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier).tag(
+                                locale.identifier)
+                        }
+                        // The saved choice, until the list loads (or if this Mac can't transcribe it any more).
+                        if !settings.transcriptionLanguage.isEmpty,
+                            !languages.contains(where: { $0.identifier == settings.transcriptionLanguage })
+                        {
+                            let name =
+                                Locale.current.localizedString(forIdentifier: settings.transcriptionLanguage)
+                                ?? settings.transcriptionLanguage
+                            Text(languages.isEmpty ? name : "\(name) (unavailable)").tag(settings.transcriptionLanguage)
+                        }
+                    }
                     Toggle("Burn captions into the video", isOn: $settings.burnInCaptions)
                         .disabled(!settings.transcribe)
                     Toggle("AI title, summary and chapter names", isOn: $settings.aiSummary)
@@ -109,6 +127,11 @@ struct SettingsView: View {
             }
         }
         .padding()
+        .task {
+            #if canImport(TakelyPro)
+                if languages.isEmpty { languages = await TranscriptionLanguages.supported() }
+            #endif
+        }
     }
 
     private var shortcuts: some View {

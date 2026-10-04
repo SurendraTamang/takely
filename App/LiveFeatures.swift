@@ -45,11 +45,11 @@ final class LiveStatus {
         private var generation = 0
 
         /// Starts listening to `router`'s microphone while recording. `script` is followed if given.
-        func startRecording(router: FrameRouter, script: String?, coach: Bool) async {
+        func startRecording(router: FrameRouter, script: String?, coach: Bool, locale: Locale) async {
             let generation = detachAndStop()
             guard script != nil || coach else { return }
             let session = LiveSession(script: script)
-            let started = await session.start()
+            let started = await session.start(locale: locale)
             guard started, generation == self.generation else {
                 if generation == self.generation { status.note = session.note }  // not when superseded
                 await session.stop()
@@ -63,10 +63,10 @@ final class LiveStatus {
 
         /// Practice: follows the voice from the microphone without recording. False if it couldn't start; nil if a
         /// newer start or stop superseded it (the caller then has nothing to undo).
-        func startPractice(script: String) async -> Bool? {
+        func startPractice(script: String, microphoneID: String?, locale: Locale) async -> Bool? {
             let generation = detachAndStop()
             let session = LiveSession(script: script)
-            let started = await session.startPractice()
+            let started = await session.startPractice(microphoneID: microphoneID, locale: locale)
             guard generation == self.generation else {
                 await session.stop()
                 return nil
@@ -138,8 +138,8 @@ final class LiveStatus {
     @MainActor
     final class LiveFeatures {
         let status = LiveStatus()
-        func startRecording(router: FrameRouter, script: String?, coach: Bool) async {}
-        func startPractice(script: String) async -> Bool? { false }
+        func startRecording(router: FrameRouter, script: String?, coach: Bool, locale: Locale) async {}
+        func startPractice(script: String, microphoneID: String?, locale: Locale) async -> Bool? { false }
         func rewind(to time: Double) {}
         @discardableResult func stop() async -> String? { nil }
     }

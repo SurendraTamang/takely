@@ -142,7 +142,7 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
     func exportFailed(_ message: String, bundle: ProjectBundle) async {
         announce(message)
         let status = await center.notificationSettings().authorizationStatus
-        guard status == .authorized || status == .provisional else { return }
+        guard status == .authorized || status == .provisional else { return onUnseenFailure?() ?? () }
         let content = UNMutableNotificationContent()
         content.title = "Export failed"
         content.body = message
@@ -152,11 +152,14 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
+    /// Shows a failure some other way when notifications aren't allowed (the app opens its panel, which shows it).
+    var onUnseenFailure: (() -> Void)?
+
     /// A plain notification (no actions; clicking does nothing). Never asks for permission: a system quit waits for this.
     func recordingFailed(_ message: String) async {
         announce(message)
         let status = await center.notificationSettings().authorizationStatus
-        guard status == .authorized || status == .provisional else { return }
+        guard status == .authorized || status == .provisional else { return onUnseenFailure?() ?? () }
         let content = UNMutableNotificationContent()
         content.title = "Takely"
         content.body = message
