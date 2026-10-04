@@ -161,7 +161,7 @@ public actor CaptureSession {
     private func pauseNow() async throws {
         guard state == .recording else { throw CaptureError.invalidState }
         defer { state = .paused }
-        try await closeSegment()
+        try await closeSegment(cursorInBackground: true)
     }
 
     private func retakeNow() async throws -> (duration: Double, cutHostTime: Double) {
@@ -226,6 +226,13 @@ public actor CaptureSession {
             }
         }
         for source in sources { await source.stop() }
+        // Stopped while paused: the pause's cursor write must land before the export reads it — and the final file
+        // covers the whole recording (no `coveredUntil`), written again here if that write failed.
+        if let pending = cursorWrite, let router {
+            _ = await pending.value
+            do { try bundle.write(router.cursor) } catch { log.error("cursor not saved at stop: \(error.localizedDescription)") }
+        }
+        cursorWrite = nil
         project?.status = .finished
         if let camera = router?.camera { project?.camera = camera }
         if let project {
@@ -235,7 +242,9 @@ public actor CaptureSession {
         return StoppedRecording(bundle: bundle, failure: failure)
     }
 
-    private func closeSegment() async throws {
+    /// `cursorInBackground` (a pause): `cursor.json` holds every sample so far (~8 MB at an hour), so it's written
+    /// off the session, in order; stop and retake wait for those writes and write it themselves.
+    private func closeSegment(cursorInBackground: Bool = false) async throws {
         guard let writer, let router, let bundle else { return }
         let offset = project?.duration ?? 0
         router.attach(nil, offset: offset)
@@ -261,9 +270,33 @@ public actor CaptureSession {
         case .off, .running: break
         }
         if let project { try bundle.write(project) }
-        try bundle.write(router.cursor)
+        if cursorInBackground {
+            var cursor = router.cursor
+            // Until a later write replaces it, the file covers only up to here: recovery after a crash then knows
+            // the segments past it have no cursor data.
+            cursor.coveredUntil = project?.duration
+            let previous = cursorWrite
+            let log = log
+            cursorWrite = Task.detached {
+                _ = await previous?.value
+                do {
+                    try bundle.write(cursor)
+                    return true
+                } catch {
+                    log.error("cursor not saved: \(error.localizedDescription)")
+                    return false
+                }
+            }
+        } else {
+            _ = await cursorWrite?.value
+            cursorWrite = nil
+            try bundle.write(router.cursor)
+        }
         try bundle.write(router.markers)
     }
+
+    /// The background `cursor.json` write a pause started, if it's still running.
+    private var cursorWrite: Task<Bool, Never>?
 
     private func reset() {
         state = .idle

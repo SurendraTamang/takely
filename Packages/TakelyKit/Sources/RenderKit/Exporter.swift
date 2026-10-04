@@ -40,12 +40,14 @@ public struct Exporter: Sendable {
         let observed = ObservedSession(session: session)
         let observer = Task {
             for await state in observed.session.states(updateInterval: 0.25) {
-                if case .exporting(let p) = state { progress(p.fractionCompleted) }
+                // The video is most of the work; adding chapters and captions (below) is the last tenth.
+                if case .exporting(let p) = state { progress(p.fractionCompleted * 0.9) }
             }
         }
         defer { observer.cancel() }
         do {
             try await session.export(to: partial, as: .mp4)
+            observer.cancel()  // no late progress after the next step's
         } catch {
             try? FileManager.default.removeItem(at: partial)  // don't leave hidden partial files behind
             throw error
@@ -66,6 +68,7 @@ public struct Exporter: Sendable {
             for attempt in attempts {
                 do {
                     try? FileManager.default.removeItem(at: finished)
+                    progress(0.92)
                     try await MovieFinisher.write(partial, to: finished, extras: attempt)
                     _ = try FileManager.default.replaceItemAt(partial, withItemAt: finished)  // the export survives a failed swap
                     break

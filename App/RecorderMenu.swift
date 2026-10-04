@@ -25,7 +25,7 @@ struct RecorderMenu: View {
             case .recording, .paused, .stopping:
                 controls
             case .exporting(let progress):
-                ProgressView("Exporting…", value: progress)
+                ProgressView(controller.exportStage ?? "Exporting…", value: progress)
             }
             if model.screenPermissionDenied {
                 warning(

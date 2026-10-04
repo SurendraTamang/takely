@@ -19,6 +19,8 @@ public final class RecordingController {
     public var errorMessage: String?
     /// The last export, or the saved bundle if its export failed.
     public private(set) var lastRecording: URL?
+    /// What the export is doing (shown with its progress): processing (captions, AI…) or writing the video.
+    public private(set) var exportStage: String?
     /// The bundle being recorded into, while recording.
     public var recordingBundle: ProjectBundle? { current?.bundle }
     /// True while a command runs; the UI disables its buttons.
@@ -333,12 +335,14 @@ public final class RecordingController {
         }
         if let postProcessor {
             do {
+                exportStage = "Captions, summary and blurs…"
                 try await postProcessor.process(bundle) { setProgress($0 * share) }
             } catch {
                 log.error("post-processing failed: \(error.localizedDescription)")
             }
         }
         do {
+            exportStage = "Exporting video…"
             let url = try await exporter.export(bundle) { setProgress(share + $0 * (1 - share)) }
             lastRecording = url
             if let failure {
@@ -356,6 +360,7 @@ public final class RecordingController {
             errorMessage = diskFull ? "Stopped: disk almost full. \(message)" : message
             await feedback.exportFailed(errorMessage ?? message, bundle: bundle)
         }
+        exportStage = nil
         phase = .idle
     }
 
