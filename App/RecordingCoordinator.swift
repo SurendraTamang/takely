@@ -138,9 +138,9 @@ final class RecordingCoordinator {
         update()
     }
 
-    func panelDidOpen() {
+    func panelDidOpen(revealBubble: Bool = true) {
         panelOpen = true
-        if settings.camera { bubbleShown = true }
+        if settings.camera, revealBubble { bubbleShown = true }
         update()
     }
 

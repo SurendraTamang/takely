@@ -84,8 +84,16 @@ struct SettingsView: View {
                             Text(Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier).tag(
                                 locale.identifier)
                         }
+                        // The saved choice, until the list loads (or if this Mac can't transcribe it any more).
+                        if !settings.transcriptionLanguage.isEmpty,
+                            !languages.contains(where: { $0.identifier == settings.transcriptionLanguage })
+                        {
+                            let name =
+                                Locale.current.localizedString(forIdentifier: settings.transcriptionLanguage)
+                                ?? settings.transcriptionLanguage
+                            Text(languages.isEmpty ? name : "\(name) (unavailable)").tag(settings.transcriptionLanguage)
+                        }
                     }
-                    .task { languages = await TranscriptionLanguages.supported() }
                     Toggle("Burn captions into the video", isOn: $settings.burnInCaptions)
                         .disabled(!settings.transcribe)
                     Toggle("AI title, summary and chapter names", isOn: $settings.aiSummary)
@@ -119,6 +127,11 @@ struct SettingsView: View {
             }
         }
         .padding()
+        .task {
+            #if canImport(TakelyPro)
+                if languages.isEmpty { languages = await TranscriptionLanguages.supported() }
+            #endif
+        }
     }
 
     private var shortcuts: some View {
