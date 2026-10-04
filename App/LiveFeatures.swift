@@ -45,11 +45,41 @@ final class LiveStatus {
         private var generation = 0
 
         /// Starts listening to `router`'s microphone while recording. `script` is followed if given.
-        func startRecording(router: FrameRouter, script: String?, coach: Bool, locale: Locale) async {
-            let generation = detachAndStop()
+        /// A session made ready during the countdown (the speech model loads then), so the first words are heard.
+        private var prepared: (session: LiveSession, script: String?, coach: Bool, ready: Task<Bool, Never>)?
+
+        /// Loads speech recognition while the countdown runs; `startRecording` then uses it if nothing changed.
+        func prepare(script: String?, coach: Bool, locale: Locale) {
+            discardPrepared()
             guard script != nil || coach else { return }
             let session = LiveSession(script: script)
-            let started = await session.start(locale: locale)
+            prepared = (session, script, coach, Task { await session.start(locale: locale) })
+        }
+
+        /// The countdown was cancelled, or the start failed: the prepared session isn't needed.
+        func discardPrepared() {
+            guard let old = prepared else { return }
+            prepared = nil
+            Task {
+                _ = await old.ready.value
+                await old.session.stop()
+            }
+        }
+
+        func startRecording(router: FrameRouter, script: String?, coach: Bool, locale: Locale) async {
+            let generation = detachAndStop()
+            guard script != nil || coach else { return discardPrepared() }
+            let session: LiveSession
+            let started: Bool
+            if let ready = prepared, ready.script == script, ready.coach == coach {
+                prepared = nil
+                session = ready.session
+                started = await ready.ready.value
+            } else {
+                discardPrepared()
+                session = LiveSession(script: script)
+                started = await session.start(locale: locale)
+            }
             guard started, generation == self.generation else {
                 if generation == self.generation { status.note = session.note }  // not when superseded
                 await session.stop()
@@ -138,6 +168,8 @@ final class LiveStatus {
     @MainActor
     final class LiveFeatures {
         let status = LiveStatus()
+        func prepare(script: String?, coach: Bool, locale: Locale) {}
+        func discardPrepared() {}
         func startRecording(router: FrameRouter, script: String?, coach: Bool, locale: Locale) async {}
         func startPractice(script: String, microphoneID: String?, locale: Locale) async -> Bool? { false }
         func rewind(to time: Double) {}

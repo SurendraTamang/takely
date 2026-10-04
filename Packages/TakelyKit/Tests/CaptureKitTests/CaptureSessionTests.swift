@@ -294,6 +294,23 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         _ = try await session.stop()
     }
 
+    @Test func stoppingWhilePausedKeepsTheCursorThePauseWrote() async throws {
+        let (session, clock) = makeSession()
+        let fake = Mutex<FakeSource?>(nil)
+        let handle = try await session.start(config: config, in: Synthetic.temporaryFolder()) { router in
+            let source = FakeSource(router: router)
+            fake.withLock { $0 = source }
+            return [source]
+        }
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 100, seconds: 1)
+        clock.set(101)
+        try await session.pause()  // writes cursor.json in the background…
+        _ = try await session.stop()  // …and the stop waits for it
+        let cursor = try handle.bundle.readCursor()
+        #expect(!cursor.samples.isEmpty && cursor.samples == handle.router.cursor.samples)
+    }
+
     @Test func retakeWithoutAPauseDropsTheWholeSegment() async throws {
         let (session, clock) = makeSession()
         let fake = Mutex<FakeSource?>(nil)

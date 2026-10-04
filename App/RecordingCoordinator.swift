@@ -197,15 +197,16 @@ final class RecordingCoordinator {
     /// Live voice features run while recording: they start when the countdown ends and stop with the recording.
     private func followLive(from old: RecordingController.Phase?, to new: RecordingController.Phase) {
         live.status.recording = recordingActive
+        let script = settings.prompterFollowsVoice && prompter.isVisible && !settings.prompterScript.isEmpty ? settings.prompterScript : nil
         if new == .starting {
             take += 1  // a new take: nothing from an earlier (e.g. discarded) one carries over
             pendingRecap = nil
             onRecap(nil)
+            live.prepare(script: script, coach: settings.liveCoach, locale: settings.transcriptionLocale)
         }
+        if old == .starting, new == .idle { live.discardPrepared() }  // cancelled countdown or failed start
         if old == .starting, new == .recording, let router = session.active?.router {
             prompter.model.practicing = false
-            let script =
-                settings.prompterFollowsVoice && prompter.isVisible && !settings.prompterScript.isEmpty ? settings.prompterScript : nil
             Task {
                 await live.startRecording(router: router, script: script, coach: settings.liveCoach, locale: settings.transcriptionLocale)
             }

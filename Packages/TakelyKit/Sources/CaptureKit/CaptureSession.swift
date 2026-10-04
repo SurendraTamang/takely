@@ -161,7 +161,7 @@ public actor CaptureSession {
     private func pauseNow() async throws {
         guard state == .recording else { throw CaptureError.invalidState }
         defer { state = .paused }
-        try await closeSegment()
+        try await closeSegment(cursorInBackground: true)
     }
 
     private func retakeNow() async throws -> (duration: Double, cutHostTime: Double) {
@@ -226,6 +226,9 @@ public actor CaptureSession {
             }
         }
         for source in sources { await source.stop() }
+        // Stopped while paused: the pause's cursor write must land before the export reads it.
+        await cursorWrite?.value
+        cursorWrite = nil
         project?.status = .finished
         if let camera = router?.camera { project?.camera = camera }
         if let project {
@@ -235,7 +238,9 @@ public actor CaptureSession {
         return StoppedRecording(bundle: bundle, failure: failure)
     }
 
-    private func closeSegment() async throws {
+    /// `cursorInBackground` (a pause): `cursor.json` holds every sample so far (~8 MB at an hour), so it's written
+    /// off the session, in order; stop and retake wait for those writes and write it themselves.
+    private func closeSegment(cursorInBackground: Bool = false) async throws {
         guard let writer, let router, let bundle else { return }
         let offset = project?.duration ?? 0
         router.attach(nil, offset: offset)
@@ -261,9 +266,24 @@ public actor CaptureSession {
         case .off, .running: break
         }
         if let project { try bundle.write(project) }
-        try bundle.write(router.cursor)
+        if cursorInBackground {
+            let cursor = router.cursor
+            let previous = cursorWrite
+            let log = log
+            cursorWrite = Task.detached {
+                await previous?.value
+                do { try bundle.write(cursor) } catch { log.error("cursor not saved: \(error.localizedDescription)") }
+            }
+        } else {
+            await cursorWrite?.value
+            cursorWrite = nil
+            try bundle.write(router.cursor)
+        }
         try bundle.write(router.markers)
     }
+
+    /// The background `cursor.json` write a pause started, if it's still running.
+    private var cursorWrite: Task<Void, Never>?
 
     private func reset() {
         state = .idle

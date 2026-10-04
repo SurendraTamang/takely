@@ -28,6 +28,15 @@ final class CameraController {
                 }
                 if session.canSetSessionPreset(.hd1280x720) { session.sessionPreset = .hd1280x720 }
                 session.commitConfiguration()
+                // A steady 30 fps (cameras may drop to 15 in dim light, or pick 60), when the camera supports it.
+                if let device = (session.inputs.first as? AVCaptureDeviceInput)?.device,
+                    device.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.minFrameRate <= 30 && 30 <= $0.maxFrameRate }),
+                    (try? device.lockForConfiguration()) != nil
+                {
+                    device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
+                    device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
+                    device.unlockForConfiguration()
+                }
             }
             if !session.isRunning, !session.inputs.isEmpty { session.startRunning() }
         }
