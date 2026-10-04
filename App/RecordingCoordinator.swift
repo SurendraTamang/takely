@@ -44,7 +44,8 @@ final class RecordingCoordinator {
         let made = Prompter(settings: settings, live: live.status) { on in
             Task { @MainActor in
                 if on {
-                    let started = await live.startPractice(script: settings.prompterScript)
+                    let started = await live.startPractice(
+                        script: settings.prompterScript, microphoneID: settings.microphoneID, locale: settings.transcriptionLocale)
                     if started == false { prompter?.model.practicing = false }
                 } else {
                     await live.stop()
@@ -77,6 +78,9 @@ final class RecordingCoordinator {
         await controller.start()
     }
 
+    /// The 3-2-1 countdown is showing (the recording hotkey then skips it).
+    var isCountingDown: Bool { session.countdown.isRunning }
+
     func toggleRecording() async {
         if controller.isRecording { await controller.stop() } else { await record() }
     }
@@ -106,9 +110,12 @@ final class RecordingCoordinator {
     }
 
     /// ⌥⇧D: draw on the screen (recorded) during a display or area recording.
-    func toggleDrawing() {
-        guard controller.isRecording else { return }
+    /// False when drawing isn't possible now (not recording, or a window recording).
+    @discardableResult
+    func toggleDrawing() -> Bool {
+        guard controller.isRecording, session.drawing.isAvailable else { return false }
         session.drawing.toggle()
+        return true
     }
 
     /// ⌥⇧S: shows or hides the prompter; shown mid-recording, it starts scrolling with it.
@@ -199,7 +206,9 @@ final class RecordingCoordinator {
             prompter.model.practicing = false
             let script =
                 settings.prompterFollowsVoice && prompter.isVisible && !settings.prompterScript.isEmpty ? settings.prompterScript : nil
-            Task { await live.startRecording(router: router, script: script, coach: settings.liveCoach) }
+            Task {
+                await live.startRecording(router: router, script: script, coach: settings.liveCoach, locale: settings.transcriptionLocale)
+            }
         } else if old == .recording || old == .paused, new != .recording, new != .paused {
             let take = take
             Task {

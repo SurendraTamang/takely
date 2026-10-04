@@ -14,6 +14,8 @@ struct SettingsView: View {
     let permissions: Permissions
     let showOnboarding: () -> Void
     let sharing: Sharing
+    /// Languages this Mac can transcribe (Takely Pro), loaded when Settings opens.
+    @State private var languages: [Locale] = []
     /// Settings › License, in Takely Pro builds.
     var license: AnyView?
 
@@ -76,6 +78,14 @@ struct SettingsView: View {
                             .font(.callout).foregroundStyle(.orange)
                     }
                     Toggle("Transcribe recordings (captions)", isOn: $settings.transcribe)
+                    Picker("Language spoken", selection: $settings.transcriptionLanguage) {
+                        Text("System language").tag("")
+                        ForEach(languages, id: \.identifier) { locale in
+                            Text(Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier).tag(
+                                locale.identifier)
+                        }
+                    }
+                    .task { languages = await TranscriptionLanguages.supported() }
                     Toggle("Burn captions into the video", isOn: $settings.burnInCaptions)
                         .disabled(!settings.transcribe)
                     Toggle("AI title, summary and chapter names", isOn: $settings.aiSummary)

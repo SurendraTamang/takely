@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ProProcessor { [settings] in
                 await MainActor.run {
                     ProProcessor.Options(
-                        transcribe: settings.transcribe, locale: .current, summarize: settings.aiSummary,
+                        transcribe: settings.transcribe, locale: settings.transcriptionLocale, summarize: settings.aiSummary,
                         burnInCaptions: settings.burnInCaptions, redact: settings.redactSecrets,
                         autoZoom: settings.autoZoom, removeSilences: settings.removeSilences)
                 }
@@ -122,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if sharing.isConfigured { sharing.share(bundle) } else { showSettings() }
         }
         notifier.onExported = { [weak self] url in self?.sharing.recordingExported(url) }
+        notifier.onUnseenFailure = { [weak self] in self?.statusItem?.showPanel() }
         notifier.onRetryExport = { [weak self] bundle in
             guard let self else { return }
             Task { await self.controller.export(bundle) }
@@ -229,7 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: Recovery
 
     private func offerRecovery() async {
-        for candidate in RecoveryService.scan(settings.saveFolder) {
+        let folders = [settings.saveFolder] + settings.pastSaveFolders.map { URL(filePath: $0, directoryHint: .isDirectory) }
+        for candidate in folders.flatMap({ RecoveryService.scan($0) }) {
             let when = candidate.createdAt.formatted(date: .abbreviated, time: .shortened)
             if candidate.kind == .empty {
                 let answer = ask(

@@ -37,6 +37,9 @@ final class DrawingOverlay {
     /// ⌥⇧D: draw mode on or off (only while a canvas is up, i.e. during a display or area recording).
     func toggle() { setDrawing(!model.drawing) }
 
+    /// A canvas is up (display and area recordings; window recordings can't be drawn on).
+    var isAvailable: Bool { canvas != nil }
+
     func teardown() {
         setDrawing(false)
         canvas?.orderOut(nil)

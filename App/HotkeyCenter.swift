@@ -1,4 +1,5 @@
 import AppCore
+import AppKit
 import KeyboardShortcuts
 
 extension KeyboardShortcuts.Name {
@@ -18,7 +19,9 @@ extension KeyboardShortcuts.Name {
 @MainActor
 enum HotkeyCenter {
     static func install(controller: RecordingController, coordinator: RecordingCoordinator, statusItem: StatusItemController) {
+        // A hotkey that can't act now (busy, or not recording) beeps, rather than seeming broken.
         KeyboardShortcuts.onKeyUp(for: .toggleRecording) {
+            if controller.isBusy && !coordinator.isCountingDown { return NSSound.beep() }
             Task { await coordinator.toggleRecording() }
         }
         KeyboardShortcuts.onKeyUp(for: .toggleCamera) {
@@ -28,15 +31,16 @@ enum HotkeyCenter {
             coordinator.togglePrompter()
         }
         KeyboardShortcuts.onKeyUp(for: .retake) {
-            Task { await coordinator.retake() }
+            Task { if !(await coordinator.retake()) { NSSound.beep() } }
         }
         KeyboardShortcuts.onKeyUp(for: .addMarker) {
-            coordinator.addMarker()
+            if !coordinator.addMarker() { NSSound.beep() }
         }
         KeyboardShortcuts.onKeyUp(for: .toggleDrawing) {
-            coordinator.toggleDrawing()
+            if !coordinator.toggleDrawing() { NSSound.beep() }
         }
         KeyboardShortcuts.onKeyUp(for: .togglePause) {
+            guard controller.isRecording, !controller.isBusy else { return NSSound.beep() }
             Task { await controller.togglePause() }
         }
         KeyboardShortcuts.onKeyUp(for: .togglePanel) {
