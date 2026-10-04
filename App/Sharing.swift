@@ -125,7 +125,7 @@ final class Sharing {
             } catch {
                 log.error("sharing failed: \(String(describing: error))")
                 state = .failed(bundle.url, "Upload failed: \(error.localizedDescription)")
-                await notifier.recordingFailed("Upload failed: \(error.localizedDescription)")
+                await notifier.uploadFailed(error.localizedDescription, bundle: bundle)
             }
             upload = nil
             if let next = queued {

@@ -65,7 +65,8 @@ public struct MeetingWatcher: Sendable {
     /// WebKit GPU process (shared by every app with a web view, so Safari still needs a meeting page in front).
     static let aliases = ["com.apple.avconferenced": "com.apple.FaceTime", "com.apple.WebKit.GPU": "com.apple.Safari"]
 
-    /// A helper process's bundle (com.google.Chrome.helper, us.zoom.CptHost…) as its app's, when it's one we know.
+    /// A helper process's bundle (com.google.Chrome.helper, us.zoom.CptHost…) or an installed web app's
+    /// (com.google.Chrome.app.<id>, e.g. the Google Meet app) as its app's, when it's one we know.
     public static func owningApp(_ bundleID: String) -> String {
         if let app = aliases[bundleID] { return app }
         let known = Set(apps.keys).union(browsers)
@@ -92,6 +93,8 @@ public struct MeetingWatcher: Sendable {
     public static let endAfter = 15.0
 
     public private(set) var current: Meeting?
+    /// The current call's mic has been released and it ends unless the mic comes back: too late to start recording it.
+    public var isEnding: Bool { quietSince != nil }
     private var candidate: (meeting: Meeting, since: Date)?
     private var quietSince: Date?
 

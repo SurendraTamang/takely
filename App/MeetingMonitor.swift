@@ -22,6 +22,8 @@ final class MeetingMonitor {
     private var stopPending = false
     /// A call that started while Takely was busy (exporting…): offered once it's free, if the call is still on.
     private var waitingOffer: Meeting?
+    /// Record was asked for while the mic was briefly off (switching devices…): starts when it's back, dropped if the call ends.
+    private var recordPending = false
     private let log = Logger(subsystem: "app.takely", category: "meetings")
 
     init(settings: RecordingSettings, controller: RecordingController, session: LiveRecordingSession, notifier: ReadyNotifier) {
@@ -53,6 +55,7 @@ final class MeetingMonitor {
         guard settings.detectMeetings else {
             watcher = MeetingWatcher()  // a call in progress when it's turned back on is a new one
             waitingOffer = nil
+            recordPending = false
             return
         }
         if stopPending { stopMeetingRecording() }
@@ -60,7 +63,12 @@ final class MeetingMonitor {
             waitingOffer = nil
             if watcher.current == waiting { offer(waiting) }
         }
-        switch watcher.update(Self.snapshot()) {
+        let event = watcher.update(Self.snapshot())
+        if recordPending, event == nil, watcher.current != nil, !watcher.isEnding {
+            recordPending = false
+            Task { await recordCurrent() }
+        }
+        switch event {
         case .started(let meeting):
             log.info("meeting started: \(meeting.service)")
             if controller.phase == .idle, !controller.isBusy { offer(meeting) } else { waitingOffer = meeting }
@@ -68,6 +76,7 @@ final class MeetingMonitor {
             log.info("meeting ended: \(meeting.service)")
             notifier.withdrawMeetingOffer()
             waitingOffer = nil
+            recordPending = false
             stopPending = meetingBundle != nil
             stopMeetingRecording()
         case nil:
@@ -103,6 +112,8 @@ final class MeetingMonitor {
 
     private func record(_ meeting: Meeting) async {
         guard controller.phase == .idle, !controller.isBusy else { return }
+        // The mic is off (a device switch, or the call ending): wait for it to come back rather than record a call that's over.
+        guard !watcher.isEnding else { return recordPending = true }
         // The call's window if it's on screen; else the display.
         var window: SCWindow?
         if let id = meeting.windowID {
@@ -112,6 +123,7 @@ final class MeetingMonitor {
         }
         // The person may have started a recording meanwhile: leave it alone.
         guard controller.phase == .idle, !controller.isBusy, watcher.current == meeting else { return }
+        guard !watcher.isEnding else { return recordPending = true }
         session.target = window.map { .window($0) } ?? .display
         session.meetingMode = true
         await controller.start()
@@ -165,7 +177,8 @@ final class MeetingMonitor {
             guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, let id = info[kCGWindowNumber as String] as? UInt32,
                 (info[kCGWindowLayer as String] as? Int) == 0
             else { return nil }
-            let bundle = bundles[pid] ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+            // As its app's, like the mic users: an installed web app's windows (com.google.Chrome.app.<id>) are Chrome's.
+            let bundle = bundles[pid] ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier.map(MeetingWatcher.owningApp)
             bundles[pid] = bundle
             guard let bundle else { return nil }
             return MeetingSnapshot.Window(bundleID: bundle, id: id, title: info[kCGWindowName as String] as? String ?? "")

@@ -21,8 +21,11 @@ import Testing
         #expect(watcher.update(meet, now: t0 + 3) == .started(meeting))
         #expect(watcher.update(idle, now: t0 + 60) == nil)  // a hiccup (switching devices) doesn't end it
         #expect(watcher.update(meet, now: t0 + 65) == nil)
+        #expect(!watcher.isEnding)
         #expect(watcher.update(idle, now: t0 + 100) == nil)
+        #expect(watcher.isEnding)  // Record from the notification now would start a stray recording
         #expect(watcher.update(idle, now: t0 + 115) == .ended(meeting))
+        #expect(!watcher.isEnding)
         #expect(watcher.current == nil)
     }
 
@@ -45,6 +48,7 @@ import Testing
         #expect(MeetingWatcher.webService("Chat | Microsoft Teams") == "Microsoft Teams")
         #expect(MeetingWatcher.owningApp("com.google.Chrome.helper") == "com.google.Chrome")
         #expect(MeetingWatcher.owningApp("us.zoom.xos") == "us.zoom.xos")
+        #expect(MeetingWatcher.owningApp("com.google.Chrome.app.kjgfgldnnfoeklkmfkjfagphfepbbdan") == "com.google.Chrome")
         #expect(MeetingWatcher.owningApp("com.apple.WebKit.GPU") == "com.apple.Safari")
         // A Slack huddle: the display, not Slack's main window (channels, DMs).
         let huddle = MeetingSnapshot(
