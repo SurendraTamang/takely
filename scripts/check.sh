@@ -21,6 +21,10 @@ swift test --package-path Packages/TakelyKit --quiet --no-parallel
 if [[ -d Packages/TakelyPro ]]; then
     swift test --package-path Packages/TakelyPro --quiet --no-parallel
 fi
+if [[ -d Packages/TakelyPro/Server/license ]] && command -v node >/dev/null; then
+    echo "==> license server tests"
+    (cd Packages/TakelyPro/Server/license && node --test --no-warnings)
+fi
 
 if [[ -f project.yml ]]; then
     echo "==> xcodebuild"
