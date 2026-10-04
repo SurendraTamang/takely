@@ -1,3 +1,4 @@
+import AVFoundation
 import AppCore
 import AppIntents
 import AppKit
@@ -13,10 +14,36 @@ extension RecordingCoordinator: AutomationHost {
     var lastRecording: URL? { controller.lastRecording }
 
     func startRecording(countdown: Bool?, region: CGRect?) async {
+        // Nobody may be at the Mac to answer a permission prompt: say what's missing instead of waiting on one.
+        if let missing = Self.missingPermission(camera: settings.camera, microphone: settings.microphone) {
+            controller.errorMessage = missing
+            return
+        }
         session.target = region.map { .region($0) } ?? .display
         session.countdownOverride = countdown
         await controller.start()
         session.countdownOverride = nil  // also when the start failed before reading it
+    }
+
+    /// Why a start would stop at a permission prompt or fail, if it would. Undecided permissions are asked for (the
+    /// prompt appears for whoever is at the Mac); the start itself fails at once.
+    static func missingPermission(camera: Bool, microphone: Bool) -> String? {
+        guard CGPreflightScreenCaptureAccess() else {
+            CGRequestScreenCaptureAccess()
+            return LiveSessionError.screenDenied.localizedDescription
+        }
+        for (needed, type, name) in [(camera, AVMediaType.video, "Camera"), (microphone, .audio, "Microphone")] where needed {
+            switch AVCaptureDevice.authorizationStatus(for: type) {
+            case .notDetermined:
+                AVCaptureDevice.requestAccess(for: type) { _ in }
+                return "Takely is asking for \(name) access: answer the prompt on the Mac, then start again."
+            case .denied, .restricted:
+                return "\(name) access is off for Takely: allow it in System Settings, or turn the \(name.lowercased()) off in Takely."
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     func stopRecording() async { await controller.stop() }

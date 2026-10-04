@@ -468,6 +468,7 @@ final class ProgressLog: Sendable {
         #expect(bundle.hasExport)
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: bundle.exportsURL.path).filter { $0.contains("partial") }
         #expect(leftovers.isEmpty)
+        #expect(try bundle.readProject().exportedAt != nil)  // recovery won't offer it again
     }
 
     @Test func reExportReplacesThePreviousExport() async throws {

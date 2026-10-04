@@ -10,7 +10,7 @@ import SwiftUI
 @MainActor
 final class RecordingCoordinator {
     let controller: RecordingController
-    private let settings: RecordingSettings
+    let settings: RecordingSettings
     let session: LiveRecordingSession
     private let camera: CameraController
     private let picker = TargetPicker()

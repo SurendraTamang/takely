@@ -15,3 +15,9 @@ by scripts/build-webrtc-apm.sh from https://webrtc.googlesource.com/src
 KeyboardShortcuts — https://github.com/sindresorhus/KeyboardShortcuts
   Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
   MIT License
+
+Sparkle — https://sparkle-project.org
+  Copyright (c) 2006-2013 Andy Matuschak and others
+  MIT License (with notices for its bundled components)
+
+The full license texts are in Licenses/ and inside the app (Settings › General › Acknowledgements).

@@ -352,7 +352,8 @@ public final class RecordingController {
             log.error("export failed: \(error.localizedDescription)")
             lastRecording = bundle.url
             let message = "Recording saved, but export failed: \(error.localizedDescription)"
-            await report(diskFull ? "Stopped: disk almost full. \(message)" : message)
+            errorMessage = diskFull ? "Stopped: disk almost full. \(message)" : message
+            await feedback.exportFailed(errorMessage ?? message, bundle: bundle)
         }
         phase = .idle
     }

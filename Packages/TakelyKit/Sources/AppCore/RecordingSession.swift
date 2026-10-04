@@ -34,5 +34,11 @@ public protocol RecordingFeedback: AnyObject {
     func recordingReady(_ url: URL, duration: Double, title: String?) async
     /// A start, stop or export failed, or a recording ended early; sent instead of `recordingReady`.
     func recordingFailed(_ message: String) async
+    /// The recording is saved but its export failed: offered again (Retry) from the notification.
+    func exportFailed(_ message: String, bundle: ProjectBundle) async
     func announce(_ message: String)
+}
+
+extension RecordingFeedback {
+    public func exportFailed(_ message: String, bundle: ProjectBundle) async { await recordingFailed(message) }
 }

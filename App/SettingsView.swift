@@ -5,6 +5,10 @@ import ProjectKit
 import ServiceManagement
 import SwiftUI
 
+#if canImport(TakelyPro)
+    import TakelyPro
+#endif
+
 struct SettingsView: View {
     @Bindable var settings: RecordingSettings
     let permissions: Permissions
@@ -35,6 +39,7 @@ struct SettingsView: View {
                 }
             }
             LaunchAtLoginToggle()
+            Button("Acknowledgements…") { Acknowledgements.show() }
         }
         .padding()
     }
@@ -66,12 +71,16 @@ struct SettingsView: View {
             Toggle("Scroll the prompter while recording", isOn: $settings.prompterFollowsRecording)
             #if canImport(TakelyPro)
                 Section("Takely Pro") {
+                    if !ProAccess.isUnlocked {
+                        Text("Takely Pro is locked, so these are off. Unlock it in the License tab.")
+                            .font(.callout).foregroundStyle(.orange)
+                    }
                     Toggle("Transcribe recordings (captions)", isOn: $settings.transcribe)
                     Toggle("Burn captions into the video", isOn: $settings.burnInCaptions)
                         .disabled(!settings.transcribe)
                     Toggle("AI title, summary and chapter names", isOn: $settings.aiSummary)
                         .disabled(!settings.transcribe)
-                    Toggle("Blur secrets on screen (keys, emails, card numbers)", isOn: $settings.redactSecrets)
+                    Toggle("Hide secrets on screen and in captions (keys, emails, card numbers)", isOn: $settings.redactSecrets)
                     Toggle("Zoom in on clicks automatically", isOn: $settings.autoZoom)
                     Toggle("Remove long pauses automatically", isOn: $settings.removeSilences)
                         .disabled(!settings.transcribe)

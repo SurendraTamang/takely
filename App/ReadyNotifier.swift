@@ -19,6 +19,10 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
     var onReview: ((ProjectBundle) -> Void)?
     private static let editAction = "edit"
     private static let shareAction = "share"
+    private static let failedExportCategory = "export-failed"
+    private static let retryAction = "retry"
+    /// Exports a saved recording again (the failure notification's Retry).
+    var onRetryExport: ((ProjectBundle) -> Void)?
     private static let linkCategory = "link-ready"
     /// Uploads a recording to the user's bucket (the Share action), and runs after each export (auto-upload).
     var onShare: ((ProjectBundle) -> Void)?
@@ -45,6 +49,12 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
                 ] + (onEdit == nil ? [] : [UNNotificationAction(identifier: Self.editAction, title: "Edit", options: .foreground)]),
                 intentIdentifiers: []),
             UNNotificationCategory(identifier: Self.linkCategory, actions: [], intentIdentifiers: []),
+            UNNotificationCategory(
+                identifier: Self.failedExportCategory,
+                actions: [
+                    UNNotificationAction(identifier: Self.retryAction, title: "Retry"),
+                    UNNotificationAction(identifier: Self.revealAction, title: "Show in Finder"),
+                ], intentIdentifiers: []),
             UNNotificationCategory(
                 identifier: Self.meetingCategory,
                 actions: [UNNotificationAction(identifier: Self.recordMeetingAction, title: "Record")],
@@ -125,6 +135,20 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
         }
     }
 
+    /// "Recording saved, but export failed" with Retry and Show in Finder (the saved recording).
+    func exportFailed(_ message: String, bundle: ProjectBundle) async {
+        announce(message)
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Export failed"
+        content.body = message
+        content.sound = .default
+        content.categoryIdentifier = Self.failedExportCategory
+        content.userInfo = ["path": bundle.url.path, "failedExport": true]
+        try? await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
     /// A plain notification (no actions; clicking does nothing). Never asks for permission: a system quit waits for this.
     func recordingFailed(_ message: String) async {
         announce(message)
@@ -158,6 +182,18 @@ final class ReadyNotifier: NSObject, RecordingFeedback, UNUserNotificationCenter
             return
         }
         guard let path = response.notification.request.content.userInfo["path"] as? String else { return }
+        if response.notification.request.content.userInfo["failedExport"] != nil {
+            let bundle = ProjectBundle(url: URL(filePath: path))
+            let action = response.actionIdentifier
+            await MainActor.run {
+                switch action {
+                case Self.retryAction: self.onRetryExport?(bundle)
+                case Self.revealAction, UNNotificationDefaultActionIdentifier: self.reveal(bundle.url)
+                default: break
+                }
+            }
+            return
+        }
         let url = URL(filePath: path)
         let action = response.actionIdentifier
         await MainActor.run {
