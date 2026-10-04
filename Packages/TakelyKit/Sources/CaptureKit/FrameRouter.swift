@@ -62,14 +62,23 @@ public final class FrameRouter: Sendable {
     /// Called by a source whose stream stopped on its own.
     public func reportStreamStopped(_ error: any Error, userInitiated: Bool) {
         // Before recording began (during the countdown): the start fails instead of starting a dead recording.
-        if state.withLock({ $0.writer == nil }) { earlyFailure.withLock { $0 = $0 ?? error } }
+        // A stop the person chose (the system's "Stop sharing") is a cancel, not an error.
+        if state.withLock({ $0.writer == nil }) { earlyFailure.withLock { $0 = $0 ?? (userInitiated ? CancellationError() : error) } }
         report(.streamStopped(userInitiated: userInitiated), error)
     }
 
     private let earlyFailure = Mutex<(any Error)?>(nil)
 
-    /// Echo removal was asked for but isn't running (AEC3 couldn't start, or failed mid-recording): `mic` is raw.
-    var echoCancellationFailed: Bool { cancelsEcho && echo.withLock { $0?.isBypassing ?? true } }
+    enum EchoCancellationState { case off, running, neverStarted, stopped }
+
+    /// Whether echo removal, if asked for, is working (when it isn't, `mic` is the raw microphone).
+    var echoCancellation: EchoCancellationState {
+        guard cancelsEcho else { return .off }
+        return echo.withLock { canceller in
+            guard let canceller else { return .neverStarted }
+            return canceller.isBypassing ? .stopped : .running
+        }
+    }
 
     /// A stream that stopped before the first segment opened (checked when the countdown ends).
     var streamFailureBeforeStart: (any Error)? { earlyFailure.withLock { $0 } }
@@ -138,6 +147,13 @@ public final class FrameRouter: Sendable {
             guard let samples = try? Downmixer.convert(buffer, with: &s.downmixer) else { return }
             s.detector.add(samples, at: t)
         }
+    }
+
+    /// Writes out the microphone audio the echo canceller still holds (up to ~150 ms waiting for its reference),
+    /// so pause detection sees everything said up to now.
+    func flushEchoCancellation() {
+        let writer = state.withLock { $0.writer }
+        withCanceller(writing: nil, to: writer) { $0.flush() }
     }
 
     func attach(_ writer: SegmentWriter?, offset: Double) {

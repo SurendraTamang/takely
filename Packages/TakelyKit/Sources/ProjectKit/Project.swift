@@ -144,9 +144,15 @@ public struct Project: Codable, Sendable, Equatable {
     public var summary: String?
     /// When the last export finished: the recording counts as done even if its MP4 was moved out of the bundle.
     public var exportedAt: Date?
-    /// Something the person should know about this recording's processing (e.g. why there are no captions); shown
-    /// with the Ready notification.
-    public var note: String?
+    /// What the person should know about this recording (why there are no captions, echo removal failing…), each
+    /// under its own key so one can be cleared without the others; shown with the Ready notification.
+    public var notes: [String: String]?
+
+    public mutating func setNote(_ key: String, _ text: String?) {
+        var all = notes ?? [:]
+        all[key] = text
+        notes = all.isEmpty ? nil : all
+    }
 
     public init(
         status: Status = .recording, createdAt: Date = .now, capture: Capture, segments: [Segment] = [], camera: Camera,

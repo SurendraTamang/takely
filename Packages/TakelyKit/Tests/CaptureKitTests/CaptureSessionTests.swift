@@ -272,6 +272,28 @@ func attempt<T>(_ body: () async throws -> T) async -> Result<T, any Error> {
         #expect(!project.camera.keyframes.contains { $0.t > 1.25 && $0.t < 2.5 }, "keyframes after the cut are dropped")
     }
 
+    @Test func retakeFindsThePauseThroughEchoCancellationWhenSpeechJustResumed() async throws {
+        // Echo removal on, no system audio playing: the canceller holds the newest speech while it waits for a
+        // reference. The retake must still see that the pause ended, and cut back to it — not drop the take.
+        let (session, clock) = makeSession()
+        let echoing = RecordingConfig(
+            target: .display, captureRect: CGRect(x: 0, y: 0, width: 100, height: 100), sourcePixelSize: PixelSize(width: 64, height: 40),
+            resolution: .native, codec: .h264, systemAudio: true, microphone: true, echoCancellation: true)
+        let fake = Mutex<FakeSource?>(nil)
+        let handle = try await session.start(config: echoing, in: Synthetic.temporaryFolder()) { router in
+            let source = FakeSource(router: router)
+            fake.withLock { $0 = source }
+            return [source]
+        }
+        let source = try #require(fake.withLock { $0 })
+        try await source.emitScreen(from: 100, seconds: 2)
+        speak(handle.router, from: 100, [(1, true), (0.6, false), (0.12, true)])
+        clock.set(101.72)
+        let (duration, _) = try await session.retake()
+        #expect(abs(duration - 1.2) < 0.05, "kept \(duration) s")
+        _ = try await session.stop()
+    }
+
     @Test func retakeWithoutAPauseDropsTheWholeSegment() async throws {
         let (session, clock) = makeSession()
         let fake = Mutex<FakeSource?>(nil)
