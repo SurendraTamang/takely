@@ -47,6 +47,7 @@ public struct Exporter: Sendable {
         defer { observer.cancel() }
         do {
             try await session.export(to: partial, as: .mp4)
+            observer.cancel()  // no late progress after the next step's
         } catch {
             try? FileManager.default.removeItem(at: partial)  // don't leave hidden partial files behind
             throw error

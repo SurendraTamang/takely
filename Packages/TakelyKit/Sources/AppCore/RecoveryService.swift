@@ -77,10 +77,12 @@ public enum RecoveryService {
         project.segments += recovered
         guard !project.segments.isEmpty else { throw RecoveryError.nothingRecoverable }
         project.status = .finished
-        if !recovered.isEmpty {
-            // The recovered tail has no cursor data (it's written when a segment closes): end cursor effects where it stops.
-            var cursor = try bundle.readCursor()
-            cursor.coveredUntil = closedDuration
+        // Cursor effects end where cursor data does: before the recovered tail (it's written when a segment closes),
+        // or earlier if the crash came before a pause's background cursor write landed (the file then says so).
+        var cursor = try bundle.readCursor()
+        let covered = min(cursor.coveredUntil ?? closedDuration, closedDuration)
+        if !recovered.isEmpty || covered < closedDuration {
+            cursor.coveredUntil = covered
             try bundle.write(cursor)
         }
         try bundle.write(project)

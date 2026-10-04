@@ -204,7 +204,8 @@ final class RecordingCoordinator {
             onRecap(nil)
             live.prepare(script: script, coach: settings.liveCoach, locale: settings.transcriptionLocale)
         }
-        if old == .starting, new == .idle { live.discardPrepared() }  // cancelled countdown or failed start
+        // Cancelled countdown, failed start, or a recording that ended before it was seen running.
+        if old == .starting, new != .recording { live.discardPrepared() }
         if old == .starting, new == .recording, let router = session.active?.router {
             prompter.model.practicing = false
             Task {

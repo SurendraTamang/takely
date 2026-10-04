@@ -226,8 +226,12 @@ public actor CaptureSession {
             }
         }
         for source in sources { await source.stop() }
-        // Stopped while paused: the pause's cursor write must land before the export reads it.
-        await cursorWrite?.value
+        // Stopped while paused: the pause's cursor write must land before the export reads it — and the final file
+        // covers the whole recording (no `coveredUntil`), written again here if that write failed.
+        if let pending = cursorWrite, let router {
+            _ = await pending.value
+            do { try bundle.write(router.cursor) } catch { log.error("cursor not saved at stop: \(error.localizedDescription)") }
+        }
         cursorWrite = nil
         project?.status = .finished
         if let camera = router?.camera { project?.camera = camera }
@@ -267,15 +271,24 @@ public actor CaptureSession {
         }
         if let project { try bundle.write(project) }
         if cursorInBackground {
-            let cursor = router.cursor
+            var cursor = router.cursor
+            // Until a later write replaces it, the file covers only up to here: recovery after a crash then knows
+            // the segments past it have no cursor data.
+            cursor.coveredUntil = project?.duration
             let previous = cursorWrite
             let log = log
             cursorWrite = Task.detached {
-                await previous?.value
-                do { try bundle.write(cursor) } catch { log.error("cursor not saved: \(error.localizedDescription)") }
+                _ = await previous?.value
+                do {
+                    try bundle.write(cursor)
+                    return true
+                } catch {
+                    log.error("cursor not saved: \(error.localizedDescription)")
+                    return false
+                }
             }
         } else {
-            await cursorWrite?.value
+            _ = await cursorWrite?.value
             cursorWrite = nil
             try bundle.write(router.cursor)
         }
@@ -283,7 +296,7 @@ public actor CaptureSession {
     }
 
     /// The background `cursor.json` write a pause started, if it's still running.
-    private var cursorWrite: Task<Void, Never>?
+    private var cursorWrite: Task<Bool, Never>?
 
     private func reset() {
         state = .idle

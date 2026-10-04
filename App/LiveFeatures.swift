@@ -51,6 +51,7 @@ final class LiveStatus {
         /// Loads speech recognition while the countdown runs; `startRecording` then uses it if nothing changed.
         func prepare(script: String?, coach: Bool, locale: Locale) {
             discardPrepared()
+            if let old = detach() { Task { await old.stop() } }  // a Practice run ends: the recording takes the mic
             guard script != nil || coach else { return }
             let session = LiveSession(script: script)
             prepared = (session, script, coach, Task { await session.start(locale: locale) })
@@ -116,6 +117,7 @@ final class LiveStatus {
         /// Stops listening; returns the coach's recap if there was enough speech.
         @discardableResult
         func stop() async -> String? {
+            discardPrepared()
             let coached = status.coaching
             let old = session
             _ = detach()

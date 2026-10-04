@@ -29,17 +29,28 @@ final class CameraController {
                 if session.canSetSessionPreset(.hd1280x720) { session.sessionPreset = .hd1280x720 }
                 session.commitConfiguration()
                 // A steady 30 fps (cameras may drop to 15 in dim light, or pick 60), when the camera supports it.
+                // Durations outside the format's ranges raise an uncatchable exception: only ones taken from them.
                 if let device = (session.inputs.first as? AVCaptureDeviceInput)?.device,
-                    device.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.minFrameRate <= 30 && 30 <= $0.maxFrameRate }),
-                    (try? device.lockForConfiguration()) != nil
+                    let duration = Self.thirtyFPS(device.activeFormat), (try? device.lockForConfiguration()) != nil
                 {
-                    device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
-                    device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
+                    device.activeVideoMinFrameDuration = duration
+                    device.activeVideoMaxFrameDuration = duration
                     device.unlockForConfiguration()
                 }
             }
             if !session.isRunning, !session.inputs.isEmpty { session.startRunning() }
         }
+    }
+
+    /// 1/30 s if a range of `format` contains it exactly (as `CMTime`s); else a fixed rate within half a frame of 30
+    /// (its own duration, e.g. a camera's "30" stored as 333333/10000000 s); else nil (leave the camera's rate).
+    nonisolated static func thirtyFPS(_ format: AVCaptureDevice.Format) -> CMTime? {
+        let target = CMTime(value: 1, timescale: 30)
+        let ranges = format.videoSupportedFrameRateRanges
+        if ranges.contains(where: { CMTimeCompare($0.minFrameDuration, target) <= 0 && CMTimeCompare(target, $0.maxFrameDuration) <= 0 }) {
+            return target
+        }
+        return ranges.first { abs($0.maxFrameRate - 30) < 0.5 }?.minFrameDuration
     }
 
     /// Stops the camera after 30 s unless something starts it again.

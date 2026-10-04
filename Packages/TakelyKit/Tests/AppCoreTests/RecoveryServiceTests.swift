@@ -101,6 +101,20 @@ enum RecoveryFixture {
         await #expect(throws: RecoveryError.nothingRecoverable) { try await RecoveryService.rebuild(bundle) }
     }
 
+    @Test func aCrashBeforeAPausesCursorWriteLandedEndsCursorEffectsWhereItsDataEnds() async throws {
+        let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
+        var project = RecoveryFixture.project(status: .recording)
+        project.segments = [
+            .init(file: "segment-000.mov", duration: 1, tracks: [.screen]), .init(file: "segment-001.mov", duration: 1, tracks: [.screen]),
+        ]
+        try bundle.write(project)
+        // The file the first pause wrote (covering 1 s); the second pause's write never landed.
+        try bundle.write(CursorTrack(samples: [CursorSample(t: 0.5, x: 0.5, y: 0.5)], coveredUntil: 1))
+        _ = try await RecoveryService.rebuild(bundle)
+        #expect(try bundle.readCursor().coveredUntil == 1)
+        #expect(try bundle.readProject().status == .finished)
+    }
+
     @Test func finishedBundleIsLeftAlone() async throws {
         let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
         try bundle.write(RecoveryFixture.project(status: .finished))
