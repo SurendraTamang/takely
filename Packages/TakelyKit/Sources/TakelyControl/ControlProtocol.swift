@@ -7,6 +7,8 @@ public struct ControlRequest: Codable, Sendable, Equatable {
         case start, stop, pause, resume, marker, retake, discard, status
         /// Runs a Demo Mode plan (Takely Pro) while recording it; replies with the video like `stop`.
         case demo
+        /// Stops the running demo (`takely demo stop`, or Ctrl-C on `takely demo`); what was recorded is saved.
+        case stopDemo = "demo-stop"
     }
 
     public var command: Command
@@ -16,10 +18,21 @@ public struct ControlRequest: Codable, Sendable, Equatable {
     public var region: [Double]?
     /// `demo`: the plan's text.
     public var plan: String?
+    /// `start`: false records without the camera or the microphone this time (nil: the user's setting).
+    public var camera: Bool?
+    public var microphone: Bool?
+    /// `start`: the display to record, counted from 1 left to right (nil: the chosen one).
+    public var display: Int?
 
-    public init(_ command: Command, countdown: Bool? = nil, region: CGRect? = nil, plan: String? = nil) {
+    public init(
+        _ command: Command, countdown: Bool? = nil, region: CGRect? = nil, plan: String? = nil, camera: Bool? = nil,
+        microphone: Bool? = nil, display: Int? = nil
+    ) {
         self.command = command
         self.plan = plan
+        self.camera = camera
+        self.microphone = microphone
+        self.display = display
         self.countdown = countdown
         self.region = region.map { [$0.minX, $0.minY, $0.width, $0.height] }
     }
@@ -77,10 +90,14 @@ public struct ControlURL: Sendable, Equatable {
         let parts = ([url.host() ?? ""] + url.pathComponents.filter { $0 != "/" }).filter { !$0.isEmpty }
         let name = parts.first == "record" ? parts.dropFirst().first : parts.first
         // A demo drives the keyboard and mouse: never from a link (any web page can open one).
-        guard let name, let command = ControlRequest.Command(rawValue: name), command != .demo else { return nil }
+        guard let name, let command = ControlRequest.Command(rawValue: name), command != .demo, command != .stopDemo else { return nil }
         let query = Dictionary((components.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { $1 })
         var request = ControlRequest(command)
         if let countdown = query["countdown"] { request.countdown = !["0", "false", "no", "off"].contains(countdown.lowercased()) }
+        let off = { (value: String) in ["0", "false", "no", "off"].contains(value.lowercased()) }
+        if let camera = query["camera"], off(camera) { request.camera = false }
+        if let microphone = query["mic"], off(microphone) { request.microphone = false }
+        request.display = query["display"].map { Int($0) ?? 0 }
         if let region = query["region"] {
             // Kept even when malformed, so the command is refused instead of recording the whole display.
             request.region = region.split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces)) ?? -1 }

@@ -13,16 +13,18 @@ extension RecordingCoordinator: AutomationHost {
     var errorMessage: String? { controller.errorMessage }
     var lastRecording: URL? { controller.lastRecording }
 
-    func startRecording(countdown: Bool?, region: CGRect?) async {
+    func startRecording(_ options: StartOptions) async {
         // Nobody may be at the Mac to answer a permission prompt: say what's missing instead of waiting on one.
-        if let missing = Self.missingPermission(camera: settings.camera, microphone: settings.microphone) {
+        if let missing = Self.missingPermission(
+            camera: settings.camera && options.camera != false, microphone: settings.microphone && options.microphone != false)
+        {
             controller.errorMessage = missing
             return
         }
-        session.target = region.map { .region($0) } ?? .display
-        session.countdownOverride = countdown
+        session.target = options.region.map { .region($0) } ?? .display
+        session.nextStart = options
         await controller.start()
-        session.countdownOverride = nil  // also when the start failed before reading it
+        session.nextStart = StartOptions()  // also when the start failed before reading it
     }
 
     /// Why a start would stop at a camera or microphone prompt, if it would: undecided permissions are asked for (the

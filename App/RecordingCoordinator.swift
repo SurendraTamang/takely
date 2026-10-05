@@ -30,6 +30,8 @@ final class RecordingCoordinator {
     /// Whether the bubble is on screen (when the camera is on). Separate from `settings.camera`, which decides
     /// whether recordings include the camera: hiding the bubble doesn't turn the camera off for the next take.
     private var bubbleShown = false
+    /// Whether the current recording has the camera (set as each start begins); only read while recording.
+    private var recordingHasCamera = true
     private var wasRecording = false
     /// The phase the prompter and the recording-only hotkeys last followed (so a manual pause of the prompter sticks).
     private var followedPhase: RecordingController.Phase?
@@ -182,7 +184,7 @@ final class RecordingCoordinator {
             wasRecording = recordingActive
             bubbleShown = settings.camera && (recordingActive || panelOpen)
         }
-        if settings.camera && bubbleShown {
+        if settings.camera && bubbleShown && (recordingHasCamera || !recordingActive) {
             camera.start(deviceID: settings.cameraID)
             showBubble()
         } else {
@@ -255,6 +257,10 @@ final class RecordingCoordinator {
         panel.orderFrontRegardless()
         bubble = panel
         session.bubbleStart = { [weak self] in self?.recordBubble(visible: true) }
+        session.cameraDecided = { [weak self] uses in
+            self?.recordingHasCamera = uses
+            self?.update()
+        }
         recordBubble(visible: true)  // shown again mid-recording
     }
 

@@ -8,10 +8,12 @@ import ProjectKit
 
 enum LiveSessionError: Error, LocalizedError {
     case noDisplay, windowGone, areaGone, cameraDenied, microphoneDenied, screenDenied
+    case noSuchDisplay(Int, of: Int)
 
     var errorDescription: String? {
         switch self {
         case .noDisplay: "No display is available to record."
+        case .noSuchDisplay(let number, let count): "There's no display \(number): \(count) connected (counted from 1, left to right)."
         case .windowGone: "That window is no longer available."
         case .areaGone: "That area is no longer on a connected display. Choose the area again."
         case .cameraDenied: "Allow Camera access in System Settings, or turn the camera off."
@@ -36,12 +38,16 @@ final class LiveRecordingSession: RecordingSession {
     /// Set by the coordinator before each start; kept for a restart.
     var target = Target.display
     let countdown = Countdown()
-    /// Overrides the countdown setting for the next start only (automation can skip it).
-    var countdownOverride: Bool?
+    /// Overrides for the next start only (automation can skip the countdown, leave out the camera or microphone,
+    /// or pick a display).
+    var nextStart = StartOptions()
     /// Recording a call (set by the meeting monitor for the whole recording, restarts included): no camera bubble
     /// (the call shows the camera), no countdown, and both the call's sound and the microphone.
     var meetingMode = false
     let drawing = DrawingOverlay()
+    /// Called as a start begins with whether this recording has the camera (a meeting or automation may leave it out
+    /// though it's on in the settings): the bubble is shown only when it does.
+    var cameraDecided: (Bool) -> Void = { _ in }
     /// Called once the recording runs, to record the bubble's starting place.
     var bubbleStart: () -> Void = {}
     /// The running recording's router and captured area (global points), for the bubble's keyframes.
@@ -71,12 +77,15 @@ final class LiveRecordingSession: RecordingSession {
 
     private func startNow(in folder: URL) async throws -> RecordingHandle {
         let meeting = meetingMode
-        let useCamera = settings.camera && !meeting
+        let options = nextStart
+        let useCamera = settings.camera && !meeting && options.camera != false
+        let useMicrophone = (settings.microphone && options.microphone != false) || meeting
+        cameraDecided(useCamera)
         if useCamera, !(await AVCaptureDevice.requestAccess(for: .video)) { throw LiveSessionError.cameraDenied }
-        if settings.microphone || meeting, !(await AVCaptureDevice.requestAccess(for: .audio)) { throw LiveSessionError.microphoneDenied }
+        if useMicrophone, !(await AVCaptureDevice.requestAccess(for: .audio)) { throw LiveSessionError.microphoneDenied }
         let (filter, captureRect, sourceRect, kind): (SCContentFilter, CGRect, CGRect?, CaptureTarget)
         do {
-            (filter, captureRect, sourceRect, kind) = try await capture(target)
+            (filter, captureRect, sourceRect, kind) = try await capture(target, display: options.display)
         } catch let error as NSError where error.domain == SCStreamErrorDomain && error.code == SCStreamError.Code.userDeclined.rawValue {
             throw LiveSessionError.screenDenied  // ScreenCaptureKit's own text ("declined TCCs") says nothing useful
         }
@@ -85,7 +94,7 @@ final class LiveRecordingSession: RecordingSession {
             target: kind, captureRect: captureRect,
             sourcePixelSize: CaptureGeometry.pixelSize(of: captureRect, scale: scale),
             resolution: settings.resolution, fps: settings.fps, codec: settings.codec,
-            camera: useCamera, systemAudio: settings.systemAudio || meeting, microphone: settings.microphone || meeting,
+            camera: useCamera, systemAudio: settings.systemAudio || meeting, microphone: useMicrophone,
             echoCancellation: settings.removeEcho
         )
         // A saved microphone that's been unplugged falls back to the system default.
@@ -93,8 +102,7 @@ final class LiveRecordingSession: RecordingSession {
         if config.camera { camera.start(deviceID: settings.cameraID) }
         let cameraSession = camera.session
         let cameraQueue = camera.queue
-        let countdown = !meeting && (countdownOverride ?? settings.countdown) ? countdown : nil
-        countdownOverride = nil
+        let countdown = !meeting && (options.countdown ?? settings.countdown) ? countdown : nil
         let handle = try await engine.start(
             config: config, in: folder,
             sources: { [config] router in
@@ -113,7 +121,8 @@ final class LiveRecordingSession: RecordingSession {
     }
 
     /// The stream filter, the captured area (global points), the display-local source rect, and the target kind.
-    private func capture(_ target: Target) async throws -> (SCContentFilter, CGRect, CGRect?, CaptureTarget) {
+    /// `display`: counted from 1, left to right (automation); else the chosen one.
+    private func capture(_ target: Target, display number: Int? = nil) async throws -> (SCContentFilter, CGRect, CGRect?, CaptureTarget) {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         if case .window(let window) = target {
             guard let current = content.windows.first(where: { $0.windowID == window.windowID }) else {
@@ -123,8 +132,15 @@ final class LiveRecordingSession: RecordingSession {
         }
         var region: CGRect?
         if case .region(let r) = target { region = r }
+        var numbered: SCDisplay?
+        if let number {
+            let ordered = content.displays.sorted { CGDisplayBounds($0.displayID).minX < CGDisplayBounds($1.displayID).minX }
+            guard ordered.indices.contains(number - 1) else { throw LiveSessionError.noSuchDisplay(number, of: ordered.count) }
+            numbered = ordered[number - 1]
+        }
         let display =
-            region.flatMap { r in content.displays.first { CGDisplayBounds($0.displayID).contains(CGPoint(x: r.midX, y: r.midY)) } }
+            numbered
+            ?? region.flatMap { r in content.displays.first { CGDisplayBounds($0.displayID).contains(CGPoint(x: r.midX, y: r.midY)) } }
             ?? content.displays.first { $0.displayID == settings.displayID }
             ?? content.displays.first { $0.displayID == CGMainDisplayID() } ?? content.displays.first
         guard let display else { throw LiveSessionError.noDisplay }
