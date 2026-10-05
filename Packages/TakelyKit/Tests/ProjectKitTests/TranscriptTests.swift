@@ -57,4 +57,24 @@ import Testing
         let decoded = try Project.decode(JSONSerialization.data(withJSONObject: json))
         #expect(decoded.title == nil && decoded.summary == nil)
     }
+
+    @Test func languagesWithoutSpacesJoinDirectlyAndWrapByCharacter() {
+        let words = ["今日は", "新しい", "機能を", "紹介", "します"].enumerated().map {
+            Transcript.Word(start: Double($0.offset), end: Double($0.offset) + 0.9, text: $0.element)
+        }
+        let transcript = Transcript(
+            locale: "ja_JP", phrases: [.init(start: 0, end: 4.9, text: words.map(\.text).joined(), words: words)])
+        #expect(transcript.text == "今日は新しい機能を紹介します")
+        #expect(transcript.cues() == [CaptionCue(start: 0, end: 4.9, text: "今日は新しい機能を紹介します")])
+        #expect(Transcript.wrap(words.map(\.text), width: 7, separator: "") == ["今日は新しい", "機能を紹介", "します"])
+        // A phrase without word times breaks anywhere, over cues of two 16-character lines.
+        let long = String(repeating: "あ", count: 40)
+        let cues = Transcript(locale: "zh_CN", phrases: [.init(start: 0, end: 5, text: long, words: [])]).cues()
+        #expect(
+            cues.map(\.text) == [
+                String(repeating: "あ", count: 16) + "\n" + String(repeating: "あ", count: 16), String(repeating: "あ", count: 8),
+            ])
+        #expect(cues.map(\.start) == [0, 4])
+        #expect(!Transcript.writtenWithoutSpaces("en_US") && Transcript.writtenWithoutSpaces("th"))
+    }
 }

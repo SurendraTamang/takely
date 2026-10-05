@@ -26,11 +26,32 @@
 
         init(center: AutomationCenter, coordinator: RecordingCoordinator) {
             model = DemoModel()
-            model.run = { [weak self] script, voice in
-                guard let self else { return }
+            let makeRecorder = { [model] in
                 let recorder = AppDemoRecorder(center: center, coordinator: coordinator)
-                if self.model.showAvatar, self.model.hasAvatar { recorder.avatar = DemoModel.avatarFolder }
-                await self.run(script, voice: voice, recorder: recorder)
+                if model.showAvatar, model.hasAvatar { recorder.avatar = DemoModel.avatarFolder }
+                return recorder
+            }
+            model.run = { [weak self] script, voice in
+                _ = await self?.run(script, voice: voice, recorder: makeRecorder())
+            }
+            // `takely demo plan.txt`: the same run, with the voice and avatar chosen in the Demo Mode window.
+            center.runDemo = { [weak self] text in
+                guard let self else { return .failure(AutomationFailure("Takely is quitting.")) }
+                let script: DemoScript
+                do {
+                    script = try DemoScript(parsing: text)
+                } catch {
+                    return .failure(AutomationFailure("The plan has an error: \(error.localizedDescription)"))
+                }
+                guard !script.steps.isEmpty else { return .failure(AutomationFailure("The plan has no steps.")) }
+                let voice = self.model.voices.first { $0.identifier == self.model.voiceID }
+                switch await self.run(script, voice: voice, recorder: makeRecorder(), showAfter: false) {
+                case .finished(let url): return .success(url)
+                case .endedEarly:
+                    return .failure(AutomationFailure("The recording stopped before the demo finished; what was recorded is saved."))
+                case .failed(let message): return .failure(AutomationFailure(message))
+                case nil, .idle, .running: return .failure(AutomationFailure(self.model.message ?? "The demo didn't run."))
+                }
             }
             KeyboardShortcuts.disable(.stopDemo)
             KeyboardShortcuts.onKeyUp(for: .stopDemo) { [weak self] in self?.runner?.cancel() }
@@ -53,13 +74,24 @@
             window.makeKeyAndOrderFront(nil)
         }
 
-        private func run(_ script: DemoScript, voice: AVSpeechSynthesisVoice?, recorder: AppDemoRecorder) async {
-            guard runner == nil else { return }  // one demo at a time
+        /// Nil when it didn't start (one is running, no Accessibility access, or a risky plan wasn't confirmed);
+        /// `model.message` then says why. `showAfter` brings the window back with the outcome.
+        @discardableResult
+        private func run(
+            _ script: DemoScript, voice: AVSpeechSynthesisVoice?, recorder: AppDemoRecorder, showAfter: Bool = true
+        ) async -> DemoRunner.State? {
+            guard runner == nil else {  // one demo at a time
+                model.message = "A demo is already running."
+                return nil
+            }
             guard MacActions.isTrusted(prompt: true) else {
                 model.message = DemoError.accessibilityNeeded.localizedDescription
-                return
+                return nil
             }
-            if !script.riskySteps.isEmpty, !confirmRisky(script.riskySteps) { return }
+            if !script.riskySteps.isEmpty, !(await confirmRisky(script.riskySteps)) {
+                model.message = "Not run: the plan's risky steps weren't confirmed."
+                return nil
+            }
             model.running = true
             defer { model.running = false }
             let runner = DemoRunner(script: script, actions: GuardedActions(), recorder: recorder, narrator: Narrator(voice: voice))
@@ -91,18 +123,19 @@
             case .failed(let message): model.message = message
             case .idle, .running: break
             }
-            show()
+            if showAfter { show() }
+            return result
         }
 
         /// Plans that can quit, delete, send, buy or open a terminal run only after a yes.
-        private func confirmRisky(_ steps: [String]) -> Bool {
+        private func confirmRisky(_ steps: [String]) async -> Bool {
             let alert = NSAlert()
             alert.messageText = "This plan has steps that may be hard to undo"
             alert.informativeText = steps.joined(separator: "\n") + "\n\nRun it anyway?"
             alert.addButton(withTitle: "Run")
             alert.addButton(withTitle: "Cancel")
             alert.alertStyle = .warning
-            return alert.runModal() == .alertFirstButtonReturn
+            return await alert.runModalFromRunLoop() == .alertFirstButtonReturn
         }
 
         /// A step failed: Retry, Skip or Stop. The app that was in front comes back afterwards, so a retry lands in it.
@@ -116,7 +149,7 @@
             alert.addButton(withTitle: "Stop")
             alert.window.level = .floating
             NSApp.activate()
-            let answer = alert.runModal()
+            let answer = await alert.runModalFromRunLoop()
             front?.activate()
             try? await Task.sleep(for: .milliseconds(400))
             switch answer {

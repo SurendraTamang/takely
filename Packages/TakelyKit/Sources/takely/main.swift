@@ -10,6 +10,7 @@ let usage = """
       record stop                                        stop, export, and print the video's path
       pause | resume | marker | retake | discard         while recording
       status                                             what Takely is doing
+      demo [run] <plan.txt | ->                          record a Demo Mode plan (Takely Pro); prints the video's path
 
       --json   print the reply as JSON
 
@@ -33,6 +34,13 @@ if ["help", "--help", "-h"].contains(name) {
 guard let command = ControlRequest.Command(rawValue: name) else { exit(2, "Unknown command “\(name)”.\n\n" + usage) }
 var request = ControlRequest(command)
 var rest = arguments.dropFirst()
+if command == .demo {
+    if rest.first == "run" { rest.removeFirst() }
+    guard let file = rest.popFirst(), rest.isEmpty else { exit(2, "demo needs one plan file (or - for standard input).\n\n" + usage) }
+    let data = file == "-" ? FileHandle.standardInput.readDataToEndOfFile() : FileManager.default.contents(atPath: file)
+    guard let data, let plan = String(data: data, encoding: .utf8) else { exit(2, "Couldn't read the plan “\(file)”.") }
+    request.plan = plan
+}
 while let option = rest.popFirst() {
     switch option {
     case "--no-countdown" where command == .start:
@@ -96,7 +104,7 @@ do {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         print(String(decoding: try encoder.encode(reply), as: UTF8.self))
     } else if reply.ok {
-        print(request.command == .stop ? reply.path ?? reply.state : reply.state)
+        print(request.command == .stop || request.command == .demo ? reply.path ?? reply.state : reply.state)
     }
     if !reply.ok {
         if !json { FileHandle.standardError.write(Data(((reply.error ?? "Failed.") + "\n").utf8)) }

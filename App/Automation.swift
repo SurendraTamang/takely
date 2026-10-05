@@ -71,7 +71,7 @@ final class Automation {
 
     func stop() { server?.stop() }
 
-    private func confirm(_ command: ControlRequest.Command) -> Bool {
+    private func confirm(_ command: ControlRequest.Command) async -> Bool {
         let action =
             switch command {
             case .start: "start recording your screen"
@@ -87,7 +87,7 @@ final class Automation {
         alert.addButton(withTitle: "Don't Allow")
         alert.window.level = .floating
         NSApp.activate()
-        return alert.runModal() == .alertFirstButtonReturn
+        return await alert.runModalFromRunLoop() == .alertFirstButtonReturn
     }
 
     /// `takely://record/start?…`: runs the command, then opens the x-success or x-error callback, if any. Any web
@@ -95,7 +95,7 @@ final class Automation {
     func open(_ url: URL) {
         guard let command = ControlURL(url) else { return Logger.automation.error("unknown URL \(url.absoluteString)") }
         Task {
-            if command.request.command != .status, !settings.allowLinkControl, !confirm(command.request.command) {
+            if command.request.command != .status, !settings.allowLinkControl, !(await confirm(command.request.command)) {
                 if let callback = command.callback(for: ControlReply(ok: false, state: "unknown", error: "Not allowed.")) {
                     NSWorkspace.shared.open(callback)
                 }

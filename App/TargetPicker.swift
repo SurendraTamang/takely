@@ -162,13 +162,19 @@ private struct RegionSelectionView: View {
                     .frame(width: local.width, height: local.height)
                     .offset(x: local.minX, y: local.minY)
                 let pixels = CaptureGeometry.pixelSize(of: shown, scale: scale)
-                Text(dragged == nil ? "Return to record this area again, or drag a new one" : "\(pixels.width) × \(pixels.height)")
-                    .font(.callout.monospacedDigit())
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.black.opacity(0.7), in: Capsule())
-                    .foregroundStyle(.white)
-                    .offset(x: local.minX, y: max(0, local.minY - 30))
+                let tooSmall = dragged.map { CaptureGeometry.clamp($0, to: screen) == nil } ?? false
+                let minimum = Int(CaptureGeometry.minimumSize)
+                Text(
+                    dragged == nil
+                        ? "Return to record this area again, or drag a new one"
+                        : tooSmall ? "Too small: drag at least \(minimum) × \(minimum) points" : "\(pixels.width) × \(pixels.height)"
+                )
+                .font(.callout.monospacedDigit())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.black.opacity(0.7), in: Capsule())
+                .foregroundStyle(.white)
+                .offset(x: local.minX, y: max(0, local.minY - 30))
             } else {
                 Text("Drag to select the area to record · Esc to cancel")
                     .font(.title3)

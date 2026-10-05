@@ -5,6 +5,8 @@ import Foundation
 public struct ControlRequest: Codable, Sendable, Equatable {
     public enum Command: String, Codable, Sendable, CaseIterable {
         case start, stop, pause, resume, marker, retake, discard, status
+        /// Runs a Demo Mode plan (Takely Pro) while recording it; replies with the video like `stop`.
+        case demo
     }
 
     public var command: Command
@@ -12,9 +14,12 @@ public struct ControlRequest: Codable, Sendable, Equatable {
     public var countdown: Bool?
     /// `start`: record this area (global points, origin top-left) instead of the chosen display.
     public var region: [Double]?
+    /// `demo`: the plan's text.
+    public var plan: String?
 
-    public init(_ command: Command, countdown: Bool? = nil, region: CGRect? = nil) {
+    public init(_ command: Command, countdown: Bool? = nil, region: CGRect? = nil, plan: String? = nil) {
         self.command = command
+        self.plan = plan
         self.countdown = countdown
         self.region = region.map { [$0.minX, $0.minY, $0.width, $0.height] }
     }
@@ -71,7 +76,8 @@ public struct ControlURL: Sendable, Equatable {
         // takely://record/start, takely://record/stop … and takely://status.
         let parts = ([url.host() ?? ""] + url.pathComponents.filter { $0 != "/" }).filter { !$0.isEmpty }
         let name = parts.first == "record" ? parts.dropFirst().first : parts.first
-        guard let name, let command = ControlRequest.Command(rawValue: name) else { return nil }
+        // A demo drives the keyboard and mouse: never from a link (any web page can open one).
+        guard let name, let command = ControlRequest.Command(rawValue: name), command != .demo else { return nil }
         let query = Dictionary((components.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { $1 })
         var request = ControlRequest(command)
         if let countdown = query["countdown"] { request.countdown = !["0", "false", "no", "off"].contains(countdown.lowercased()) }
