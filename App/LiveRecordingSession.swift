@@ -38,8 +38,8 @@ final class LiveRecordingSession: RecordingSession {
     /// Set by the coordinator before each start; kept for a restart.
     var target = Target.display
     let countdown = Countdown()
-    /// Overrides for the next start only (automation can skip the countdown, leave out the camera or microphone,
-    /// or pick a display).
+    /// Automation's overrides (skip the countdown, leave out the camera or microphone, pick a display) for its
+    /// recording, restarts included. Every start that isn't a restart sets them (to none, for the person's own).
     var nextStart = StartOptions()
     /// Recording a call (set by the meeting monitor for the whole recording, restarts included): no camera bubble
     /// (the call shows the camera), no countdown, and both the call's sound and the microphone.
@@ -134,7 +134,11 @@ final class LiveRecordingSession: RecordingSession {
         if case .region(let r) = target { region = r }
         var numbered: SCDisplay?
         if let number {
-            let ordered = content.displays.sorted { CGDisplayBounds($0.displayID).minX < CGDisplayBounds($1.displayID).minX }
+            // Left to right; stacked displays top to bottom (then by ID), so the numbers don't change between runs.
+            let ordered = content.displays.sorted {
+                let (a, b) = (CGDisplayBounds($0.displayID), CGDisplayBounds($1.displayID))
+                return (a.minX, a.minY, $0.displayID) < (b.minX, b.minY, $1.displayID)
+            }
             guard ordered.indices.contains(number - 1) else { throw LiveSessionError.noSuchDisplay(number, of: ordered.count) }
             numbered = ordered[number - 1]
         }

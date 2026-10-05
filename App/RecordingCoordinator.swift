@@ -56,6 +56,11 @@ final class RecordingCoordinator {
         }
         prompter = made
         self.prompter = made
+        // Set here, not when the bubble first shows: a start from the command line may come before it ever has.
+        session.cameraDecided = { [weak self] uses in
+            self?.recordingHasCamera = uses
+            self?.update()
+        }
         observe()
     }
 
@@ -66,6 +71,7 @@ final class RecordingCoordinator {
         guard controller.phase == .idle, !controller.isBusy, !picking else { return }
         picking = true
         defer { picking = false }
+        session.nextStart = StartOptions()  // the person's own start: their settings, not an earlier automation's
         switch settings.target {
         case .display:
             session.target = .display
@@ -190,8 +196,9 @@ final class RecordingCoordinator {
         } else {
             bubble?.orderOut(nil)
             bubble = nil
-            // A hidden bubble still has a camera track to record: keep the camera until the recording ends.
-            if !recordingActive { camera.stopSoon() }
+            // A hidden bubble still has a camera track to record: keep the camera until the recording ends — unless
+            // this recording has no camera at all.
+            if !recordingActive || !recordingHasCamera { camera.stopSoon() }
         }
         if recordingActive && controller.phase != .starting && settings.showControls { showControlBar() } else { hideControlBar() }
     }
@@ -257,10 +264,6 @@ final class RecordingCoordinator {
         panel.orderFrontRegardless()
         bubble = panel
         session.bubbleStart = { [weak self] in self?.recordBubble(visible: true) }
-        session.cameraDecided = { [weak self] uses in
-            self?.recordingHasCamera = uses
-            self?.update()
-        }
         recordBubble(visible: true)  // shown again mid-recording
     }
 

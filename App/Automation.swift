@@ -22,9 +22,8 @@ extension RecordingCoordinator: AutomationHost {
             return
         }
         session.target = options.region.map { .region($0) } ?? .display
-        session.nextStart = options
+        session.nextStart = options  // kept for this recording's restarts; every other start sets its own
         await controller.start()
-        session.nextStart = StartOptions()  // also when the start failed before reading it
     }
 
     /// Why a start would stop at a camera or microphone prompt, if it would: undecided permissions are asked for (the
