@@ -284,7 +284,11 @@ final class RecordingCoordinator {
         guard controlBar == nil else { return }
         let host = NSHostingView(rootView: ControlBar(coordinator: self, controller: controller, live: live.status))
         let size = host.fittingSize
-        let screen = NSScreen.main?.visibleFrame ?? .zero
+        // By default on the display being recorded (a saved position, wherever the person dragged it, wins).
+        let recorded = session.active.map { ScreenSpace.flip($0.captureRect) }
+        let screen =
+            recorded.flatMap { area in NSScreen.screens.first { $0.frame.contains(CGPoint(x: area.midX, y: area.midY)) } }?.visibleFrame
+            ?? NSScreen.main?.visibleFrame ?? .zero
         let saved = settings.controlsOrigin.flatMap { origin in NSScreen.screens.contains { $0.frame.contains(origin) } ? origin : nil }
         let origin = saved ?? CGPoint(x: screen.midX - size.width / 2, y: screen.minY + 24)
         let panel = OverlayPanel(frame: CGRect(origin: origin, size: size), activating: false, level: .floating)

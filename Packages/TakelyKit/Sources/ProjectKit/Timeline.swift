@@ -83,8 +83,9 @@ public struct CursorTrack: Codable, Sendable, Equatable {
     }
 
     public func clicks(activeAt t: Double, window: Double = 0.3) -> [ActiveClick] {
+        if let coveredUntil, t > coveredUntil { return [] }
         // ponytail: linear scan; binary search if click counts reach the thousands.
-        clicks.compactMap { click in
+        return clicks.compactMap { click in
             let progress = (t - click.t) / window
             return (0..<1).contains(progress) ? ActiveClick(click: click, progress: progress) : nil
         }

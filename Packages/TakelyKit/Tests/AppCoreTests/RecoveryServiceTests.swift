@@ -93,6 +93,22 @@ enum RecoveryFixture {
         #expect(report.project.segments.map(\.file) == ["segment-000.mov"])
     }
 
+    /// A segment whose close failed (renamed `.failed` by the capture session), an unreadable one and a good one after them.
+    @Test func quarantinedAndUnreadableSegmentsAreLeftOutOfTheRebuild() async throws {
+        let bundle = try await RecoveryFixture.crashedBundle(in: Synthetic.temporaryFolder())
+        let fm = FileManager.default
+        try fm.copyItem(at: bundle.segmentURL("segment-001.mov"), to: bundle.segmentURL("segment-003.mov"))
+        try bundle.writeSidecar(tracks: RecoveryFixture.config.tracks, for: "segment-003.mov")
+        try Data("not a movie".utf8).write(to: bundle.segmentURL("segment-002.mov"))
+        try bundle.writeSidecar(tracks: RecoveryFixture.config.tracks, for: "segment-002.mov")
+        for url in [bundle.segmentURL("segment-001.mov"), bundle.sidecarURL(for: "segment-001.mov")] {
+            try fm.moveItem(at: url, to: url.appendingPathExtension("failed"))
+        }
+        let report = try await RecoveryService.rebuild(bundle)
+        #expect(report.skipped == ["segment-002.mov"])
+        #expect(report.project.segments.map(\.file) == ["segment-000.mov", "segment-003.mov"])
+    }
+
     @Test func nothingUsableThrows() async throws {
         let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
         try bundle.write(RecoveryFixture.project(status: .recording))
