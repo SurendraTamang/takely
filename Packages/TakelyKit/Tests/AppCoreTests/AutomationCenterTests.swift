@@ -111,4 +111,23 @@ final class FakeHost: AutomationHost {
         host.phase = .paused
         #expect(await center.perform(ControlRequest(.marker)).error == "Paused: resume first.")
     }
+
+    @Test func demoRunsThroughTheProHookAndReturnsTheVideo() async {
+        let host = FakeHost()
+        let center = AutomationCenter(host: host)
+        let without = await center.perform(ControlRequest(.demo, plan: "open TextEdit"))
+        #expect(!without.ok && without.error == "Demo Mode is part of Takely Pro.")
+        var ran: [String] = []
+        center.runDemo = { plan in
+            ran.append(plan)
+            return plan.contains("fail") ? .failure(AutomationFailure("Step 1 didn't work")) : .success(URL(filePath: "/Movies/d.mp4"))
+        }
+        #expect(await center.perform(ControlRequest(.demo, plan: " \n")).error == "The plan is empty.")
+        let done = await center.perform(ControlRequest(.demo, plan: "open TextEdit"))
+        #expect(done.ok && done.path == "/Movies/d.mp4")
+        #expect(await center.perform(ControlRequest(.demo, plan: "fail")).error == "Step 1 didn't work")
+        host.phase = .recording
+        #expect(await center.perform(ControlRequest(.demo, plan: "open TextEdit")).error == "Already recording.")
+        #expect(ran == ["open TextEdit", "fail"])
+    }
 }

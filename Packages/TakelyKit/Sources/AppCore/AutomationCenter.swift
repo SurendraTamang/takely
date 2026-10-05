@@ -21,11 +21,22 @@ public protocol AutomationHost: AnyObject {
     func discard() async
 }
 
+/// Why an automation command failed, in words for the person who ran it.
+public struct AutomationFailure: Error, Equatable {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+}
+
 /// Runs automation commands (CLI, URL scheme, App Intents) through one path, so every entry point behaves alike
 /// and gets a definite answer instead of a silent no-op.
 @MainActor
 public final class AutomationCenter {
     private weak var host: (any AutomationHost)?
+    /// Runs a Demo Mode plan and returns the finished video, or why it didn't run (set by Takely Pro).
+    public var runDemo: ((String) async -> Result<URL, AutomationFailure>)?
+    /// A demo is running (or being confirmed): it presses keys, so a link's confirmation alert could be answered by
+    /// the demo itself — links are refused meanwhile.
+    public var isDemoRunning = false
 
     public init(host: any AutomationHost) {
         self.host = host
@@ -70,6 +81,16 @@ public final class AutomationCenter {
             }
             if await host.retake() { return reply(host) }
             return fail(host, host.phase == .recording ? "Nothing to take back." : host.errorMessage ?? "The retake failed.")
+        case .demo:
+            guard let runDemo else { return fail(host, "Demo Mode is part of Takely Pro.") }
+            guard let plan = request.plan, !plan.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return fail(host, "The plan is empty.")
+            }
+            guard host.phase == .idle, !host.isBusy else { return fail(host, isRecording(host) ? "Already recording." : "Takely is busy.") }
+            switch await runDemo(plan) {
+            case .success(let url): return reply(host, path: url)
+            case .failure(let failure): return fail(host, failure.message)
+            }
         case .discard:
             if host.phase == .starting { return fail(host, Self.starting) }
             guard isRecording(host), !host.isBusy else { return fail(host, "Not recording.") }

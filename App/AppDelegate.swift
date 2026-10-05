@@ -245,13 +245,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for candidate in candidates {
             let when = candidate.createdAt.formatted(date: .abbreviated, time: .shortened)
             if candidate.kind == .empty {
-                let answer = ask(
+                let answer = await ask(
                     "Takely found an empty recording", "From \(when). It has no video, so it can only be moved to the Trash.",
                     buttons: ["Delete", "Later"])
                 if answer == .alertFirstButtonReturn { await moveToTrash(candidate.bundle) }
                 continue
             }
-            let answer = ask(
+            let answer = await ask(
                 "Takely found a recording that wasn't saved",
                 "From \(when). Recover it to finish saving and export it, or move it to the Trash.",
                 buttons: ["Recover", "Delete", "Later"])
@@ -266,12 +266,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // A hotkey may have started a recording while the alert was open: keep the bundle for next launch.
                     guard controller.phase == .idle else {
                         log.info("recovery export deferred: a recording is in progress")
+                        await notifier.recordingFailed(
+                            "The recovered recording from \(when) wasn't exported: another recording started. It's offered again next launch."
+                        )
                         continue
                     }
                     await controller.export(candidate.bundle)
                 } catch {
                     // Nothing usable: offer the Trash so it isn't offered again on every launch.
-                    let retry = ask("Couldn't recover this recording", error.localizedDescription, buttons: ["Delete", "Keep"])
+                    let retry = await ask("Couldn't recover this recording", error.localizedDescription, buttons: ["Delete", "Keep"])
                     if retry == .alertFirstButtonReturn { await moveToTrash(candidate.bundle) }
                 }
             case .alertSecondButtonReturn:
@@ -282,14 +285,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func ask(_ title: String, _ message: String, buttons: [String]) -> NSApplication.ModalResponse {
+    private func ask(_ title: String, _ message: String, buttons: [String]) async -> NSApplication.ModalResponse {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
         buttons.forEach { alert.addButton(withTitle: $0) }
         alert.window.level = .floating  // stays visible when launched at login, before the app is active
         NSApp.activate()
-        return alert.runModal()
+        return await alert.runModalFromRunLoop()
     }
 
     private func moveToTrash(_ bundle: ProjectBundle) async {
@@ -381,7 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 editorWindow = window
                 present(window)
             } catch {
-                _ = ask("Couldn't open this recording", error.localizedDescription, buttons: ["OK"])
+                Task { _ = await ask("Couldn't open this recording", error.localizedDescription, buttons: ["OK"]) }
             }
         }
     #endif
@@ -426,6 +429,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 editor = nil
             #endif
             editorWindow = nil
+        }
+    }
+}
+
+extension NSAlert {
+    /// `runModal()` from a main-actor task: the task runs inside a main-queue job, which the alert's run loop can't
+    /// re-enter, so every other main-actor task (hotkey actions, the menu bar timer, recording updates) waits until
+    /// the alert is answered. Started from the run loop instead, they keep running.
+    func runModalFromRunLoop() async -> NSApplication.ModalResponse {
+        nonisolated(unsafe) let alert = self
+        return await withCheckedContinuation { continuation in
+            RunLoop.main.perform { MainActor.assumeIsolated { continuation.resume(returning: alert.runModal()) } }
         }
     }
 }

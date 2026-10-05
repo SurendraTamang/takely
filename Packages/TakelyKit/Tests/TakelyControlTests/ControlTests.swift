@@ -21,6 +21,7 @@ import Testing
         #expect(ControlURL(URL(string: "takely://record/start?region=0,0,-1,-1")!)?.request.hasInvalidRegion == true)
         #expect(ControlURL(URL(string: "takely://record/start?region=1,2")!)?.request.hasInvalidRegion == true)
         #expect(ControlURL(URL(string: "https://record/start")!) == nil)
+        #expect(ControlURL(URL(string: "takely://demo?plan=open%20Terminal")!) == nil)  // links never drive the keyboard
     }
 
     @Test func xCallbackCarriesThePathOrTheError() throws {
