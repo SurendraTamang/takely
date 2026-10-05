@@ -125,6 +125,7 @@ final class MeetingMonitor {
         guard controller.phase == .idle, !controller.isBusy, watcher.current == meeting else { return }
         guard !watcher.isEnding else { return recordPending = true }
         session.target = window.map { .window($0) } ?? .display
+        session.nextStart = StartOptions()
         session.meetingMode = true
         await controller.start()
         if controller.isRecording, let bundle = controller.recordingBundle {

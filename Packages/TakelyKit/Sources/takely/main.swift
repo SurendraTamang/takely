@@ -7,10 +7,13 @@ let usage = """
     Usage: takely <command> [options]
 
       record start [--no-countdown] [--region x,y,w,h]   start recording (the chosen display, or an area)
+             [--display n] [--no-camera] [--no-mic]       display n (1 = leftmost); without camera or microphone
       record stop                                        stop, export, and print the video's path
       pause | resume | marker | retake | discard         while recording
       status                                             what Takely is doing
       demo [run] <plan.txt | ->                          record a Demo Mode plan (Takely Pro); prints the video's path
+                                                         (Ctrl-C stops the demo and keeps what was recorded)
+      demo stop                                          stop the running demo
 
       --json   print the reply as JSON
 
@@ -31,7 +34,8 @@ if ["help", "--help", "-h"].contains(name) {
     print(usage)
     exit(0)
 }
-guard let command = ControlRequest.Command(rawValue: name) else { exit(2, "Unknown command “\(name)”.\n\n" + usage) }
+if name == "demo", arguments.dropFirst().first == "stop" { arguments = ["demo-stop"] + arguments.dropFirst(2) }
+guard let command = ControlRequest.Command(rawValue: arguments[0]) else { exit(2, "Unknown command “\(name)”.\n\n" + usage) }
 var request = ControlRequest(command)
 var rest = arguments.dropFirst()
 if command == .demo {
@@ -47,6 +51,13 @@ while let option = rest.popFirst() {
         request.countdown = false
     case "--countdown" where command == .start:
         request.countdown = true
+    case "--no-camera" where command == .start:
+        request.camera = false
+    case "--no-mic" where command == .start:
+        request.microphone = false
+    case "--display" where command == .start:
+        guard let number = rest.popFirst().flatMap({ Int($0) }), number >= 1 else { exit(2, "--display needs a number from 1 (leftmost).") }
+        request.display = number
     case "--region" where command == .start:
         let numbers = (rest.popFirst() ?? "").split(separator: ",").compactMap { Double($0) }
         guard numbers.count == 4, numbers[2] > 0, numbers[3] > 0 else { exit(2, "--region needs x,y,width,height (points).") }
@@ -95,6 +106,23 @@ enum CLIError: Error, LocalizedError {
     var errorDescription: String? {
         "Takely is running but isn't accepting commands (another copy may be listening, or its control socket failed)."
     }
+}
+
+/// Ctrl-C during `takely demo` stops the demo in the app (what was recorded is kept) and waits for its answer; a
+/// second Ctrl-C quits without waiting.
+var interrupt: DispatchSourceSignal?
+if command == .demo {
+    signal(SIGINT, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+    var stopping = false
+    source.setEventHandler {
+        if stopping { exit(130) }
+        stopping = true
+        FileHandle.standardError.write(Data("\nStopping the demo… (Ctrl-C again to quit without waiting)\n".utf8))
+        _ = try? SocketClient.send(ControlRequest(.stopDemo))
+    }
+    source.resume()
+    interrupt = source
 }
 
 do {

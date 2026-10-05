@@ -30,6 +30,8 @@ final class RecordingCoordinator {
     /// Whether the bubble is on screen (when the camera is on). Separate from `settings.camera`, which decides
     /// whether recordings include the camera: hiding the bubble doesn't turn the camera off for the next take.
     private var bubbleShown = false
+    /// Whether the current recording has the camera (set as each start begins); only read while recording.
+    private var recordingHasCamera = true
     private var wasRecording = false
     /// The phase the prompter and the recording-only hotkeys last followed (so a manual pause of the prompter sticks).
     private var followedPhase: RecordingController.Phase?
@@ -54,6 +56,11 @@ final class RecordingCoordinator {
         }
         prompter = made
         self.prompter = made
+        // Set here, not when the bubble first shows: a start from the command line may come before it ever has.
+        session.cameraDecided = { [weak self] uses in
+            self?.recordingHasCamera = uses
+            self?.update()
+        }
         observe()
     }
 
@@ -64,6 +71,7 @@ final class RecordingCoordinator {
         guard controller.phase == .idle, !controller.isBusy, !picking else { return }
         picking = true
         defer { picking = false }
+        session.nextStart = StartOptions()  // the person's own start: their settings, not an earlier automation's
         switch settings.target {
         case .display:
             session.target = .display
@@ -182,14 +190,15 @@ final class RecordingCoordinator {
             wasRecording = recordingActive
             bubbleShown = settings.camera && (recordingActive || panelOpen)
         }
-        if settings.camera && bubbleShown {
+        if settings.camera && bubbleShown && (recordingHasCamera || !recordingActive) {
             camera.start(deviceID: settings.cameraID)
             showBubble()
         } else {
             bubble?.orderOut(nil)
             bubble = nil
-            // A hidden bubble still has a camera track to record: keep the camera until the recording ends.
-            if !recordingActive { camera.stopSoon() }
+            // A hidden bubble still has a camera track to record: keep the camera until the recording ends — unless
+            // this recording has no camera at all.
+            if !recordingActive || !recordingHasCamera { camera.stopSoon() }
         }
         if recordingActive && controller.phase != .starting && settings.showControls { showControlBar() } else { hideControlBar() }
     }

@@ -13,10 +13,10 @@ final class FakeHost: AutomationHost {
     var lastRecording: URL?
     var startFails = false
     var exportFails = false
-    var started: (countdown: Bool?, region: CGRect?)?
+    var started: StartOptions?
 
-    func startRecording(countdown: Bool?, region: CGRect?) async {
-        started = (countdown, region)
+    func startRecording(_ options: StartOptions) async {
+        started = options
         if startFails { errorMessage = "Screen Recording permission missing." } else { phase = .recording }
     }
 
@@ -49,7 +49,7 @@ final class FakeHost: AutomationHost {
         let center = AutomationCenter(host: host)
         let started = await center.perform(ControlRequest(.start, countdown: false, region: CGRect(x: 0, y: 0, width: 100, height: 80)))
         #expect(started.ok && started.state == "recording")
-        #expect(host.started?.countdown == false && host.started?.region == CGRect(x: 0, y: 0, width: 100, height: 80))
+        #expect(host.started == StartOptions(countdown: false, region: CGRect(x: 0, y: 0, width: 100, height: 80)))
         let again = await center.perform(ControlRequest(.start))
         #expect(!again.ok && again.error == "Already recording.")
         let stopped = await center.perform(ControlRequest(.stop))
@@ -129,5 +129,29 @@ final class FakeHost: AutomationHost {
         host.phase = .recording
         #expect(await center.perform(ControlRequest(.demo, plan: "open TextEdit")).error == "Already recording.")
         #expect(ran == ["open TextEdit", "fail"])
+    }
+
+    @Test func demoStopOnlyWhileADemoRuns() async {
+        let host = FakeHost()  // the center holds it weakly
+        let center = AutomationCenter(host: host)
+        var stops = 0
+        center.stopDemo = { stops += 1 }
+        #expect(await center.perform(ControlRequest(.stopDemo)).error == "No demo is running.")
+        center.isDemoRunning = true
+        #expect(await center.perform(ControlRequest(.stopDemo)).ok)
+        #expect(stops == 1)
+    }
+
+    @Test func startOptionsPassThroughAndBadDisplaysAreRefused() async {
+        let host = FakeHost()
+        let center = AutomationCenter(host: host)
+        let zero = await center.perform(ControlRequest(.start, display: 0))
+        #expect(!zero.ok && host.started == nil)
+        let both = await center.perform(ControlRequest(.start, region: CGRect(x: 0, y: 0, width: 100, height: 100), display: 2))
+        #expect(both.error == "Give a display or a region, not both.")
+        #expect(await center.perform(ControlRequest(.start, camera: false, microphone: false, display: 2)).ok)
+        #expect(host.started == StartOptions(camera: false, microphone: false, display: 2))
+        let link = ControlURL(URL(string: "takely://record/start?camera=0&mic=off&display=2")!)?.request
+        #expect(link?.camera == false && link?.microphone == false && link?.display == 2)
     }
 }

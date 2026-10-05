@@ -25,6 +25,8 @@
         private var runner: DemoRunner?
         /// From the first check until the demo is over (including its confirmation alerts): one demo at a time.
         private var claimed = false
+        /// Stop was asked for before the steps began (e.g. while the confirmation was open).
+        private var stopRequested = false
         private let center: AutomationCenter
 
         init(center: AutomationCenter, coordinator: RecordingCoordinator) {
@@ -56,6 +58,10 @@
                 case .failed(let message): return .failure(AutomationFailure(message))
                 case nil, .idle, .running: return .failure(AutomationFailure(self.model.message ?? "The demo didn't run."))
                 }
+            }
+            center.stopDemo = { [weak self] in
+                self?.stopRequested = true
+                self?.runner?.cancel()
             }
             KeyboardShortcuts.disable(.stopDemo)
             KeyboardShortcuts.onKeyUp(for: .stopDemo) { [weak self] in self?.runner?.cancel() }
@@ -92,6 +98,7 @@
                 return nil
             }
             claimed = true
+            stopRequested = false
             center.isDemoRunning = true
             defer {
                 claimed = false
@@ -103,6 +110,10 @@
             }
             if fromCommandLine || !script.riskySteps.isEmpty, !(await confirm(script, fromCommandLine: fromCommandLine)) {
                 model.message = "Not run: the plan wasn't confirmed."
+                return nil
+            }
+            guard !stopRequested else {
+                model.message = "Stopped before it began."
                 return nil
             }
             model.running = true

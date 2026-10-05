@@ -9,9 +9,9 @@ public protocol AutomationHost: AnyObject {
     var isBusy: Bool { get }
     var errorMessage: String? { get }
     var lastRecording: URL? { get }
-    /// Starts without asking anything (no window or area picker): the chosen display, or `region`. Returns once
-    /// recording, or once it failed or was cancelled.
-    func startRecording(countdown: Bool?, region: CGRect?) async
+    /// Starts without asking anything (no window or area picker): the chosen display, or what `options` says.
+    /// Returns once recording, or once it failed or was cancelled.
+    func startRecording(_ options: StartOptions) async
     /// Stops and exports; returns once the export finished or failed.
     func stopRecording() async
     func togglePause() async
@@ -19,6 +19,27 @@ public protocol AutomationHost: AnyObject {
     func addMarker() -> Bool
     func retake() async -> Bool
     func discard() async
+}
+
+/// How an automation start differs from the user's settings, for that recording only.
+public struct StartOptions: Sendable, Equatable {
+    /// False skips the 3-2-1 countdown.
+    public var countdown: Bool?
+    /// An area (global points) instead of a display.
+    public var region: CGRect?
+    /// False records without the camera / the microphone.
+    public var camera: Bool?
+    public var microphone: Bool?
+    /// The display to record, counted from 1 left to right.
+    public var display: Int?
+
+    public init(countdown: Bool? = nil, region: CGRect? = nil, camera: Bool? = nil, microphone: Bool? = nil, display: Int? = nil) {
+        self.countdown = countdown
+        self.region = region
+        self.camera = camera
+        self.microphone = microphone
+        self.display = display
+    }
 }
 
 /// Why an automation command failed, in words for the person who ran it.
@@ -37,6 +58,8 @@ public final class AutomationCenter {
     /// A demo is running (or being confirmed): it presses keys, so a link's confirmation alert could be answered by
     /// the demo itself — links are refused meanwhile.
     public var isDemoRunning = false
+    /// Stops the running demo (set by Takely Pro).
+    public var stopDemo: (() -> Void)?
 
     public init(host: any AutomationHost) {
         self.host = host
@@ -49,8 +72,13 @@ public final class AutomationCenter {
             return reply(host, path: host.lastRecording)
         case .start:
             guard !request.hasInvalidRegion else { return fail(host, "The region needs x, y, width and height, with a positive size.") }
+            if let display = request.display, display < 1 { return fail(host, "Displays are counted from 1 (left to right).") }
+            guard request.display == nil || request.region == nil else { return fail(host, "Give a display or a region, not both.") }
             guard host.phase == .idle, !host.isBusy else { return fail(host, isRecording(host) ? "Already recording." : "Takely is busy.") }
-            await host.startRecording(countdown: request.countdown, region: request.regionRect)
+            await host.startRecording(
+                StartOptions(
+                    countdown: request.countdown, region: request.regionRect, camera: request.camera, microphone: request.microphone,
+                    display: request.display))
             return isRecording(host) ? reply(host) : fail(host, host.errorMessage ?? "The recording didn't start.")
         case .stop:
             if host.phase == .starting { return fail(host, Self.starting) }
@@ -91,6 +119,10 @@ public final class AutomationCenter {
             case .success(let url): return reply(host, path: url)
             case .failure(let failure): return fail(host, failure.message)
             }
+        case .stopDemo:
+            guard isDemoRunning, let stopDemo else { return fail(host, "No demo is running.") }
+            stopDemo()
+            return reply(host)
         case .discard:
             if host.phase == .starting { return fail(host, Self.starting) }
             guard isRecording(host), !host.isBusy else { return fail(host, "Not recording.") }
