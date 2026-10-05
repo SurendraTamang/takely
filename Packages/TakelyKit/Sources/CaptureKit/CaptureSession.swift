@@ -172,7 +172,7 @@ public actor CaptureSession {
         let cut = max(segmentStart, router.retakePoint(at: requested))
         let removed = max(0, (router.editedTime(at: requested) ?? cut) - cut)
         do {
-            try await closeSegment()
+            try await closeSegment(quarantineOnFailure: true)
         } catch {
             state = .paused  // like a failed pause: the user can resume or stop
             throw error
@@ -244,7 +244,10 @@ public actor CaptureSession {
 
     /// `cursorInBackground` (a pause): `cursor.json` holds every sample so far (~8 MB at an hour), so it's written
     /// off the session, in order; stop and retake wait for those writes and write it themselves.
-    private func closeSegment(cursorInBackground: Bool = false) async throws {
+    /// `quarantineOnFailure` (a retake): a segment that fails to close is renamed out of crash recovery's way, since
+    /// the person asked to take it back. Otherwise it stays: written in 2 s fragments, it's usually readable, and a
+    /// later crash recovery salvages it (without cursor effects, which never reached disk) rather than lose footage.
+    private func closeSegment(cursorInBackground: Bool = false, quarantineOnFailure: Bool = false) async throws {
         guard let writer, let router, let bundle else { return }
         let offset = project?.duration ?? 0
         router.attach(nil, offset: offset)
@@ -257,8 +260,7 @@ public actor CaptureSession {
         } catch {
             // The segment isn't in the manifest, so its cursor samples would overlap the next segment's times.
             router.discard(from: offset)
-            // Its file stays for inspection, renamed so a later crash recovery doesn't take it for the open segment.
-            Self.quarantine(file, in: bundle)
+            if quarantineOnFailure { Self.quarantine(file, in: bundle) }
             throw error
         }
         let dropped = writer.droppedFrames
@@ -297,7 +299,8 @@ public actor CaptureSession {
         try bundle.write(router.markers)
     }
 
-    /// Renames a segment whose close failed (and its sidecar) out of recovery's way: `segment-003.mov.failed`.
+    /// Renames a segment whose close failed during a retake (and its sidecar) out of recovery's way:
+    /// `segment-003.mov.failed`. Deleting the bundle removes it.
     static func quarantine(_ file: String, in bundle: ProjectBundle) {
         for url in [bundle.segmentURL(file), bundle.sidecarURL(for: file)] where FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.moveItem(at: url, to: url.appendingPathExtension("failed"))
