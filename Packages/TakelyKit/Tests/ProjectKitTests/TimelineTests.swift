@@ -96,4 +96,10 @@ import Testing
         #expect(abs(k.x - 0.9) < 1e-9)
         #expect(abs(k.y - 0.16) < 1e-9)
     }
+
+    @Test func noClickEffectsPastTheCursorData() {
+        let track = CursorTrack(clicks: [ClickEvent(t: 5, x: 0.5, y: 0.5)], coveredUntil: 5.1)
+        #expect(track.clicks(activeAt: 5.05).count == 1)
+        #expect(track.clicks(activeAt: 5.2).isEmpty)
+    }
 }

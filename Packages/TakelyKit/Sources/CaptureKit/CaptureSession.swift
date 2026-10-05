@@ -257,6 +257,8 @@ public actor CaptureSession {
         } catch {
             // The segment isn't in the manifest, so its cursor samples would overlap the next segment's times.
             router.discard(from: offset)
+            // Its file stays for inspection, renamed so a later crash recovery doesn't take it for the open segment.
+            Self.quarantine(file, in: bundle)
             throw error
         }
         let dropped = writer.droppedFrames
@@ -293,6 +295,13 @@ public actor CaptureSession {
             try bundle.write(router.cursor)
         }
         try bundle.write(router.markers)
+    }
+
+    /// Renames a segment whose close failed (and its sidecar) out of recovery's way: `segment-003.mov.failed`.
+    static func quarantine(_ file: String, in bundle: ProjectBundle) {
+        for url in [bundle.segmentURL(file), bundle.sidecarURL(for: file)] where FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.moveItem(at: url, to: url.appendingPathExtension("failed"))
+        }
     }
 
     /// The background `cursor.json` write a pause started, if it's still running.
