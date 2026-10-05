@@ -12,6 +12,8 @@
         let session: EditSession
         let player = AVPlayer()
         var thumbnails: [CGImage?] = []
+        /// The recording's loudness over time (0…1), for the waveform under the thumbnails.
+        var levels: [Float] = []
         /// A range picked on the timeline (recording time), to cut.
         var selection: TimeRange?
         var selectedWords: Set<Int> = []
@@ -68,6 +70,11 @@
         func updateCutWords() {
             let cut = Set(session.words.indices.filter { session.isCut(word: $0) })
             if cut != cutWords { cutWords = cut }
+        }
+
+        func loadWaveform() async {
+            guard levels.isEmpty else { return }
+            levels = (try? await Waveform.levels(of: session.bundle)) ?? []
         }
 
         func loadThumbnails(count: Int = 14) async {
@@ -162,7 +169,9 @@
             .frame(minWidth: 820, minHeight: 560)
             .task {
                 model.updatePreview()
+                async let waveform: Void = model.loadWaveform()
                 await model.loadThumbnails()
+                await waveform
             }
             .onChange(of: session.edits) { model.updatePreview() }
             .confirmationDialog(
@@ -230,6 +239,34 @@
         static func time(_ t: Double) -> String { Duration.seconds(t).formatted(.time(pattern: .minuteSecond)) }
     }
 
+    /// The recording's loudness, mirrored around the middle; cut parts dimmed like the thumbnails above.
+    private struct WaveformLane: View {
+        let levels: [Float]
+        let cuts: [TimeRange]
+        let x: (Double) -> Double
+
+        var body: some View {
+            Canvas { context, size in
+                guard !levels.isEmpty else { return }
+                let step: CGFloat = size.width / CGFloat(levels.count)
+                var path = Path()
+                for (i, level) in levels.enumerated() {
+                    let height: CGFloat = max(1, CGFloat(level) * size.height)
+                    path.addRect(CGRect(x: CGFloat(i) * step, y: (size.height - height) / 2, width: max(1, step - 0.5), height: height))
+                }
+                context.fill(path, with: .color(.accentColor.opacity(0.8)))
+                for cut in cuts {
+                    context.fill(
+                        Path(CGRect(x: x(cut.start), y: 0, width: max(2, x(cut.end) - x(cut.start)), height: size.height)),
+                        with: .color(.black.opacity(0.55)))
+                }
+            }
+            .background(.quaternary.opacity(0.5))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
     /// The whole recording: thumbnails, cuts (click to restore), the selection, the trim handles, the zoom lane and
     /// the playhead. Click to seek, drag to select.
     private struct Timeline: View {
@@ -290,6 +327,7 @@
                         Rectangle().fill(.red).frame(width: 2, height: 60).offset(x: x(model.playhead) - 1).allowsHitTesting(false)
                     }
                     .frame(height: 60)
+                    WaveformLane(levels: model.levels, cuts: session.edits.cuts, x: x).frame(height: 28)
                     ZStack(alignment: .topLeading) {
                         Rectangle().fill(.quaternary).frame(height: 24)
                         ForEach(session.edits.zooms) { zoom in
