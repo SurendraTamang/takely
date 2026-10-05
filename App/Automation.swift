@@ -95,12 +95,18 @@ final class Automation {
     func open(_ url: URL) {
         guard let command = ControlURL(url) else { return Logger.automation.error("unknown URL \(url.absoluteString)") }
         Task {
-            if command.request.command != .status, !settings.allowLinkControl, !(await confirm(command.request.command)) {
-                if let callback = command.callback(for: ControlReply(ok: false, state: "unknown", error: "Not allowed.")) {
+            let refuse = { (message: String) in
+                if let callback = command.callback(for: ControlReply(ok: false, state: "unknown", error: message)) {
                     NSWorkspace.shared.open(callback)
                 }
-                return
             }
+            // Checked again after the confirmation: a demo that started meanwhile could have pressed Allow itself.
+            let demoRunning = { command.request.command != .status && self.center.isDemoRunning }
+            if demoRunning() { return refuse("A demo is running.") }
+            if command.request.command != .status, !settings.allowLinkControl, !(await confirm(command.request.command)) {
+                return refuse("Not allowed.")
+            }
+            if demoRunning() { return refuse("A demo is running.") }
             let reply = await center.perform(command.request)
             if let callback = command.callback(for: reply) { NSWorkspace.shared.open(callback) }
         }

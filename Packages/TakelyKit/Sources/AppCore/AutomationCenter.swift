@@ -34,6 +34,9 @@ public final class AutomationCenter {
     private weak var host: (any AutomationHost)?
     /// Runs a Demo Mode plan and returns the finished video, or why it didn't run (set by Takely Pro).
     public var runDemo: ((String) async -> Result<URL, AutomationFailure>)?
+    /// A demo is running (or being confirmed): it presses keys, so a link's confirmation alert could be answered by
+    /// the demo itself — links are refused meanwhile.
+    public var isDemoRunning = false
 
     public init(host: any AutomationHost) {
         self.host = host
