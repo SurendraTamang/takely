@@ -504,7 +504,11 @@ struct Harness {
         h.exporter.delay.withLock { $0 = .milliseconds(300) }
         await h.controller.start()
         async let stopped: Void = h.controller.stop()
-        try? await Task.sleep(for: .milliseconds(30))
+        // Wait for the export to begin (a fixed short sleep was flaky under load).
+        for _ in 0..<100 {
+            if case .exporting = h.controller.phase { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
         guard case .exporting = h.controller.phase else { Issue.record("expected exporting"); return }
         let began = ContinuousClock.now
         await h.controller.stopForQuit(system: true)

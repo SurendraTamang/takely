@@ -83,6 +83,12 @@ public final class SegmentWriter: @unchecked Sendable {
         let outcome = state.withLock { s -> AppendOutcome in
             guard !s.finished, s.failure == nil, let input = inputs[kind] else { return .rejected }
             if s.start == nil {
+                // Failed before the first screen frame (a full disk, a lost volume): say so, not just drop everything.
+                if writer.status == .failed {
+                    let error = writer.error ?? CaptureError.writerFailed("writer failed")
+                    s.failure = error
+                    return .failed(error)
+                }
                 guard kind == .screen, writer.status == .writing else { return .rejected }
                 writer.startSession(atSourceTime: buffer.presentationTimeStamp)
                 s.start = buffer.presentationTimeStamp
