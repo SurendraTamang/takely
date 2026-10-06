@@ -34,11 +34,14 @@
         private var autosave: Task<Void, Never>?
         /// The edits as on disk (what the recording had when opened, then each save).
         private var saved: Edits
+        /// The edits at opening, when the recording had no edits file: back to them, the file goes again.
+        private let untouched: Edits?
         @ObservationIgnored private var observer: Any?
 
         init(session: EditSession) throws {
             self.session = session
             saved = session.edits
+            untouched = FileManager.default.fileExists(atPath: session.bundle.editsURL.path) ? nil : session.edits
             frames = RecordingFrames(bundle: session.bundle, segments: try session.bundle.readProject().segments)
             shownMap = session.map
             updateCutWords()
@@ -63,11 +66,15 @@
             }
         }
 
-        /// Writes the edits if they differ from what's on disk (undone back to it: nothing to write; an untouched
-        /// recording keeps having no edits file, so automatic edits can still be planned for it).
+        /// Writes the edits if they differ from what's on disk. A recording that had no edits file and is undone back
+        /// to how it opened has none again (an existing file stops automatic zooms and pause cuts being planned).
         func saveIfChanged() throws {
             guard session.edits != saved else { return }
-            try session.save()
+            if session.edits == untouched {
+                try? FileManager.default.removeItem(at: session.bundle.editsURL)
+            } else {
+                try session.save()
+            }
             saved = session.edits
         }
 
