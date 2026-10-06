@@ -97,10 +97,11 @@ public actor CaptureSession {
     ) async throws -> RecordingHandle {
         guard state == .idle else { throw CaptureError.invalidState }
         let bundle = try ProjectBundle.create(in: folder)
-        let project = Project(
+        var project = Project(
             capture: .init(target: config.target, pixelSize: config.outputSize, fps: config.fps, codec: config.codec),
             camera: .init(enabled: config.camera)
         )
+        project.title = config.title
         recordingID += 1
         let id = recordingID
         let sink = eventSink

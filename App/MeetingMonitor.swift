@@ -1,6 +1,7 @@
 import AppCore
 import AppKit
 import CoreAudio
+import EventKit
 import OSLog
 import ScreenCaptureKit
 
@@ -126,6 +127,7 @@ final class MeetingMonitor {
         guard !watcher.isEnding else { return recordPending = true }
         session.target = window.map { .window($0) } ?? .display
         session.nextStart = StartOptions()
+        session.meetingTitle = settings.nameMeetingsFromCalendar ? CalendarAccess.title(for: meeting.service) : nil
         session.meetingMode = true
         await controller.start()
         if controller.isRecording, let bundle = controller.recordingBundle {
@@ -187,5 +189,29 @@ final class MeetingMonitor {
             guard let bundle else { return nil }
             return MeetingSnapshot.Window(bundleID: bundle, id: id, title: info[kCGWindowName as String] as? String ?? "")
         }
+    }
+}
+
+/// Calendar events for naming meeting recordings (EventKit, full access: reading events needs it on macOS 14+).
+@MainActor
+enum CalendarAccess {
+    private static let store = EKEventStore()
+
+    static func request() async -> Bool {
+        if EKEventStore.authorizationStatus(for: .event) == .fullAccess { return true }
+        return (try? await store.requestFullAccessToEvents()) ?? false
+    }
+
+    /// The title for a `service` call now, from the event under way; nil without access or a matching event.
+    static func title(for service: String, at now: Date = .now) -> String? {
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return nil }
+        let predicate = store.predicateForEvents(
+            withStart: now.addingTimeInterval(-12 * 3600), end: now.addingTimeInterval(300), calendars: nil)
+        let events = store.events(matching: predicate).map { event in
+            MeetingCalendar.Event(
+                title: event.title ?? "", start: event.startDate, end: event.endDate, isAllDay: event.isAllDay,
+                details: [event.url?.absoluteString, event.location, event.notes].compactMap { $0 }.joined(separator: "\n"))
+        }
+        return MeetingCalendar.event(for: service, among: events, at: now).map { MeetingCalendar.title(of: $0, on: now) }
     }
 }

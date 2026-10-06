@@ -69,6 +69,15 @@ struct SettingsView: View {
                 Text("Tell everyone in the call that you're recording: in many places it's required by law.")
             }
             .disabled(!settings.detectMeetings)
+            Toggle(isOn: $settings.nameMeetingsFromCalendar) {
+                Text("Name meeting recordings from Calendar")
+                Text("Uses the event under way, e.g. “Weekly sync – 6 Oct”. Needs Calendar access; events stay on this Mac.")
+            }
+            .disabled(!settings.detectMeetings)
+            .onChange(of: settings.nameMeetingsFromCalendar) { _, on in
+                guard on else { return }
+                Task { if !(await CalendarAccess.request()) { settings.nameMeetingsFromCalendar = false } }
+            }
             Toggle("Show recording controls", isOn: $settings.showControls)
             Toggle("Scroll the prompter while recording", isOn: $settings.prompterFollowsRecording)
             #if canImport(TakelyPro)

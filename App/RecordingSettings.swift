@@ -70,6 +70,8 @@ final class RecordingSettings {
     /// `autoRecordMeetings` (off: participants must be told, and some places require their consent).
     var detectMeetings: Bool { didSet { defaults.set(detectMeetings, forKey: Key.detectMeetings) } }
     var autoRecordMeetings: Bool { didSet { defaults.set(autoRecordMeetings, forKey: Key.autoRecordMeetings) } }
+    /// Names meeting recordings after the calendar event under way (needs Calendar access).
+    var nameMeetingsFromCalendar: Bool { didSet { defaults.set(nameMeetingsFromCalendar, forKey: Key.nameMeetingsFromCalendar) } }
     /// Sharing: the user's bucket (its keys are in the Keychain), and whether each recording is uploaded.
     var shareBucket: BucketConfig? { didSet { defaults.set(try? JSONEncoder().encode(shareBucket), forKey: Key.shareBucket) } }
     var shareAutomatically: Bool { didSet { defaults.set(shareAutomatically, forKey: Key.shareAutomatically) } }
@@ -123,6 +125,7 @@ final class RecordingSettings {
         allowLinkControl = defaults.bool(forKey: Key.allowLinkControl)
         detectMeetings = defaults.object(forKey: Key.detectMeetings) as? Bool ?? true
         autoRecordMeetings = defaults.bool(forKey: Key.autoRecordMeetings)
+        nameMeetingsFromCalendar = defaults.bool(forKey: Key.nameMeetingsFromCalendar)
         shareBucket = defaults.data(forKey: Key.shareBucket).flatMap { try? JSONDecoder().decode(BucketConfig.self, from: $0) }
         shareAutomatically = defaults.object(forKey: Key.shareAutomatically) as? Bool ?? true
         sharePublishText = defaults.object(forKey: Key.sharePublishText) as? Bool ?? true
@@ -166,6 +169,7 @@ final class RecordingSettings {
         static let sharePublishText = "sharePublishText"
         static let detectMeetings = "detectMeetings"
         static let autoRecordMeetings = "autoRecordMeetings"
+        static let nameMeetingsFromCalendar = "nameMeetingsFromCalendar"
         static let allowLinkControl = "allowLinkControl"
         static let autoZoom = "autoZoom"
         static let removeSilences = "removeSilences"
