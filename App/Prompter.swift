@@ -300,20 +300,37 @@ struct FollowingScript: NSViewRepresentable {
         return scroll
     }
 
+    /// What the text view was last given: the text is set (and laid out) only when the script or size changes; each
+    /// spoken word then only recolors (no new string, no relayout).
+    final class Coordinator {
+        var script: String?
+        var fontSize: Double?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let text = scroll.documentView as? NSTextView, let layout = text.layoutManager, let container = text.textContainer
+        guard let text = scroll.documentView as? NSTextView, let layout = text.layoutManager, let container = text.textContainer,
+            let storage = text.textStorage
         else { return }
         let spoken = min(spokenCharacters, script.count)
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = fontSize * 0.3
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
-        let attributed = NSMutableAttributedString(
-            string: script, attributes: [.font: font, .foregroundColor: NSColor.white, .paragraphStyle: style])
+        if context.coordinator.script != script || context.coordinator.fontSize != fontSize {
+            let style = NSMutableParagraphStyle()
+            style.lineSpacing = fontSize * 0.3
+            let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+            storage.setAttributedString(
+                NSAttributedString(string: script, attributes: [.font: font, .foregroundColor: NSColor.white, .paragraphStyle: style]))
+            context.coordinator.script = script
+            context.coordinator.fontSize = fontSize
+            layout.ensureLayout(for: container)
+        }
         let spokenRange = NSRange(script.startIndex..<script.index(script.startIndex, offsetBy: spoken), in: script)
-        attributed.addAttribute(.foregroundColor, value: NSColor.white.withAlphaComponent(0.35), range: spokenRange)
-        text.textStorage?.setAttributedString(attributed)
+        storage.beginEditing()
+        storage.addAttribute(.foregroundColor, value: NSColor.white, range: NSRange(location: 0, length: storage.length))
+        storage.addAttribute(.foregroundColor, value: NSColor.white.withAlphaComponent(0.35), range: spokenRange)
+        storage.endEditing()
+        let attributed = storage
         // Scroll the line holding the next word to a third of the way down.
-        layout.ensureLayout(for: container)
         let next = NSRange(location: min(spokenRange.upperBound, max(0, attributed.length - 1)), length: attributed.length > 0 ? 1 : 0)
         let glyphs = layout.glyphRange(forCharacterRange: next, actualCharacterRange: nil)
         let line = layout.boundingRect(forGlyphRange: glyphs, in: container)

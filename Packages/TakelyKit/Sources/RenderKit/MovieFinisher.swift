@@ -51,9 +51,10 @@ enum MovieFinisher {
             let format = try textFormat()
             let chapters = AVAssetWriterInput(mediaType: .text, outputSettings: nil, sourceFormatHint: format)
             chapters.marksOutputTrackAsEnabled = false
-            // Players pick chapters by language; "und" matches no preferred language. Default names are English.
-            chapters.languageCode = "eng"
-            chapters.extendedLanguageTag = "en"
+            // Players pick chapters by language; "und" matches no preferred language.
+            let tag = chapterLanguage(extras)
+            chapters.languageCode = tag.code
+            chapters.extendedLanguageTag = tag.bcp47
             guard writer.canAdd(chapters) else { throw Failure.unwritable("chapter track") }
             writer.add(chapters)
             video.addTrackAssociation(withTrackOf: chapters, type: AVAssetTrack.AssociationType.chapterList.rawValue)
@@ -91,6 +92,16 @@ enum MovieFinisher {
         }
         await writer.finishWriting()
         if writer.status != .completed { throw writer.error ?? Failure.unwritable("finish") }
+    }
+
+    /// Named chapters (the AI's names, in the spoken language, or the person's own) take the recording's language;
+    /// default names ("Chapter 2") are English.
+    static func chapterLanguage(_ extras: MovieExtras) -> (code: String, bcp47: String) {
+        guard extras.markers.contains(where: { $0.title?.isEmpty == false }),
+            let locale = extras.captionsLocale.map(Locale.init(identifier:)),
+            let code = locale.language.languageCode?.identifier(.alpha3)
+        else { return ("eng", "en") }
+        return (code, locale.identifier(.bcp47))
     }
 
     private static func metadata(title: String?, summary: String?) -> [AVMetadataItem] {
