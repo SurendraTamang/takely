@@ -1,3 +1,4 @@
+import AVFoundation
 import CaptureKit
 import Foundation
 import OSLog
@@ -326,6 +327,7 @@ public final class RecordingController {
     private func exportAndReport(_ bundle: ProjectBundle, failure: String? = nil, diskFull: Bool = false) async {
         phase = .exporting(0)
         wakeWaiters()
+        await CameraCheck.note(bundle)  // before post-processing, which also writes the manifest
         // Post-processing (transcript, AI title) takes the first fifth of the progress bar, when there is one.
         let share = postProcessor == nil ? 0.0 : 0.2
         let setProgress: @Sendable (Double) -> Void = { progress in
@@ -349,8 +351,10 @@ public final class RecordingController {
                 await report(failure)
             } else {
                 let project = try? bundle.readProject()
+                // The video's own length (edits re-read now could already differ: the editor autosaves).
+                let exported = (try? await AVURLAsset(url: url).load(.duration).seconds).flatMap { $0 > 0 ? $0 : nil }
                 let cuts = (try? bundle.readEdits())?.cuts ?? []
-                let duration = project.map { EditMap(cuts: cuts, duration: $0.duration).outputDuration } ?? 0
+                let duration = exported ?? project.map { EditMap(cuts: cuts, duration: $0.duration).outputDuration } ?? 0
                 await feedback.recordingReady(url, duration: duration, title: project?.title)
             }
         } catch {

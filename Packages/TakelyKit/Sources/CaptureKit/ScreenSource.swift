@@ -2,6 +2,7 @@ import CoreMedia
 import OSLog
 import ProjectKit
 @preconcurrency import ScreenCaptureKit
+import Synchronization
 
 /// Screen, system audio and microphone from one `SCStream`.
 ///
@@ -63,10 +64,18 @@ public final class ScreenSource: NSObject, FrameSource, SCStreamOutput, SCStream
         do {
             try await stream?.stopCapture()
         } catch {
-            log.error("stopCapture failed: \(error.localizedDescription)")
+            // After the stream stopped on its own (`didStopWithError`, already logged) this fails too: expected.
+            if streamStopped.withLock({ $0 }) {
+                log.debug("stopCapture after the stream stopped: \(error.localizedDescription)")
+            } else {
+                log.error("stopCapture failed: \(error.localizedDescription)")
+            }
         }
         stream = nil
     }
+
+    /// The stream stopped by itself (a display unplugged, the window closed, "Stop sharing").
+    private let streamStopped = Mutex(false)
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         switch type {
@@ -84,6 +93,7 @@ public final class ScreenSource: NSObject, FrameSource, SCStreamOutput, SCStream
 
     public func stream(_ stream: SCStream, didStopWithError error: any Error) {
         log.error("stream stopped: \(error.localizedDescription)")
+        streamStopped.withLock { $0 = true }
         let userInitiated = (error as? SCStreamError)?.code == .userStopped
         router.reportStreamStopped(error, userInitiated: userInitiated)
     }
