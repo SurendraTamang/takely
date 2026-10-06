@@ -16,12 +16,16 @@ public struct SilenceDetector: Sendable {
     private var pending: [Float] = []
     private var pendingStart = 0.0
     private var silentSince: Double?
+    /// Where the last frame looked at ended: frames never go back before it (a buffer stamped early would otherwise
+    /// move a pause's start back into the words before it).
+    private var processedUntil = -Double.infinity
 
     public init() {}
 
     /// Adds mono 48 kHz samples whose first sample is at edited time `t`.
     public mutating func add(_ samples: [Float], at t: Double) {
-        pendingStart = t - Double(pending.count) / Self.rate  // re-anchor to the timestamps (drift, dropped buffers)
+        // Re-anchor to the timestamps (drift, dropped buffers), but never back in time.
+        pendingStart = max(t - Double(pending.count) / Self.rate, processedUntil)
         pending += samples
         var offset = 0
         while pending.count - offset >= Self.frame {
@@ -38,6 +42,7 @@ public struct SilenceDetector: Sendable {
         }
         pending.removeFirst(offset)
         pendingStart += Double(offset) / Self.rate
+        if offset > 0 { processedUntil = pendingStart }
     }
 
     /// Where a retake requested at `now` should cut: inside the last completed pause in this segment and within
@@ -54,5 +59,6 @@ public struct SilenceDetector: Sendable {
         gaps.removeAll { $0.upperBound > t }
         pending = []
         silentSince = nil
+        processedUntil = -Double.infinity  // a new segment starts afresh
     }
 }

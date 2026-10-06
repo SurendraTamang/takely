@@ -60,6 +60,8 @@ final class LiveRecordingSession: RecordingSession {
     private let settings: RecordingSettings
     private let camera: CameraController
     private var clickMonitor: Any?
+    /// Follows a recorded window's moves (its frame, four times a second).
+    private var windowFollower: Task<Void, Never>?
 
     nonisolated var events: AsyncStream<CaptureEvent> { engine.events }
 
@@ -119,6 +121,7 @@ final class LiveRecordingSession: RecordingSession {
         active = (handle.router, captureRect)
         bubbleStart()
         let router = handle.router
+        if case .window(let window) = target { followWindow(window.windowID, router: router) }
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
             router.recordClick(at: CMClockGetTime(CMClockGetHostTimeClock()), location: event.cgEvent?.location)
         }
@@ -194,7 +197,7 @@ final class LiveRecordingSession: RecordingSession {
     func retake() async throws -> (duration: Double, cutHostTime: Double) { try await engine.retake() }
 
     func stop() async throws -> StoppedRecording {
-        removeClickMonitor()
+        stopWatching()
         drawing.teardown()
         active = nil
         return try await engine.stop()
@@ -203,15 +206,41 @@ final class LiveRecordingSession: RecordingSession {
     func state() async -> CaptureSession.State {
         let state = await engine.state
         if state == .idle {
-            removeClickMonitor()
+            stopWatching()
             drawing.teardown()
             active = nil
         }
         return state
     }
 
-    private func removeClickMonitor() {
+    /// Ends the click monitor and the window follower.
+    private func stopWatching() {
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         clickMonitor = nil
+        windowFollower?.cancel()
+        windowFollower = nil
+    }
+
+    /// Keeps the router (cursor, clicks) and the bubble's area on the window as it moves.
+    private func followWindow(_ id: CGWindowID, router: FrameRouter) {
+        windowFollower?.cancel()
+        windowFollower = Task { [weak self] in
+            var last: CGRect?
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let frame = Self.windowFrame(id), frame != last else { continue }
+                last = frame
+                router.follow(area: frame)
+                if let self, let active = self.active, active.router === router { self.active = (router, frame) }
+            }
+        }
+    }
+
+    /// A window's frame in global points (origin top-left, like `CGDisplayBounds`); nil once it's gone.
+    static func windowFrame(_ id: CGWindowID) -> CGRect? {
+        guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]])?.first,
+            let bounds = info[kCGWindowBounds as String] as? NSDictionary
+        else { return nil }
+        return CGRect(dictionaryRepresentation: bounds)
     }
 }

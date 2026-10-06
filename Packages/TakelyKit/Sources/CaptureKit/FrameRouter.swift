@@ -31,7 +31,9 @@ public final class FrameRouter: Sendable {
     /// Pauses in the microphone, for the oops-retake; fed from the audio queue.
     private let silence = Mutex<(detector: SilenceDetector, downmixer: Downmixer?)>((SilenceDetector(), nil))
     private let cancelsEcho: Bool
-    private let captureRect: CGRect
+    /// The captured area in global points; a window recording moves it with the window (`follow(area:)`).
+    private let area: Mutex<CGRect>
+    private var captureRect: CGRect { area.withLock { $0 } }
     private let cursorLocation: @Sendable () -> CGPoint?
     private let report: @Sendable (CaptureEvent.Kind, any Error) -> Void
 
@@ -48,7 +50,7 @@ public final class FrameRouter: Sendable {
         report: @escaping @Sendable (CaptureEvent.Kind, any Error) -> Void = { _, _ in }
     ) {
         self.state = Mutex(State(camera: camera))
-        self.captureRect = captureRect
+        self.area = Mutex(captureRect)
         self.cursorLocation = cursorLocation
         self.report = report
         self.cancelsEcho = cancelsEcho
@@ -170,6 +172,14 @@ public final class FrameRouter: Sendable {
     }
 
     public var cursor: CursorTrack { state.withLock { $0.cursor } }
+
+    /// The window being recorded moved (or was resized): cursor, clicks and the bubble are placed relative to where
+    /// it is now. (A resize changes the window's shape inside the fixed frame — letterboxed — so placement is
+    /// approximate until it's back to its original shape.)
+    public func follow(area rect: CGRect) {
+        guard rect.width > 0, rect.height > 0 else { return }
+        area.withLock { $0 = rect }
+    }
     public var camera: Project.Camera { state.withLock { $0.camera } }
 
     /// Records where the camera bubble is (`center` in global points, origin top-left) on the edited timeline.

@@ -102,4 +102,19 @@ struct StreamBroke: Error {}
         router.recordClick(at: Synthetic.seconds(50.2))
         #expect(router.cursor.clicks.map(\.x) == [0.2, 0.9] && router.cursor.clicks.map(\.y) == [0.3, 0.9])
     }
+
+    @Test func clicksFollowAMovedWindow() throws {
+        let router = FrameRouter(captureRect: CGRect(x: 0, y: 0, width: 100, height: 100)) { nil }
+        let writer = try SegmentWriter(
+            url: Synthetic.temporaryFolder().appending(path: "s.mov"),
+            config: WriterConfig(
+                tracks: [.screen], screenSize: PixelSize(width: 64, height: 40), codec: .h264, fps: 30, videoBitrate: 500_000))
+        router.attach(writer, offset: 0)
+        router.receive(Synthetic.video(width: 64, height: 40, pts: Synthetic.seconds(50), rgb: (0, 0, 0)), kind: .screen)
+        router.recordClick(at: Synthetic.seconds(50.1), location: CGPoint(x: 50, y: 50))
+        router.follow(area: CGRect(x: 200, y: 100, width: 100, height: 100))  // the window was dragged
+        router.recordClick(at: Synthetic.seconds(50.2), location: CGPoint(x: 250, y: 150))
+        router.follow(area: .zero)  // ignored
+        #expect(router.cursor.clicks.map(\.x) == [0.5, 0.5] && router.cursor.clicks.map(\.y) == [0.5, 0.5])
+    }
 }

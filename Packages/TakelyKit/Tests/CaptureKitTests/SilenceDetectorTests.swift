@@ -34,6 +34,19 @@ import Testing
         #expect(abs(gap.lowerBound - 1) < 0.02 && abs(gap.upperBound - 1.6) < 0.02, "gap \(gap)")
     }
 
+    /// A resampled microphone can stamp a buffer a little before the end of the previous one: a pause in progress
+    /// must survive it.
+    @Test func timestampsThatStepBackDontLoseAPause() {
+        let samples = Self.audio([(1, true), (0.6, false), (1, true)])
+        var detector = SilenceDetector()
+        for (n, chunk) in stride(from: 0, to: samples.count, by: 1024).enumerated() {
+            let jitter = n % 3 == 2 ? -0.3 : 0  // every third buffer stamped 300 ms early
+            detector.add(Array(samples[chunk..<min(chunk + 1024, samples.count)]), at: Double(chunk) / Double(Self.rate) + jitter)
+        }
+        #expect(detector.gaps.count == 1, "gaps \(detector.gaps)")
+        if let gap = detector.gaps.first { #expect(abs(gap.lowerBound - 1) < 0.05 && abs(gap.upperBound - 1.6) < 0.05, "gap \(gap)") }
+    }
+
     @Test func cutsBackToThePauseBeforeTheLastWords() {
         // "…first take. [pause] Second tak— oops" → cut inside the pause, keeping 0.2 s of it.
         let detector = Self.detect(Self.audio([(2, true), (1, false), (1.5, true)]), start: 10)
