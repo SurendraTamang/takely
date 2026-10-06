@@ -33,6 +33,8 @@ import Testing
         let audio = try #require(try await AVURLAsset(url: url).loadTracks(withMediaType: .audio).first)
         let segments = try await audio.load(.segments)
         #expect(!segments.contains { $0.isEmpty }, "edits: \(segments.map { $0.isEmpty ? "empty" : "media" })")
-        #expect(abs(try await audio.load(.timeRange).duration.seconds - 4.5) < 0.1)
+        // Gaps kept as silence (≈ 4.472 s), not the pieces butted together (≈ 4.416 s), which would drift for good.
+        let duration = try await audio.load(.timeRange).duration.seconds
+        #expect(duration > 4.45 && duration < 4.51, "\(duration)")
     }
 }

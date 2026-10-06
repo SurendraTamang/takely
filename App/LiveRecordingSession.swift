@@ -162,18 +162,21 @@ final class LiveRecordingSession: RecordingSession {
             try await Task.sleep(for: .milliseconds(50))
             current = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         }
-        let canvas = current.windows.filter { $0.windowID == canvasID }
-        if canvas.isEmpty { log.error("drawing canvas not listed by ScreenCaptureKit; drawings won't be recorded") }
+        var canvas = current.windows.filter { $0.windowID == canvasID }
         // Exclude the app, not a window snapshot, so windows opened later (the popover, drawing palette, prompter) never
         // appear; a window snapshot is only the last resort.
         var ownApps = current.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
         if ownApps.isEmpty {
-            // Not listed among on-screen apps (no window up yet): the full list has it, so later windows stay out too.
+            // The canvas wasn't listed in time, so neither was Takely: the full list (windows not shown yet included)
+            // has both — the app is excluded (later windows stay out) and the canvas still recorded.
             let all = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             ownApps = all?.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier } ?? []
+            if canvas.isEmpty { canvas = all?.windows.filter { $0.windowID == canvasID } ?? [] }
         }
+        if canvas.isEmpty { log.error("drawing canvas not listed by ScreenCaptureKit; excluding Takely's windows one by one") }
+        // Excluding the whole app would also drop an unlisted canvas (and the drawings): then the window snapshot.
         let filter =
-            ownApps.isEmpty
+            ownApps.isEmpty || canvas.isEmpty
             ? SCContentFilter(
                 display: display,
                 excludingWindows: current.windows.filter {
