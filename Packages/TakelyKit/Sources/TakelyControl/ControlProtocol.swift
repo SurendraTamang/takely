@@ -23,11 +23,14 @@ public struct ControlRequest: Codable, Sendable, Equatable {
     public var microphone: Bool?
     /// `start`: the display to record, counted from 1 left to right (nil: the chosen one).
     public var display: Int?
+    /// `start`: record the window of this app (name or bundle ID) or with this text in its title, frontmost first.
+    public var window: String?
 
     public init(
         _ command: Command, countdown: Bool? = nil, region: CGRect? = nil, plan: String? = nil, camera: Bool? = nil,
-        microphone: Bool? = nil, display: Int? = nil
+        microphone: Bool? = nil, display: Int? = nil, window: String? = nil
     ) {
+        self.window = window
         self.command = command
         self.plan = plan
         self.camera = camera
@@ -98,6 +101,7 @@ public struct ControlURL: Sendable, Equatable {
         if let camera = query["camera"], off(camera) { request.camera = false }
         if let microphone = query["mic"], off(microphone) { request.microphone = false }
         request.display = query["display"].map { Int($0) ?? 0 }
+        request.window = query["window"]
         if let region = query["region"] {
             // Kept even when malformed, so the command is refused instead of recording the whole display.
             request.region = region.split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces)) ?? -1 }

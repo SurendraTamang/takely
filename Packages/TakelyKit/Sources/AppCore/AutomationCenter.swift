@@ -32,8 +32,14 @@ public struct StartOptions: Sendable, Equatable {
     public var microphone: Bool?
     /// The display to record, counted from 1 left to right.
     public var display: Int?
+    /// A window to record, by app or title (see `WindowMatch`).
+    public var window: String?
 
-    public init(countdown: Bool? = nil, region: CGRect? = nil, camera: Bool? = nil, microphone: Bool? = nil, display: Int? = nil) {
+    public init(
+        countdown: Bool? = nil, region: CGRect? = nil, camera: Bool? = nil, microphone: Bool? = nil, display: Int? = nil,
+        window: String? = nil
+    ) {
+        self.window = window
         self.countdown = countdown
         self.region = region
         self.camera = camera
@@ -73,12 +79,14 @@ public final class AutomationCenter {
         case .start:
             guard !request.hasInvalidRegion else { return fail(host, "The region needs x, y, width and height, with a positive size.") }
             if let display = request.display, display < 1 { return fail(host, "Displays are counted from 1 (left to right).") }
-            guard request.display == nil || request.region == nil else { return fail(host, "Give a display or a region, not both.") }
+            guard [request.display != nil, request.region != nil, request.window != nil].filter({ $0 }).count <= 1 else {
+                return fail(host, "Give one of a display, a region or a window.")
+            }
             guard host.phase == .idle, !host.isBusy else { return fail(host, isRecording(host) ? "Already recording." : "Takely is busy.") }
             await host.startRecording(
                 StartOptions(
                     countdown: request.countdown, region: request.regionRect, camera: request.camera, microphone: request.microphone,
-                    display: request.display))
+                    display: request.display, window: request.window))
             return isRecording(host) ? reply(host) : fail(host, host.errorMessage ?? "The recording didn't start.")
         case .stop:
             if host.phase == .starting { return fail(host, Self.starting) }

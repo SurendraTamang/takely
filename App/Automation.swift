@@ -3,6 +3,7 @@ import AppCore
 import AppIntents
 import AppKit
 import OSLog
+import ScreenCaptureKit
 import TakelyControl
 
 /// Automation drives the same controls as the panel and hotkeys, without asking anything: the chosen display, or
@@ -21,7 +22,22 @@ extension RecordingCoordinator: AutomationHost {
             controller.errorMessage = missing
             return
         }
-        session.target = options.region.map { .region($0) } ?? .display
+        if let query = options.window {
+            let windows = await TargetPicker.recordableWindows()
+            let candidates = windows.map {
+                WindowMatch.Candidate(
+                    app: $0.owningApplication?.applicationName ?? "", bundleID: $0.owningApplication?.bundleIdentifier ?? "",
+                    title: $0.title ?? "")
+            }
+            guard let index = WindowMatch.best(query, among: candidates) else {
+                controller.errorMessage =
+                    "No window on screen matches “\(query)” (an app's name or bundle ID, or text in a window's title)."
+                return
+            }
+            session.target = .window(windows[index])
+        } else {
+            session.target = options.region.map { .region($0) } ?? .display
+        }
         session.nextStart = options  // kept for this recording's restarts; every other start sets its own
         await controller.start()
     }

@@ -99,6 +99,8 @@ final class RecordingCoordinator {
     func retake() async -> Bool {
         guard controller.phase == .recording, let cut = await controller.retake() else { return false }
         live.rewind(to: cut)
+        // A time-paced prompter goes back as far as the take did (one following the voice rewinds through `live`).
+        prompter.model.rewind(by: CMClockGetTime(CMClockGetHostTimeClock()).seconds - cut)
         NSSound(named: "Pop")?.play()
         // The cut may have removed the bubble's latest hide or move: record where it is now.
         recordBubble(visible: settings.camera && bubbleShown)
