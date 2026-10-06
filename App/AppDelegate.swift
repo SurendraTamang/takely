@@ -368,7 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         guard let self else { return nil }
                         guard controller.phase == .idle, !controller.isBusy else { return "Finish the current recording or export first." }
                         do {
-                            try model.session.save()
+                            try model.saveIfChanged()
                         } catch {
                             return "Couldn't save the edits: \(error.localizedDescription)"
                         }
@@ -418,12 +418,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else if window === editorWindow {
             #if canImport(TakelyPro)
                 // Edits are kept (they're non-destructive): the next export of this recording uses them.
-                if let session = editor?.session, session.changed {
-                    do {
-                        try session.save()
-                    } catch {
-                        log.error("saving edits failed: \(error.localizedDescription)")
-                    }
+                do {
+                    try editor?.saveIfChanged()
+                } catch {
+                    log.error("saving edits failed: \(error.localizedDescription)")
                 }
                 editor?.close()
                 editor = nil

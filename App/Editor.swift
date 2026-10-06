@@ -30,10 +30,15 @@
         /// The map of the item in the player (until a rebuilt preview replaces it, the edits may already differ).
         private var shownMap: EditMap
         private var refresh: Task<Void, Never>?
+        /// Saves the edits a second after the last change, so a crash or quit loses at most that second.
+        private var autosave: Task<Void, Never>?
+        /// The edits as on disk (what the recording had when opened, then each save).
+        private var saved: Edits
         @ObservationIgnored private var observer: Any?
 
         init(session: EditSession) throws {
             self.session = session
+            saved = session.edits
             frames = RecordingFrames(bundle: session.bundle, segments: try session.bundle.readProject().segments)
             shownMap = session.map
             updateCutWords()
@@ -45,8 +50,30 @@
             }
         }
 
+        private func scheduleSave() {
+            autosave?.cancel()
+            autosave = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, !Task.isCancelled else { return }
+                do {
+                    try saveIfChanged()
+                } catch {
+                    self.error = "Couldn't save the edits: \(error.localizedDescription)"
+                }
+            }
+        }
+
+        /// Writes the edits if they differ from what's on disk (undone back to it: nothing to write; an untouched
+        /// recording keeps having no edits file, so automatic edits can still be planned for it).
+        func saveIfChanged() throws {
+            guard session.edits != saved else { return }
+            try session.save()
+            saved = session.edits
+        }
+
         /// Stops playback and the time observer (the window closed).
         func close() {
+            autosave?.cancel()  // the window's close saves now
             player.pause()
             if let observer { player.removeTimeObserver(observer) }
             observer = nil
@@ -96,6 +123,7 @@
         /// Rebuilds the preview when the edits changed (briefly debounced, so a drag doesn't rebuild every step).
         func updatePreview() {
             updateCutWords()
+            scheduleSave()
             guard shownEdits != session.edits else {
                 refresh?.cancel()  // back to what's showing (an undo): any rebuild, and its error, is moot
                 error = nil

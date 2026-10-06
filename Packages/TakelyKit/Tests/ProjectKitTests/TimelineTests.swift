@@ -122,4 +122,13 @@ import Testing
         #expect(track.clicks(activeAt: 5.05).count == 1)
         #expect(track.clicks(activeAt: 5.2).isEmpty)
     }
+
+    @Test func outOfOrderFilesAreSortedWhenRead() throws {
+        let json = #"{"samples":[{"t":2,"x":0.2,"y":0.2},{"t":1,"x":0.1,"y":0.1}],"clicks":[{"t":5,"x":0,"y":0},{"t":3,"x":0,"y":0}]}"#
+        let track = try JSONDecoder().decode(CursorTrack.self, from: Data(json.utf8))
+        #expect(track.samples.map(\.t) == [1, 2] && track.clicks.map(\.t) == [3, 5])
+        #expect(track.position(at: 1.5) == NormalizedPoint(x: 0.15000000000000002, y: 0.15000000000000002))
+        let camera = #"{"enabled":true,"shape":"circle","size":0.2,"keyframes":[{"t":4,"x":0.1,"y":0.1},{"t":0,"x":0.9,"y":0.9}]}"#
+        #expect(try JSONDecoder().decode(Project.Camera.self, from: Data(camera.utf8)).keyframes.map(\.t) == [0, 4])
+    }
 }

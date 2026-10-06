@@ -53,12 +53,16 @@ final class RecorderModel {
     }
 
     private func refreshDevices() {
+        (microphones, cameras) = Self.availableDevices()
+    }
+
+    /// The connected microphones and cameras (for the panel's and Settings' pickers).
+    static func availableDevices() -> (microphones: [Device], cameras: [Device]) {
         func devices(_ types: [AVCaptureDevice.DeviceType], _ media: AVMediaType) -> [Device] {
             AVCaptureDevice.DiscoverySession(deviceTypes: types, mediaType: media, position: .unspecified).devices
                 .map { Device(id: $0.uniqueID, name: $0.localizedName) }
         }
-        microphones = devices([.microphone], .audio)
-        cameras = devices([.builtInWideAngleCamera, .external, .continuityCamera], .video)
+        return (devices([.microphone], .audio), devices([.builtInWideAngleCamera, .external, .continuityCamera], .video))
     }
 
     /// Displays named like System Settings ("Built-in Retina Display"); identical names get " (2)", " (3)".

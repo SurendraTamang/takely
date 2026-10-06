@@ -16,6 +16,8 @@ struct SettingsView: View {
     let sharing: Sharing
     /// Languages this Mac can transcribe (Takely Pro), loaded when Settings opens.
     @State private var languages: [Locale] = []
+    /// Connected cameras and microphones, listed when Settings opens.
+    @State private var devices: (microphones: [RecorderModel.Device], cameras: [RecorderModel.Device]) = ([], [])
     /// Settings › License, in Takely Pro builds.
     var license: AnyView?
 
@@ -49,8 +51,14 @@ struct SettingsView: View {
     private var recording: some View {
         Form {
             Toggle("Camera", isOn: $settings.camera)
+            if settings.camera, !devices.cameras.isEmpty {
+                DevicePicker(title: "Camera device", selection: $settings.cameraID, devices: devices.cameras)
+            }
             Toggle("System audio", isOn: $settings.systemAudio)
             Toggle("Microphone", isOn: $settings.microphone)
+            if settings.microphone, !devices.microphones.isEmpty {
+                DevicePicker(title: "Microphone device", selection: $settings.microphoneID, devices: devices.microphones)
+            }
             Toggle(isOn: $settings.removeEcho) {
                 Text("Remove speaker echo")
                 Text(
@@ -114,8 +122,8 @@ struct SettingsView: View {
                         Text("On screen they're blurred (review them after recording); in the transcript they're masked for good.")
                     }
                     Toggle("Zoom in on clicks automatically", isOn: $settings.autoZoom)
+                    // Works without a transcript too: pauses are then found from the sound's loudness.
                     Toggle("Remove long pauses automatically", isOn: $settings.removeSilences)
-                        .disabled(!settings.transcribe)
                     Toggle("Prompter follows my voice", isOn: $settings.prompterFollowsVoice)
                     Toggle("Live speaking coach (pace, filler words)", isOn: $settings.liveCoach)
                     Text("On this Mac, in the system language. AI needs Apple Intelligence (System Settings › Apple Intelligence & Siri).")
@@ -139,6 +147,7 @@ struct SettingsView: View {
         }
         .padding()
         .task {
+            devices = RecorderModel.availableDevices()
             #if canImport(TakelyPro)
                 if languages.isEmpty { languages = await TranscriptionLanguages.supported() }
             #endif
