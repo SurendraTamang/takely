@@ -33,19 +33,24 @@ public enum MeetingCalendar {
         }
     }
 
-    /// The event the call belongs to: one under way (or starting within 5 minutes), not all-day. One with the
-    /// service's link wins; otherwise the only such event, or the one that started nearest to now. Nil if none.
+    /// The event the call belongs to: one under way (or starting within 5 minutes), not all-day. Among those with the
+    /// service's link, the one starting nearest to now (back-to-back calls); without a link, only an event that's the
+    /// one under way (a "Lunch" block during an ad-hoc call isn't the call). Nil if none fits. `events` should already
+    /// leave out cancelled and declined ones.
     public static func event(for service: String, among events: [Event], at now: Date) -> Event? {
         let current = events.filter { !$0.isAllDay && $0.start <= now.addingTimeInterval(300) && $0.end > now }
         let hints = hints(service)
-        if let linked = current.first(where: { event in hints.contains { event.details.lowercased().contains($0) } }) { return linked }
-        return current.min { abs($0.start.timeIntervalSince(now)) < abs($1.start.timeIntervalSince(now)) }
+        let linked = current.filter { event in hints.contains { event.details.lowercased().contains($0) } }
+        if let nearest = linked.min(by: { abs($0.start.timeIntervalSince(now)) < abs($1.start.timeIntervalSince(now)) }) {
+            return nearest
+        }
+        return current.count == 1 ? current[0] : nil
     }
 
-    /// "Weekly sync – 6 Oct": the event's title and the day (recordings of a recurring meeting stay apart).
-    public static func title(of event: Event, on day: Date, locale: Locale = .current) -> String {
+    /// "Weekly sync – 6 Oct": the event's title and its day (recordings of a recurring meeting stay apart).
+    public static func title(of event: Event, locale: Locale = .current) -> String {
         let name = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let date = day.formatted(.dateTime.day().month(.abbreviated).locale(locale))
+        let date = event.start.formatted(.dateTime.day().month(.abbreviated).locale(locale))
         return name.isEmpty ? date : "\(name) – \(date)"
     }
 }

@@ -71,7 +71,9 @@ struct SettingsView: View {
             .disabled(!settings.detectMeetings)
             Toggle(isOn: $settings.nameMeetingsFromCalendar) {
                 Text("Name meeting recordings from Calendar")
-                Text("Uses the event under way, e.g. “Weekly sync – 6 Oct”. Needs Calendar access; events stay on this Mac.")
+                Text(
+                    "The event under way names the recording, e.g. “Weekly sync – 6 Oct”: that name is in the video file and on links you share. Needs Calendar access."
+                )
             }
             .disabled(!settings.detectMeetings)
             .onChange(of: settings.nameMeetingsFromCalendar) { _, on in
