@@ -65,6 +65,15 @@ public struct CursorTrack: Codable, Sendable, Equatable {
         self.coveredUntil = coveredUntil
     }
 
+    /// Read sorted by time (see `sortedByTime`).
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            samples: sortedByTime(try c.decode([CursorSample].self, forKey: .samples), \.t),
+            clicks: sortedByTime(try c.decode([ClickEvent].self, forKey: .clicks), \.t),
+            coveredUntil: try c.decodeIfPresent(Double.self, forKey: .coveredUntil))
+    }
+
     public func position(at t: Double) -> NormalizedPoint? {
         if let coveredUntil, t > coveredUntil { return nil }
         guard let first = samples.first, let last = samples.last else { return nil }
@@ -122,4 +131,11 @@ extension Project.Camera {
         let f = min(1, (t - target.t) / transition)
         return NormalizedPoint(x: from.x + (target.x - from.x) * f, y: from.y + (target.y - from.y) * f)
     }
+}
+
+/// Sorted by time, keeping the order of equal times (a hand-edited or merged file may be out of order; lookups
+/// binary-search or take the last one before `t`). Already sorted: returned as is.
+func sortedByTime<T>(_ items: [T], _ time: (T) -> Double) -> [T] {
+    guard zip(items, items.dropFirst()).contains(where: { time($0) > time($1) }) else { return items }
+    return items.enumerated().sorted { (time($0.element), $0.offset) < (time($1.element), $1.offset) }.map(\.element)
 }

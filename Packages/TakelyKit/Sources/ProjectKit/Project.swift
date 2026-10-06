@@ -107,6 +107,15 @@ public struct Project: Codable, Sendable, Equatable {
             self.size = size
             self.keyframes = keyframes
         }
+
+        /// Read with the keyframes sorted by time (see `sortedByTime`).
+        public init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                enabled: try c.decode(Bool.self, forKey: .enabled), shape: try c.decode(BubbleShape.self, forKey: .shape),
+                size: try c.decode(Double.self, forKey: .size),
+                keyframes: sortedByTime(try c.decode([BubbleKeyframe].self, forKey: .keyframes), \.t))
+        }
     }
 
     public struct Effects: Codable, Sendable, Equatable {

@@ -188,15 +188,7 @@ struct RecorderMenu: View {
 
     /// "System default" first, then the connected devices; a saved device that's gone shows as the default.
     private func devicePicker(_ title: String, selection: Binding<String?>, devices: [RecorderModel.Device]) -> some View {
-        let shown = Binding<String?>(
-            get: { selection.wrappedValue.flatMap { id in devices.contains { $0.id == id } ? id : nil } },
-            set: { selection.wrappedValue = $0 })
-        return Picker(title, selection: shown) {
-            Text("System Default").tag(String?.none)
-            ForEach(devices) { device in
-                Text(device.name).tag(Optional(device.id))
-            }
-        }
+        DevicePicker(title: title, selection: selection, devices: devices)
     }
 
     private var controls: some View {
@@ -229,5 +221,24 @@ struct RecorderMenu: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// A camera or microphone choice: "System Default", or a connected device (an unplugged saved one shows the default).
+struct DevicePicker: View {
+    let title: String
+    @Binding var selection: String?
+    let devices: [RecorderModel.Device]
+
+    var body: some View {
+        let shown = Binding<String?>(
+            get: { selection.flatMap { id in devices.contains { $0.id == id } ? id : nil } },
+            set: { selection = $0 })
+        Picker(title, selection: shown) {
+            Text("System Default").tag(String?.none)
+            ForEach(devices) { device in
+                Text(device.name).tag(Optional(device.id))
+            }
+        }
     }
 }
