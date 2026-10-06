@@ -97,7 +97,7 @@ enum MovieFinisher {
     /// Named chapters (the AI's names, in the spoken language, or the person's own) take the recording's language;
     /// default names ("Chapter 2") are English.
     static func chapterLanguage(_ extras: MovieExtras) -> (code: String, bcp47: String) {
-        guard extras.markers.contains(where: { $0.title?.isEmpty == false }),
+        guard extras.markers.contains(where: { $0.title?.trimmingCharacters(in: .whitespaces).isEmpty == false }),
             let locale = extras.captionsLocale.map(Locale.init(identifier:)),
             let code = locale.language.languageCode?.identifier(.alpha3)
         else { return ("eng", "en") }

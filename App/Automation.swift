@@ -238,14 +238,8 @@ struct StopRecordingWithoutWaitingIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        let status = await center.perform(ControlRequest(.status))
-        switch status.state {
-        case "recording", "paused": break
-        case "starting": throw AutomationError(message: "Still starting: wait for the countdown to end.")
-        default: throw AutomationError(message: "Not recording.")
-        }
-        let center = center
-        Task { _ = await center.perform(ControlRequest(.stop)) }
+        let reply = center.stopWithoutWaiting()
+        guard reply.ok else { throw AutomationError(message: reply.error ?? "Couldn't stop.") }
         return .result()
     }
 }

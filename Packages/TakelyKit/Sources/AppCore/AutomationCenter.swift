@@ -89,8 +89,7 @@ public final class AutomationCenter {
                     display: request.display, window: request.window))
             return isRecording(host) ? reply(host) : fail(host, host.errorMessage ?? "The recording didn't start.")
         case .stop:
-            if host.phase == .starting { return fail(host, Self.starting) }
-            guard isRecording(host), !host.isBusy else { return fail(host, "Not recording.") }
+            if let refusal = stopRefusal(host) { return refusal }
             let before = host.lastRecording
             await host.stopRecording()
             let after = host.lastRecording == before ? nil : host.lastRecording  // a failed stop leaves the last take's
@@ -137,6 +136,22 @@ public final class AutomationCenter {
             await host.discard()
             return host.phase == .idle && host.errorMessage == nil ? reply(host) : fail(host, host.errorMessage ?? "Couldn't discard.")
         }
+    }
+
+    /// Starts stopping and answers at once (the export runs on; the Ready notification follows): checked like `stop`,
+    /// so a refusal (busy pausing or retaking, not recording) is reported, not lost.
+    public func stopWithoutWaiting() -> ControlReply {
+        guard let host else { return ControlReply(ok: false, state: "unknown", error: "Takely is quitting.") }
+        if let refusal = stopRefusal(host) { return refusal }
+        Task { await host.stopRecording() }
+        return reply(host)
+    }
+
+    private func stopRefusal(_ host: any AutomationHost) -> ControlReply? {
+        if host.phase == .starting { return fail(host, Self.starting) }
+        if host.isBusy && isRecording(host) { return fail(host, "Takely is busy (pausing or retaking): try again in a moment.") }
+        guard isRecording(host), !host.isBusy else { return fail(host, "Not recording.") }
+        return nil
     }
 
     /// During the countdown (or while devices start) the recording can't be stopped yet; Esc cancels it.

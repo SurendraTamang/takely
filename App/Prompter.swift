@@ -325,10 +325,9 @@ struct FollowingScript: NSViewRepresentable {
             layout.ensureLayout(for: container)
         }
         let spokenRange = NSRange(script.startIndex..<script.index(script.startIndex, offsetBy: spoken), in: script)
-        storage.beginEditing()
-        storage.addAttribute(.foregroundColor, value: NSColor.white, range: NSRange(location: 0, length: storage.length))
-        storage.addAttribute(.foregroundColor, value: NSColor.white.withAlphaComponent(0.35), range: spokenRange)
-        storage.endEditing()
+        // Temporary attributes color the text without touching the storage, so nothing is laid out again.
+        layout.removeTemporaryAttribute(.foregroundColor, forCharacterRange: NSRange(location: 0, length: storage.length))
+        layout.addTemporaryAttribute(.foregroundColor, value: NSColor.white.withAlphaComponent(0.35), forCharacterRange: spokenRange)
         let attributed = storage
         // Scroll the line holding the next word to a third of the way down.
         let next = NSRange(location: min(spokenRange.upperBound, max(0, attributed.length - 1)), length: attributed.length > 0 ? 1 : 0)
