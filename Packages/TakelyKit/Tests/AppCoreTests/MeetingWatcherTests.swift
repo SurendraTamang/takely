@@ -75,6 +75,27 @@ import Testing
         #expect(watcher.update(muted, now: t0 + 600) == nil && !watcher.isEnding)  // ten minutes on mute
         #expect(watcher.update(idle, now: t0 + 601) == nil)  // the window closed: the call ended
         #expect(watcher.update(idle, now: t0 + 616) == .ended(Meeting(service: "Zoom", bundleID: "us.zoom.xos", windowID: 3)))
+        // At most an hour on the window alone; and a window no longer titled as the call doesn't count.
+        var long = MeetingWatcher()
+        _ = long.update(call, now: t0)
+        _ = long.update(call, now: t0 + 3)
+        _ = long.update(muted, now: t0 + 10)
+        #expect(long.update(muted, now: t0 + 3_609) == nil)
+        _ = long.update(muted, now: t0 + 3_611)
+        #expect(long.update(muted, now: t0 + 3_626) != nil)
+        var renamed = MeetingWatcher()
+        _ = renamed.update(call, now: t0)
+        _ = renamed.update(call, now: t0 + 3)
+        let chat = MeetingSnapshot(micUsers: [], windows: [.init(bundleID: "us.zoom.xos", id: 3, title: "Zoom Workplace")])
+        _ = renamed.update(chat, now: t0 + 10)
+        #expect(renamed.update(chat, now: t0 + 25) != nil)
+        // Teams' main window can carry a "meeting" title after the call: it never keeps a call going.
+        var teams = MeetingWatcher()
+        let teamsWindow = MeetingSnapshot.Window(bundleID: "com.microsoft.teams2", id: 8, title: "Chat | Weekly meeting | Microsoft Teams")
+        _ = teams.update(MeetingSnapshot(micUsers: ["com.microsoft.teams2"], windows: [teamsWindow]), now: t0)
+        _ = teams.update(MeetingSnapshot(micUsers: ["com.microsoft.teams2"], windows: [teamsWindow]), now: t0 + 3)
+        _ = teams.update(MeetingSnapshot(micUsers: [], windows: [teamsWindow]), now: t0 + 10)
+        #expect(teams.update(MeetingSnapshot(micUsers: [], windows: [teamsWindow]), now: t0 + 25) != nil)
         // A browser's meeting tab doesn't keep a call going: it outlives the call.
         var browser = MeetingWatcher()
         _ = browser.update(meet, now: t0)
