@@ -44,6 +44,8 @@ final class LiveRecordingSession: RecordingSession {
     /// Recording a call (set by the meeting monitor for the whole recording, restarts included): no camera bubble
     /// (the call shows the camera), no countdown, and both the call's sound and the microphone.
     var meetingMode = false
+    /// The meeting's title from the calendar, for its recording (restarts included).
+    var meetingTitle: String?
     let drawing = DrawingOverlay()
     /// Called as a start begins with whether this recording has the camera (a meeting or automation may leave it out
     /// though it's on in the settings): the bubble is shown only when it does.
@@ -98,6 +100,7 @@ final class LiveRecordingSession: RecordingSession {
             echoCancellation: settings.removeEcho
         )
         // A saved microphone that's been unplugged falls back to the system default.
+        config.title = meeting ? meetingTitle : nil
         config.microphoneDeviceID = settings.microphoneID.flatMap { AVCaptureDevice(uniqueID: $0) == nil ? nil : $0 }
         if config.camera { camera.start(deviceID: settings.cameraID) }
         let cameraSession = camera.session

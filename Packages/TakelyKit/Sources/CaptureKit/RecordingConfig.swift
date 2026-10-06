@@ -29,6 +29,8 @@ public struct RecordingConfig: Sendable, Equatable {
     public var echoCancellation: Bool
     /// `AVCaptureDevice.uniqueID` of the microphone; nil records the system default.
     public var microphoneDeviceID: String?
+    /// The recording's title from the start (e.g. a meeting's calendar event); nil leaves it to the AI summary.
+    public var title: String?
 
     public init(
         target: CaptureTarget, captureRect: CGRect, sourcePixelSize: PixelSize, resolution: Resolution = .p1080, fps: Int = 30,

@@ -1,6 +1,7 @@
 import AppCore
 import AppKit
 import CoreAudio
+import EventKit
 import OSLog
 import ScreenCaptureKit
 
@@ -121,11 +122,13 @@ final class MeetingMonitor {
                 $0.windowID == id
             }
         }
+        let title = settings.nameMeetingsFromCalendar ? await CalendarAccess.title(for: meeting.service) : nil
         // The person may have started a recording meanwhile: leave it alone.
         guard controller.phase == .idle, !controller.isBusy, watcher.current == meeting else { return }
         guard !watcher.isEnding else { return recordPending = true }
         session.target = window.map { .window($0) } ?? .display
         session.nextStart = StartOptions()
+        session.meetingTitle = title
         session.meetingMode = true
         await controller.start()
         if controller.isRecording, let bundle = controller.recordingBundle {
@@ -187,5 +190,38 @@ final class MeetingMonitor {
             guard let bundle else { return nil }
             return MeetingSnapshot.Window(bundleID: bundle, id: id, title: info[kCGWindowName as String] as? String ?? "")
         }
+    }
+}
+
+/// Calendar events for naming meeting recordings (EventKit, full access: reading events needs it on macOS 14+).
+enum CalendarAccess {
+    @MainActor static func request() async -> Bool {
+        if EKEventStore.authorizationStatus(for: .event) == .fullAccess { return true }
+        return (try? await EKEventStore().requestFullAccessToEvents()) ?? false
+    }
+
+    /// The title for a `service` call now, from the event under way; nil without access or a fitting event. Runs off
+    /// the main thread (the first query can be slow with Exchange or CalDAV accounts). Cancelled events, ones the
+    /// person declined, and subscribed or birthday calendars don't count.
+    nonisolated static func title(for service: String, at now: Date = .now) async -> String? {
+        await Task.detached(priority: .userInitiated) {
+            guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return nil }
+            let store = EKEventStore()
+            let calendars = store.calendars(for: .event).filter { $0.type != .subscription && $0.type != .birthday }
+            guard !calendars.isEmpty else { return nil }
+            let predicate = store.predicateForEvents(
+                withStart: now.addingTimeInterval(-12 * 3600), end: now.addingTimeInterval(300), calendars: calendars)
+            let events = store.events(matching: predicate)
+                .filter { event in
+                    event.status != .canceled
+                        && event.attendees?.first(where: \.isCurrentUser)?.participantStatus != .declined
+                }
+                .map { event in
+                    MeetingCalendar.Event(
+                        title: event.title ?? "", start: event.startDate, end: event.endDate, isAllDay: event.isAllDay,
+                        details: [event.url?.absoluteString, event.location, event.notes].compactMap { $0 }.joined(separator: "\n"))
+                }
+            return MeetingCalendar.event(for: service, among: events, at: now).map { MeetingCalendar.title(of: $0) }
+        }.value
     }
 }
