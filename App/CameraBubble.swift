@@ -91,11 +91,12 @@ final class BubblePanel: NSPanel, NSWindowDelegate {
         hasShadow = true
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        isMovableByWindowBackground = true
+        isMovableByWindowBackground = false  // the preview moves it (inside) or resizes it (its edge)
         isReleasedWhenClosed = false
         delegate = self
         contentView = preview
         preview.scroll = { [weak self] delta in self?.resize(by: delta) }
+        preview.resizeTo = { [weak self] diameter in self?.setDiameter(diameter) }
         preview.menu = makeMenu()
         applyShape()
         setAccessibilityLabel("Camera bubble")
@@ -122,6 +123,7 @@ final class BubblePanel: NSPanel, NSWindowDelegate {
     private func resize(by delta: CGFloat) { setDiameter(diameter + delta * 2) }
 
     private func applyShape() {
+        preview.shape = shape
         let d = diameter
         preview.layer?.cornerRadius =
             switch shape {
@@ -147,9 +149,43 @@ final class BubblePanel: NSPanel, NSWindowDelegate {
     }
 }
 
-/// The camera preview, filled to the bubble and clipped to its shape.
+/// The camera preview, filled to the bubble and clipped to its shape. Dragging inside moves the bubble; dragging its
+/// edge (the outer `edge` points) resizes it; scrolling resizes too.
 private final class PreviewView: NSView {
     var scroll: (CGFloat) -> Void = { _ in }
+    var resizeTo: (Double) -> Void = { _ in }
+    var shape = BubbleShape.circle
+    static let edge = 14.0
+    /// A resize in progress: the diameter and the pointer's distance from the center when it began.
+    private var resizing: (diameter: Double, distance: Double)?
+
+    /// The pointer's distance from the center: around a circle, or (square shapes) to the nearer side's line.
+    private func distanceFromCenter(_ event: NSEvent) -> Double? {
+        guard let frame = window?.frame else { return nil }
+        let p = NSEvent.mouseLocation
+        let (dx, dy) = (abs(p.x - frame.midX), abs(p.y - frame.midY))
+        return shape == .circle ? hypot(dx, dy) : max(dx, dy)
+    }
+
+    /// The bubble moves on the first click even while Takely isn't the active app (the usual case while recording).
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        // Only the band along the visible edge resizes: a circle's see-through corners move it, as inside does.
+        let radius = Double(bounds.width) / 2
+        if let distance = distanceFromCenter(event), distance > radius - Self.edge, distance <= radius + 2 {
+            resizing = (Double(bounds.width), distance)
+        } else {
+            window?.performDrag(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let resizing, let distance = distanceFromCenter(event) else { return }
+        resizeTo(resizing.diameter + 2 * (distance - resizing.distance))
+    }
+
+    override func mouseUp(with event: NSEvent) { resizing = nil }
 
     init(session: AVCaptureSession) {
         super.init(frame: .zero)
