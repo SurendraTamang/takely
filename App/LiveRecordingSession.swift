@@ -166,11 +166,12 @@ final class LiveRecordingSession: RecordingSession {
         // Exclude the app, not a window snapshot, so windows opened later (the popover, drawing palette, prompter) never
         // appear; a window snapshot is only the last resort.
         var ownApps = current.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
-        if ownApps.isEmpty {
-            // The canvas wasn't listed in time, so neither was Takely: the full list (windows not shown yet included)
-            // has both — the app is excluded (later windows stay out) and the canvas still recorded.
-            let all = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            ownApps = all?.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier } ?? []
+        var all: SCShareableContent?
+        if ownApps.isEmpty || canvas.isEmpty {
+            // Not listed in time: the full list (windows not shown yet included) usually has both — the app is then
+            // excluded (later windows stay out) with the canvas still recorded.
+            all = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            if ownApps.isEmpty { ownApps = all?.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier } ?? [] }
             if canvas.isEmpty { canvas = all?.windows.filter { $0.windowID == canvasID } ?? [] }
         }
         if canvas.isEmpty { log.error("drawing canvas not listed by ScreenCaptureKit; excluding Takely's windows one by one") }
@@ -179,7 +180,7 @@ final class LiveRecordingSession: RecordingSession {
             ownApps.isEmpty || canvas.isEmpty
             ? SCContentFilter(
                 display: display,
-                excludingWindows: current.windows.filter {
+                excludingWindows: (all ?? current).windows.filter {  // hidden ones too (a closed prompter)
                     $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier && $0.windowID != canvasID
                 })
             : SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: canvas)
