@@ -47,6 +47,21 @@ import Testing
         if let gap = detector.gaps.first { #expect(abs(gap.lowerBound - 1) < 0.05 && abs(gap.upperBound - 1.6) < 0.05, "gap \(gap)") }
     }
 
+    /// One buffer stamped late mustn't shift the pauses after it (the next timestamps pull it back).
+    @Test func aLateTimestampDoesntShiftLaterPauses() {
+        let samples = Self.audio([(1, true), (0.6, false), (1, true), (0.6, false), (1, true)])
+        var detector = SilenceDetector()
+        for (n, chunk) in stride(from: 0, to: samples.count, by: 1024).enumerated() {
+            let late = n == 10 ? 0.3 : 0  // inside the first second of speech
+            detector.add(Array(samples[chunk..<min(chunk + 1024, samples.count)]), at: Double(chunk) / Double(Self.rate) + late)
+        }
+        #expect(detector.gaps.count == 2, "gaps \(detector.gaps)")
+        if detector.gaps.count == 2 {
+            #expect(
+                abs(detector.gaps[1].lowerBound - 2.6) < 0.05 && abs(detector.gaps[1].upperBound - 3.2) < 0.05, "gap \(detector.gaps[1])")
+        }
+    }
+
     @Test func cutsBackToThePauseBeforeTheLastWords() {
         // "…first take. [pause] Second tak— oops" → cut inside the pause, keeping 0.2 s of it.
         let detector = Self.detect(Self.audio([(2, true), (1, false), (1.5, true)]), start: 10)

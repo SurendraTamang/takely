@@ -16,16 +16,16 @@ public struct SilenceDetector: Sendable {
     private var pending: [Float] = []
     private var pendingStart = 0.0
     private var silentSince: Double?
-    /// Where the last frame looked at ended: frames never go back before it (a buffer stamped early would otherwise
-    /// move a pause's start back into the words before it).
-    private var processedUntil = -Double.infinity
+    /// Where the last sound ended: a pause never starts before it (a buffer stamped early would otherwise put a
+    /// pause's start back inside the words before it, and a retake would clip them). The anchor itself still follows
+    /// every timestamp, so one stamped late (or a drifting clock) is corrected by the next.
+    private var soundUntil = -Double.infinity
 
     public init() {}
 
     /// Adds mono 48 kHz samples whose first sample is at edited time `t`.
     public mutating func add(_ samples: [Float], at t: Double) {
-        // Re-anchor to the timestamps (drift, dropped buffers), but never back in time.
-        pendingStart = max(t - Double(pending.count) / Self.rate, processedUntil)
+        pendingStart = t - Double(pending.count) / Self.rate  // re-anchor to the timestamps (drift, dropped buffers)
         pending += samples
         var offset = 0
         while pending.count - offset >= Self.frame {
@@ -33,16 +33,16 @@ public struct SilenceDetector: Sendable {
             let start = pendingStart + Double(offset) / Self.rate
             let rms = (frame.reduce(0) { $0 + $1 * $1 } / Float(Self.frame)).squareRoot()
             if rms < Self.threshold {
-                if silentSince == nil { silentSince = start }
-            } else if let since = silentSince {
-                if start - since >= Self.minimumGap - 1e-9 { gaps.append(since...start) }
+                if silentSince == nil { silentSince = max(start, soundUntil) }
+            } else {
+                if let since = silentSince, start - since >= Self.minimumGap - 1e-9 { gaps.append(since...start) }
                 silentSince = nil
+                soundUntil = max(soundUntil, start + Double(Self.frame) / Self.rate)
             }
             offset += Self.frame
         }
         pending.removeFirst(offset)
         pendingStart += Double(offset) / Self.rate
-        if offset > 0 { processedUntil = pendingStart }
     }
 
     /// Where a retake requested at `now` should cut: inside the last completed pause in this segment and within
@@ -59,6 +59,6 @@ public struct SilenceDetector: Sendable {
         gaps.removeAll { $0.upperBound > t }
         pending = []
         silentSince = nil
-        processedUntil = -Double.infinity  // a new segment starts afresh
+        soundUntil = -Double.infinity  // a new segment starts afresh
     }
 }

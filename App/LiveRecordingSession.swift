@@ -221,17 +221,16 @@ final class LiveRecordingSession: RecordingSession {
         windowFollower = nil
     }
 
-    /// Keeps the router (cursor, clicks) and the bubble's area on the window as it moves.
+    /// Keeps the router's cursor and clicks on the window as it moves.
     private func followWindow(_ id: CGWindowID, router: FrameRouter) {
         windowFollower?.cancel()
-        windowFollower = Task { [weak self] in
+        windowFollower = Task {
             var last: CGRect?
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard let frame = Self.windowFrame(id), frame != last else { continue }
                 last = frame
-                router.follow(area: frame)
-                if let self, let active = self.active, active.router === router { self.active = (router, frame) }
+                router.follow(area: frame)  // the cursor and clicks; the bubble stays in the fixed frame (`active` unchanged)
             }
         }
     }

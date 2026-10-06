@@ -31,9 +31,11 @@ public final class FrameRouter: Sendable {
     /// Pauses in the microphone, for the oops-retake; fed from the audio queue.
     private let silence = Mutex<(detector: SilenceDetector, downmixer: Downmixer?)>((SilenceDetector(), nil))
     private let cancelsEcho: Bool
-    /// The captured area in global points; a window recording moves it with the window (`follow(area:)`).
+    /// The captured area in global points; a window recording moves it with the window (`follow(area:)`) for the
+    /// cursor and clicks. The bubble is drawn in the fixed output frame, so it keeps the area at the start.
     private let area: Mutex<CGRect>
     private var captureRect: CGRect { area.withLock { $0 } }
+    private let startArea: CGRect
     private let cursorLocation: @Sendable () -> CGPoint?
     private let report: @Sendable (CaptureEvent.Kind, any Error) -> Void
 
@@ -51,6 +53,7 @@ public final class FrameRouter: Sendable {
     ) {
         self.state = Mutex(State(camera: camera))
         self.area = Mutex(captureRect)
+        self.startArea = captureRect
         self.cursorLocation = cursorLocation
         self.report = report
         self.cancelsEcho = cancelsEcho
@@ -185,10 +188,11 @@ public final class FrameRouter: Sendable {
     /// Records where the camera bubble is (`center` in global points, origin top-left) on the edited timeline.
     /// Before the first frame of a segment (or while paused) it lands at the current edited time.
     public func recordBubble(center: CGPoint, visible: Bool, at hostTime: CMTime) {
-        guard captureRect.width > 0, captureRect.height > 0 else { return }
-        let x = (center.x - captureRect.minX) / captureRect.width
-        let y = (center.y - captureRect.minY) / captureRect.height
-        let aspect = captureRect.width / captureRect.height
+        let rect = startArea
+        guard rect.width > 0, rect.height > 0 else { return }
+        let x = (center.x - rect.minX) / rect.width
+        let y = (center.y - rect.minY) / rect.height
+        let aspect = rect.width / rect.height
         state.withLock { s in
             let t = s.writer?.startTime.map { hostTime >= $0 ? s.offset + (hostTime - $0).seconds : s.offset } ?? s.offset
             s.camera.record(BubbleKeyframe(t: t, x: x, y: y, visible: visible), aspect: aspect)
@@ -275,10 +279,8 @@ public final class FrameRouter: Sendable {
     private func normalizedCursor() -> NormalizedPoint? { normalized(cursorLocation()) }
 
     private func normalized(_ location: CGPoint?) -> NormalizedPoint? {
-        guard let p = location, captureRect.width > 0, captureRect.height > 0 else { return nil }
-        return NormalizedPoint(
-            x: (p.x - captureRect.minX) / captureRect.width,
-            y: (p.y - captureRect.minY) / captureRect.height
-        )
+        let rect = captureRect  // read once: a move in between mustn't mix two areas
+        guard let p = location, rect.width > 0, rect.height > 0 else { return nil }
+        return NormalizedPoint(x: (p.x - rect.minX) / rect.width, y: (p.y - rect.minY) / rect.height)
     }
 }
