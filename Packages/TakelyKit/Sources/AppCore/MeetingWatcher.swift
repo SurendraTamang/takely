@@ -89,6 +89,13 @@ public struct MeetingWatcher: Sendable {
         }
     }
 
+    /// Apps whose call window can be told apart and closes when the call ends: while it's on screen (still titled as
+    /// the call) the call goes on, even with the mic released (some apps release it on mute) — for at most
+    /// `windowOnlyLimit`. Only Zoom: Teams' and Webex's main windows can match their call-window titles and stay open
+    /// after the call; browser tabs outlive calls; FaceTime's window stays.
+    static let callWindowEndsWithCall: Set<String> = ["us.zoom.xos"]
+    static let windowOnlyLimit = 3600.0
+
     public static let startAfter = 3.0
     public static let endAfter = 15.0
 
@@ -97,13 +104,21 @@ public struct MeetingWatcher: Sendable {
     public var isEnding: Bool { quietSince != nil }
     private var candidate: (meeting: Meeting, since: Date)?
     private var quietSince: Date?
+    /// Since when only the call's window has kept the call going (no mic).
+    private var windowOnlySince: Date?
 
     public init() {}
 
     public mutating func update(_ snapshot: MeetingSnapshot, now: Date = .now) -> Event? {
         let found = Self.meeting(in: snapshot)
         if let current {
-            if found?.bundleID == current.bundleID || snapshot.micUsers.contains(current.bundleID) {
+            let heard = found?.bundleID == current.bundleID || snapshot.micUsers.contains(current.bundleID)
+            let windowOpen =
+                Self.callWindowEndsWithCall.contains(current.bundleID)
+                && snapshot.windows.contains { $0.id == current.windowID && Self.callWindow(current.bundleID, $0.title) }
+            if heard { windowOnlySince = nil } else if windowOpen { windowOnlySince = windowOnlySince ?? now }
+            let windowKeeps = windowOpen && now.timeIntervalSince(windowOnlySince ?? now) < Self.windowOnlyLimit
+            if heard || windowKeeps {
                 quietSince = nil
                 return nil
             }
@@ -112,6 +127,7 @@ public struct MeetingWatcher: Sendable {
             guard now.timeIntervalSince(quiet) >= Self.endAfter else { return nil }
             self.current = nil
             quietSince = nil
+            windowOnlySince = nil
             return .ended(current)
         }
         guard let found else {

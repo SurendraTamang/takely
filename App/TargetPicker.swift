@@ -241,5 +241,10 @@ private struct WindowSelectionView: View {
             hovered = windows.first { $0.frame.contains(global) }
         }
         .onTapGesture { if let hovered { finish(hovered) } }
+        .onAppear {
+            // Highlight the window under the pointer at once, not only after it moves.
+            let pointer = ScreenSpace.flip(NSEvent.mouseLocation)
+            if screen.contains(pointer) { hovered = windows.first { $0.frame.contains(pointer) } }
+        }
     }
 }

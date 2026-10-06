@@ -62,4 +62,46 @@ import Testing
             micUsers: ["com.apple.Safari"], windows: [.init(bundleID: "com.apple.Safari", id: 2, title: "Meet - xyz")])
         #expect(MeetingWatcher.meeting(in: safari)?.service == "Google Meet")
     }
+
+    @Test func aZoomCallMutedWithTheMicReleasedGoesOnWhileItsWindowIsOpen() {
+        var watcher = MeetingWatcher()
+        let t0 = Date(timeIntervalSince1970: 0)
+        let window = MeetingSnapshot.Window(bundleID: "us.zoom.xos", id: 3, title: "Zoom Meeting")
+        let call = MeetingSnapshot(micUsers: ["us.zoom.xos"], windows: [window])
+        _ = watcher.update(call, now: t0)
+        #expect(watcher.update(call, now: t0 + 3) == .started(Meeting(service: "Zoom", bundleID: "us.zoom.xos", windowID: 3)))
+        let muted = MeetingSnapshot(micUsers: [], windows: [window])
+        #expect(watcher.update(muted, now: t0 + 10) == nil)
+        #expect(watcher.update(muted, now: t0 + 600) == nil && !watcher.isEnding)  // ten minutes on mute
+        #expect(watcher.update(idle, now: t0 + 601) == nil)  // the window closed: the call ended
+        #expect(watcher.update(idle, now: t0 + 616) == .ended(Meeting(service: "Zoom", bundleID: "us.zoom.xos", windowID: 3)))
+        // At most an hour on the window alone; and a window no longer titled as the call doesn't count.
+        var long = MeetingWatcher()
+        _ = long.update(call, now: t0)
+        _ = long.update(call, now: t0 + 3)
+        _ = long.update(muted, now: t0 + 10)
+        #expect(long.update(muted, now: t0 + 3_609) == nil)
+        _ = long.update(muted, now: t0 + 3_611)
+        #expect(long.update(muted, now: t0 + 3_626) != nil)
+        var renamed = MeetingWatcher()
+        _ = renamed.update(call, now: t0)
+        _ = renamed.update(call, now: t0 + 3)
+        let chat = MeetingSnapshot(micUsers: [], windows: [.init(bundleID: "us.zoom.xos", id: 3, title: "Zoom Workplace")])
+        _ = renamed.update(chat, now: t0 + 10)
+        #expect(renamed.update(chat, now: t0 + 25) != nil)
+        // Teams' main window can carry a "meeting" title after the call: it never keeps a call going.
+        var teams = MeetingWatcher()
+        let teamsWindow = MeetingSnapshot.Window(bundleID: "com.microsoft.teams2", id: 8, title: "Chat | Weekly meeting | Microsoft Teams")
+        _ = teams.update(MeetingSnapshot(micUsers: ["com.microsoft.teams2"], windows: [teamsWindow]), now: t0)
+        _ = teams.update(MeetingSnapshot(micUsers: ["com.microsoft.teams2"], windows: [teamsWindow]), now: t0 + 3)
+        _ = teams.update(MeetingSnapshot(micUsers: [], windows: [teamsWindow]), now: t0 + 10)
+        #expect(teams.update(MeetingSnapshot(micUsers: [], windows: [teamsWindow]), now: t0 + 25) != nil)
+        // A browser's meeting tab doesn't keep a call going: it outlives the call.
+        var browser = MeetingWatcher()
+        _ = browser.update(meet, now: t0)
+        _ = browser.update(meet, now: t0 + 3)
+        let tabOnly = MeetingSnapshot(micUsers: [], windows: meet.windows)
+        _ = browser.update(tabOnly, now: t0 + 10)
+        #expect(browser.update(tabOnly, now: t0 + 25) != nil)
+    }
 }
