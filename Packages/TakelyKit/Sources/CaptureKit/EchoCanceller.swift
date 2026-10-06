@@ -79,6 +79,12 @@ final class EchoCanceller {
         if reference.samples.count > Self.maxReference { reference.removeFirst(reference.samples.count - Self.maxReference) }
     }
 
+    /// A buffer's length in 48 kHz samples, from its own rate (its count as is when the rate is unknown).
+    static func length48k(of buffer: CMSampleBuffer) -> Int {
+        guard let rate = buffer.formatDescription?.audioStreamBasicDescription?.mSampleRate, rate > 0 else { return buffer.numSamples }
+        return Int((Double(buffer.numSamples) * 48_000 / rate).rounded())
+    }
+
     /// Adds microphone audio and returns what is ready: 48 kHz mono, echo removed, one buffer per run.
     func clean(_ buffer: CMSampleBuffer) -> [CMSampleBuffer] {
         var output = Output()
@@ -89,7 +95,8 @@ final class EchoCanceller {
             drain(force: true, into: &output)  // the format changed: finish the run in the old one
             micConverter = converter
         }
-        let samples = converted ?? [Float](repeating: 0, count: buffer.numSamples)  // unreadable: keep its length
+        // Unreadable: silence as long as the buffer, at 48 kHz (a 44.1 kHz microphone's buffer covers more samples here).
+        let samples = converted ?? [Float](repeating: 0, count: Self.length48k(of: buffer))
         let expected = mic.end + skew
         if let index = try? Self.index(of: buffer.presentationTimeStamp), run != nil || !mic.samples.isEmpty {
             if index > expected + Self.micGap || index < expected - Self.micGap {

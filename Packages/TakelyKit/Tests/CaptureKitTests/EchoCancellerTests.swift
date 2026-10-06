@@ -271,4 +271,11 @@ import Testing
         let peak = try #require(out.samples.indices.max { abs(out.samples[$0]) < abs(out.samples[$1]) })
         #expect(abs(peak - click) <= 48, "click moved from \(click) to \(peak)")
     }
+
+    @Test func silenceForAnUnreadableBufferIsMeasuredAt48kHz() {
+        let at44 = Synthetic.audio(pts: .zero, samples: [Float](repeating: 0, count: 441), channels: 1, sampleRate: 44_100)
+        #expect(EchoCanceller.length48k(of: at44) == 480)  // 10 ms
+        let at48 = Synthetic.audio(pts: .zero, samples: [Float](repeating: 0, count: 480), channels: 1)
+        #expect(EchoCanceller.length48k(of: at48) == 480)
+    }
 }

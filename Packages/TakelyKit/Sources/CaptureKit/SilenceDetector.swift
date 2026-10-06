@@ -16,6 +16,10 @@ public struct SilenceDetector: Sendable {
     private var pending: [Float] = []
     private var pendingStart = 0.0
     private var silentSince: Double?
+    /// Where the last sound ended: a pause never starts before it (a buffer stamped early would otherwise put a
+    /// pause's start back inside the words before it, and a retake would clip them). The anchor itself still follows
+    /// every timestamp, so one stamped late (or a drifting clock) is corrected by the next.
+    private var soundUntil = -Double.infinity
 
     public init() {}
 
@@ -29,10 +33,11 @@ public struct SilenceDetector: Sendable {
             let start = pendingStart + Double(offset) / Self.rate
             let rms = (frame.reduce(0) { $0 + $1 * $1 } / Float(Self.frame)).squareRoot()
             if rms < Self.threshold {
-                if silentSince == nil { silentSince = start }
-            } else if let since = silentSince {
-                if start - since >= Self.minimumGap - 1e-9 { gaps.append(since...start) }
+                if silentSince == nil { silentSince = max(start, soundUntil) }
+            } else {
+                if let since = silentSince, start - since >= Self.minimumGap - 1e-9 { gaps.append(since...start) }
                 silentSince = nil
+                soundUntil = max(soundUntil, start + Double(Self.frame) / Self.rate)
             }
             offset += Self.frame
         }
@@ -54,5 +59,6 @@ public struct SilenceDetector: Sendable {
         gaps.removeAll { $0.upperBound > t }
         pending = []
         silentSince = nil
+        soundUntil = -Double.infinity  // a new segment starts afresh
     }
 }
