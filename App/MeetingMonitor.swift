@@ -63,7 +63,7 @@ final class MeetingMonitor {
             waitingOffer = nil
             if watcher.current == waiting { offer(waiting) }
         }
-        let event = watcher.update(Self.snapshot())
+        let event = watcher.update(Self.snapshot(windowsAnyway: watcher.current != nil))
         if recordPending, event == nil, watcher.current != nil, !watcher.isEnding {
             recordPending = false
             Task { await recordCurrent() }
@@ -137,9 +137,12 @@ final class MeetingMonitor {
 
     // MARK: The Mac's state
 
-    static func snapshot() -> MeetingSnapshot {
+    /// Window titles are read only when they matter: a possible call using the mic, or a call in progress (its window
+    /// keeps it going while muted).
+    static func snapshot(windowsAnyway: Bool = false) -> MeetingSnapshot {
         let users = micUsers()
-        return MeetingSnapshot(micUsers: users, windows: users.contains(where: MeetingWatcher.isCandidate) ? windows() : [])
+        let needed = windowsAnyway || users.contains(where: MeetingWatcher.isCandidate)
+        return MeetingSnapshot(micUsers: users, windows: needed ? windows() : [])
     }
 
     /// Bundle identifiers of the processes with an audio input running (Core Audio's process objects, macOS 14.4+).

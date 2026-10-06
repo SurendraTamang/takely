@@ -89,6 +89,12 @@ public struct MeetingWatcher: Sendable {
         }
     }
 
+    /// Apps whose call window closes when the call ends: while it's on screen the call goes on, even with the mic
+    /// released (some apps release it on mute). Not browsers (a meeting tab outlives the call) or FaceTime (its window stays).
+    static let callWindowEndsWithCall: Set<String> = [
+        "us.zoom.xos", "com.microsoft.teams2", "com.microsoft.teams", "Cisco-Systems.Spark", "com.cisco.webexmeetingsapp",
+    ]
+
     public static let startAfter = 3.0
     public static let endAfter = 15.0
 
@@ -103,7 +109,10 @@ public struct MeetingWatcher: Sendable {
     public mutating func update(_ snapshot: MeetingSnapshot, now: Date = .now) -> Event? {
         let found = Self.meeting(in: snapshot)
         if let current {
-            if found?.bundleID == current.bundleID || snapshot.micUsers.contains(current.bundleID) {
+            let windowOpen =
+                Self.callWindowEndsWithCall.contains(current.bundleID)
+                && current.windowID.map { id in snapshot.windows.contains { $0.id == id } } == true
+            if found?.bundleID == current.bundleID || snapshot.micUsers.contains(current.bundleID) || windowOpen {
                 quietSince = nil
                 return nil
             }
