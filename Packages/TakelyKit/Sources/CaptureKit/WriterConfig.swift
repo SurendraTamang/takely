@@ -1,5 +1,6 @@
 import AVFoundation
 import ProjectKit
+import VideoToolbox
 
 /// Encoder settings for one segment's tracks.
 public struct WriterConfig: Sendable, Equatable {
@@ -42,9 +43,12 @@ public struct WriterConfig: Sendable, Equatable {
             AVVideoAverageBitRateKey: bitrate,
             AVVideoExpectedSourceFrameRateKey: fps,
             AVVideoMaxKeyFrameIntervalDurationKey: 2,
+            // No B-frames: live capture written in fragments, where reordering only adds latency.
             AVVideoAllowFrameReorderingKey: false,
         ]
-        if codec == .h264 { compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel }
+        // Explicit profiles: H.264 High, HEVC Main (8-bit, what every HEVC player decodes).
+        compression[AVVideoProfileLevelKey] =
+            codec == .h264 ? AVVideoProfileLevelH264HighAutoLevel : kVTProfileLevel_HEVC_Main_AutoLevel as String
         return [
             AVVideoCodecKey: codec == .hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
             AVVideoWidthKey: size.width,

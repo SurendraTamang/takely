@@ -135,6 +135,8 @@ private struct PrompterView: View {
     @State private var offset = 0.0
     @State private var maxOffset = 0.0
     @State private var lastTick: Date?
+    /// Where the scroll was over the last 20 s (a retake looks back at most 15 s): a retake returns to exactly there.
+    @State private var history: [(time: Date, offset: Double)] = []
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -186,7 +188,10 @@ private struct PrompterView: View {
                 .onChange(of: model.rewind?.id) {
                     // Only while it scrolls by itself (not paused, hidden, or moved by hand).
                     guard model.scrolling, let seconds = model.rewind?.seconds else { return }
-                    offset = max(0, offset - speed * seconds)
+                    let then = Date.now.addingTimeInterval(-seconds)
+                    // Where it actually was then (pauses and the end of the script included); else by its speed.
+                    offset = history.last { $0.time <= then }?.offset ?? max(0, offset - speed * seconds)
+                    history.removeAll { $0.time > then }
                     position.scrollTo(y: offset)
                 }
                 .focusable()
@@ -225,6 +230,8 @@ private struct PrompterView: View {
         let speed = speed
         offset = PrompterScroll.advance(offset, by: now.timeIntervalSince(last), speed: speed, maxOffset: maxOffset)
         position.scrollTo(y: offset)
+        if history.last.map({ now.timeIntervalSince($0.time) >= 0.25 }) ?? true { history.append((now, offset)) }  // 4 a second
+        history.removeAll { now.timeIntervalSince($0.time) > 20 }
     }
 
     private var toolbar: some View {

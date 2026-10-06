@@ -128,4 +128,24 @@ import Testing
         #expect(sorted.count == 2)
         #expect(sorted.map(\.mediaType) == [.video, .audio])
     }
+
+    @Test func hevcSegmentsAreMainProfile() async throws {
+        let url = Synthetic.temporaryFolder().appending(path: "segment.mov")
+        let hevc = WriterConfig(
+            tracks: [.screen], screenSize: PixelSize(width: 320, height: 200), cameraSize: PixelSize(width: 160, height: 90),
+            codec: .hevc, fps: 30, videoBitrate: 1_000_000)
+        let writer = try SegmentWriter(url: url, config: hevc)
+        for i in 0..<30 {
+            writer.append(
+                Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(1000 + Double(i) / 30), rgb: (255, 0, 0)), as: .screen)
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        _ = try await writer.finish(at: Synthetic.seconds(1001))
+        let track = try #require(try await AVURLAsset(url: url).loadTracks(withMediaType: .video).first)
+        let format = try #require(try await track.load(.formatDescriptions).first)
+        #expect(CMFormatDescriptionGetMediaSubType(format) == kCMVideoCodecType_HEVC)
+        let atoms = CMFormatDescriptionGetExtension(format, extensionKey: kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms)
+        let hvcC = try #require((atoms as? [String: Any])?["hvcC"] as? Data)
+        #expect(hvcC.count > 1 && hvcC[1] & 0x1F == 1)  // general_profile_idc 1: Main
+    }
 }
