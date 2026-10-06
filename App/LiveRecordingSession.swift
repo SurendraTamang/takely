@@ -164,8 +164,14 @@ final class LiveRecordingSession: RecordingSession {
         }
         let canvas = current.windows.filter { $0.windowID == canvasID }
         if canvas.isEmpty { log.error("drawing canvas not listed by ScreenCaptureKit; drawings won't be recorded") }
-        // Exclude the app, not a window snapshot, so windows opened later (the popover) never appear.
-        let ownApps = current.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        // Exclude the app, not a window snapshot, so windows opened later (the popover, drawing palette, prompter) never
+        // appear; a window snapshot is only the last resort.
+        var ownApps = current.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        if ownApps.isEmpty {
+            // Not listed among on-screen apps (no window up yet): the full list has it, so later windows stay out too.
+            let all = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            ownApps = all?.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier } ?? []
+        }
         let filter =
             ownApps.isEmpty
             ? SCContentFilter(
