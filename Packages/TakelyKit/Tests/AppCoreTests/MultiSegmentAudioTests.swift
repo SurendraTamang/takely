@@ -37,4 +37,41 @@ import Testing
         let duration = try await audio.load(.timeRange).duration.seconds
         #expect(duration > 4.45 && duration < 4.51, "\(duration)")
     }
+
+    /// A camera that stops mid-segment is noted (the bubble is hidden from there).
+    @Test func aCameraThatStoppedIsNoted() async throws {
+        let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
+        var project = Project(
+            status: .finished, capture: .init(target: .display, pixelSize: PixelSize(width: 320, height: 200), fps: 30, codec: .h264),
+            camera: .init(enabled: true))
+        let config = WriterConfig(
+            tracks: [.screen, .camera], screenSize: PixelSize(width: 320, height: 200), cameraSize: PixelSize(width: 160, height: 90),
+            codec: .h264, fps: 30, videoBitrate: 1_000_000)
+        let file = ProjectBundle.segmentFileName(index: 0)
+        try bundle.writeSidecar(tracks: config.tracks, for: file)
+        let writer = try SegmentWriter(url: bundle.segmentURL(file), config: config)
+        for i in 0..<120 {  // 4 s of screen; the camera only for the first second
+            let t = 1000 + Double(i) / 30
+            writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(t), rgb: (255, 0, 0)), as: .screen)
+            if i < 30 { writer.append(Synthetic.video(width: 160, height: 90, pts: Synthetic.seconds(t), rgb: (0, 255, 0)), as: .camera) }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let duration = try await writer.finish(at: Synthetic.seconds(1004)) ?? 0
+        project.segments = [.init(file: file, duration: duration, tracks: config.tracks)]
+        try bundle.write(project)
+        let stopped = try #require(await CameraCheck.stoppedAt(bundle))
+        #expect(abs(stopped - 1) < 0.2, "\(stopped)")
+        await CameraCheck.note(bundle)
+        #expect(try bundle.readProject().notes?["camera"]?.hasPrefix("The camera stopped at 0:01") == true)
+        // In the video, after its cuts: a cut before the stop moves it earlier.
+        try bundle.write(Edits(cuts: [TimeRange(start: 0, end: 0.9)]))
+        await CameraCheck.note(bundle)
+        #expect(try bundle.readProject().notes?["camera"]?.hasPrefix("The camera stopped at 0:00") == true)
+        // A later segment without any camera track (lost during a pause) counts too.
+        var withPause = try bundle.readProject()
+        withPause.segments = [.init(file: file, duration: 0.95, tracks: config.tracks), .init(file: file, duration: 2, tracks: [.screen])]
+        try bundle.write(withPause)
+        try FileManager.default.removeItem(at: bundle.editsURL)
+        #expect(await CameraCheck.stoppedAt(bundle) == 0.95)
+    }
 }

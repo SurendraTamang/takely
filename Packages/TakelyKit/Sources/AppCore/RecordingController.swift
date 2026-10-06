@@ -1,3 +1,4 @@
+import AVFoundation
 import CaptureKit
 import Foundation
 import OSLog
@@ -341,6 +342,7 @@ public final class RecordingController {
                 log.error("post-processing failed: \(error.localizedDescription)")
             }
         }
+        await CameraCheck.note(bundle)  // after post-processing: its cuts decide where in the video that is
         do {
             exportStage = "Exporting video…"
             let url = try await exporter.export(bundle) { setProgress(share + $0 * (1 - share)) }
@@ -349,8 +351,10 @@ public final class RecordingController {
                 await report(failure)
             } else {
                 let project = try? bundle.readProject()
+                // The video's own length (edits re-read now could already differ: the editor autosaves).
+                let exported = (try? await AVURLAsset(url: url).load(.duration).seconds).flatMap { $0 > 0 ? $0 : nil }
                 let cuts = (try? bundle.readEdits())?.cuts ?? []
-                let duration = project.map { EditMap(cuts: cuts, duration: $0.duration).outputDuration } ?? 0
+                let duration = exported ?? project.map { EditMap(cuts: cuts, duration: $0.duration).outputDuration } ?? 0
                 await feedback.recordingReady(url, duration: duration, title: project?.title)
             }
         } catch {
