@@ -480,4 +480,11 @@ final class ProgressLog: Sendable {
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: bundle.exportsURL.path).filter { $0.contains("partial") }
         #expect(leftovers.isEmpty)
     }
+
+    @Test func namedChaptersTakeTheRecordingsLanguage() {
+        let named = MovieExtras(markers: [Marker(t: 5, title: "Démarrage")], captionsLocale: "fr_FR")
+        #expect(MovieFinisher.chapterLanguage(named) == ("fra", "fr-FR"))
+        #expect(MovieFinisher.chapterLanguage(MovieExtras(markers: [Marker(t: 5)], captionsLocale: "fr_FR")) == ("eng", "en"))
+        #expect(MovieFinisher.chapterLanguage(MovieExtras(markers: [Marker(t: 5, title: "Intro")])) == ("eng", "en"))
+    }
 }

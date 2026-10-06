@@ -72,6 +72,11 @@
             if cut != cutWords { cutWords = cut }
         }
 
+        /// One frame of the recording as recorded (no zoom), e.g. to pick a zoom's focus on.
+        func frame(at t: Double, size: CGSize) async -> CGImage? {
+            await frames.frame(at: t, size: size)
+        }
+
         func loadWaveform() async {
             guard levels.isEmpty else { return }
             levels = (try? await Waveform.levels(of: session.bundle)) ?? []
@@ -426,6 +431,7 @@
         @Bindable var model: EditorModel
         let zoom: Zoom
         @State private var scale: Double?
+        @State private var picking = false
 
         var body: some View {
             HStack(spacing: 12) {
@@ -453,6 +459,9 @@
                     Text("Fixed").tag(false)
                 }
                 .pickerStyle(.segmented).fixedSize()
+                Button("Pick Point…") { picking = true }
+                    .help("Click where the zoom should stay, on the frame where it starts")
+                    .sheet(isPresented: $picking) { ZoomPointPicker(model: model, zoom: zoom) }
                 Spacer()
                 Button("Delete Zoom", role: .destructive) {
                     model.session.removeZoom(zoom.id)
@@ -460,6 +469,66 @@
                 }
             }
             .controlSize(.small)
+        }
+    }
+
+    /// The frame where a zoom starts, as recorded: a click there fixes the zoom's focus on that point.
+    private struct ZoomPointPicker: View {
+        let model: EditorModel
+        let zoom: Zoom
+        @State private var image: CGImage?
+        @State private var point: NormalizedPoint?
+        @Environment(\.dismiss) private var dismiss
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Click where the zoom should stay").font(.headline)
+                ZStack {
+                    Rectangle().fill(.black)
+                    if let image {
+                        Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
+                            .overlay {
+                                GeometryReader { geometry in
+                                    let shown = point ?? current
+                                    Circle().stroke(.yellow, lineWidth: 2).frame(width: 22, height: 22)
+                                        .position(x: shown.x * geometry.size.width, y: shown.y * geometry.size.height)
+                                        .allowsHitTesting(false)
+                                    Color.clear.contentShape(Rectangle())
+                                        .onTapGesture(coordinateSpace: .local) { location in
+                                            point = NormalizedPoint(
+                                                x: min(max(0, location.x / max(geometry.size.width, 1)), 1),
+                                                y: min(max(0, location.y / max(geometry.size.height, 1)), 1))
+                                        }
+                                }
+                            }
+                    } else {
+                        ProgressView()
+                    }
+                }
+                .frame(width: 640, height: 360)
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel) { dismiss() }
+                    Button("Use This Point") {
+                        if let point {
+                            var z = zoom
+                            z.focus = .point(point)
+                            model.session.update(z)
+                        }
+                        dismiss()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(point == nil)
+                }
+            }
+            .padding(16)
+            .task { image = await model.frame(at: zoom.start, size: CGSize(width: 1280, height: 720)) }
+        }
+
+        /// Where the zoom is focused now (a cursor-following zoom: where the cursor is as it starts).
+        private var current: NormalizedPoint {
+            if case .point(let p) = zoom.focus { return p }
+            return model.session.cursorPosition(at: zoom.start)
         }
     }
 

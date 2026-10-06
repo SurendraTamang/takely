@@ -155,4 +155,17 @@ final class FakeHost: AutomationHost {
         let link = ControlURL(URL(string: "takely://record/start?camera=0&mic=off&display=2")!)?.request
         #expect(link?.camera == false && link?.microphone == false && link?.display == 2)
     }
+
+    @Test func stopWithoutWaitingRefusesLikeStop() async {
+        let host = FakeHost()
+        let center = AutomationCenter(host: host)
+        #expect(center.stopWithoutWaiting().error == "Not recording.")
+        host.phase = .recording
+        host.isBusy = true  // pausing or retaking
+        #expect(center.stopWithoutWaiting().error?.hasPrefix("Takely is busy") == true)
+        host.isBusy = false
+        #expect(center.stopWithoutWaiting().ok)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(host.phase == .idle)  // the stop ran
+    }
 }

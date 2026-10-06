@@ -228,14 +228,31 @@ struct RecordingStatusIntent: AppIntent {
     }
 }
 
+/// Stops and returns at once (the export runs on; Ready says when it's done): for Siri and shortcuts that don't need
+/// the file, so a long export can't run past their time limit.
+struct StopRecordingWithoutWaitingIntent: AppIntent {
+    static let title: LocalizedStringResource = "Stop Recording Without Waiting"
+    static let description = IntentDescription(
+        "Stops recording and returns at once. The video is exported in the background; the Ready notification says when it's done.")
+    @Dependency var center: AutomationCenter
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        let reply = center.stopWithoutWaiting()
+        guard reply.ok else { throw AutomationError(message: reply.error ?? "Couldn't stop.") }
+        return .result()
+    }
+}
+
 struct TakelyShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: StartRecordingIntent(),
             phrases: ["Start a \(.applicationName) recording", "Record my screen with \(.applicationName)"],
             shortTitle: "Start Recording", systemImageName: "record.circle")
+        // Siri doesn't need the file, and a long export would outlast its wait: the one that returns at once.
         AppShortcut(
-            intent: StopRecordingIntent(), phrases: ["Stop the \(.applicationName) recording"], shortTitle: "Stop Recording",
+            intent: StopRecordingWithoutWaitingIntent(), phrases: ["Stop the \(.applicationName) recording"], shortTitle: "Stop Recording",
             systemImageName: "stop.circle")
         AppShortcut(
             intent: AddMarkerIntent(), phrases: ["Add a \(.applicationName) marker"], shortTitle: "Add Marker", systemImageName: "bookmark")
