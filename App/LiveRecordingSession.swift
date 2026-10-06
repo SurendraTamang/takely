@@ -162,15 +162,25 @@ final class LiveRecordingSession: RecordingSession {
             try await Task.sleep(for: .milliseconds(50))
             current = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         }
-        let canvas = current.windows.filter { $0.windowID == canvasID }
-        if canvas.isEmpty { log.error("drawing canvas not listed by ScreenCaptureKit; drawings won't be recorded") }
-        // Exclude the app, not a window snapshot, so windows opened later (the popover) never appear.
-        let ownApps = current.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        var canvas = current.windows.filter { $0.windowID == canvasID }
+        // Exclude the app, not a window snapshot, so windows opened later (the popover, drawing palette, prompter) never
+        // appear; a window snapshot is only the last resort.
+        var ownApps = current.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        var all: SCShareableContent?
+        if ownApps.isEmpty || canvas.isEmpty {
+            // Not listed in time: the full list (windows not shown yet included) usually has both — the app is then
+            // excluded (later windows stay out) with the canvas still recorded.
+            all = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            if ownApps.isEmpty { ownApps = all?.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier } ?? [] }
+            if canvas.isEmpty { canvas = all?.windows.filter { $0.windowID == canvasID } ?? [] }
+        }
+        if canvas.isEmpty { log.error("drawing canvas not listed by ScreenCaptureKit; excluding Takely's windows one by one") }
+        // Excluding the whole app would also drop an unlisted canvas (and the drawings): then the window snapshot.
         let filter =
-            ownApps.isEmpty
+            ownApps.isEmpty || canvas.isEmpty
             ? SCContentFilter(
                 display: display,
-                excludingWindows: current.windows.filter {
+                excludingWindows: (all ?? current).windows.filter {  // hidden ones too (a closed prompter)
                     $0.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier && $0.windowID != canvasID
                 })
             : SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: canvas)

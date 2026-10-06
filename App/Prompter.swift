@@ -135,6 +135,8 @@ private struct PrompterView: View {
     @State private var offset = 0.0
     @State private var maxOffset = 0.0
     @State private var lastTick: Date?
+    /// Where the scroll was over the last 20 s (a retake looks back at most 15 s): a retake returns to exactly there.
+    @State private var history: [(time: Date, offset: Double)] = []
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -172,7 +174,10 @@ private struct PrompterView: View {
                 .onScrollGeometryChange(for: [Double].self) { geometry in
                     [geometry.contentOffset.y, geometry.contentSize.height - geometry.containerSize.height]
                 } action: { _, values in
-                    if !model.scrolling || abs(values[0] - offset) > 2 { offset = values[0] }  // the user scrolled
+                    if !model.scrolling || abs(values[0] - offset) > 2 {  // the user scrolled
+                        offset = values[0]
+                        remember(offset)
+                    }
                     maxOffset = values[1]
                 }
                 .scaleEffect(x: settings.prompterMirrored ? -1 : 1, y: 1)
@@ -182,11 +187,19 @@ private struct PrompterView: View {
                         Color.clear.onChange(of: timeline.date) { _, now in step(to: now) }
                     }
                 }
-                .onChange(of: model.scrolling) { lastTick = nil }
+                .onChange(of: model.scrolling) {
+                    lastTick = nil
+                    remember(offset)  // where it started or stopped
+                }
+                .onChange(of: settings.prompterScript) { history = [] }  // positions in another text
                 .onChange(of: model.rewind?.id) {
                     // Only while it scrolls by itself (not paused, hidden, or moved by hand).
                     guard model.scrolling, let seconds = model.rewind?.seconds else { return }
-                    offset = max(0, offset - speed * seconds)
+                    let then = Date.now.addingTimeInterval(-seconds)
+                    // Where it actually was then (pauses, hand scrolling and the end of the script included); before
+                    // the oldest record, where it was then.
+                    offset = history.last { $0.time <= then }?.offset ?? history.first?.offset ?? max(0, offset - speed * seconds)
+                    history.removeAll { $0.time > then }
                     position.scrollTo(y: offset)
                 }
                 .focusable()
@@ -208,6 +221,7 @@ private struct PrompterView: View {
     private func nudge(_ distance: Double) -> KeyPress.Result {
         offset = min(max(0, offset + distance), max(0, maxOffset))
         position.scrollTo(y: offset)
+        remember(offset)
         return .handled
     }
 
@@ -225,6 +239,15 @@ private struct PrompterView: View {
         let speed = speed
         offset = PrompterScroll.advance(offset, by: now.timeIntervalSince(last), speed: speed, maxOffset: maxOffset)
         position.scrollTo(y: offset)
+        if history.last.map({ now.timeIntervalSince($0.time) >= 0.25 }) ?? true { remember(offset, at: now) }  // 4 a second
+    }
+
+    /// Notes where the scroll is, keeping 20 s (plus the newest older record, so every look back has a start).
+    private func remember(_ offset: Double, at now: Date = .now) {
+        history.append((now, offset))
+        if let anchor = history.lastIndex(where: { now.timeIntervalSince($0.time) > 20 }), anchor > 0 {
+            history.removeFirst(anchor)
+        }
     }
 
     private var toolbar: some View {

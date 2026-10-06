@@ -216,6 +216,10 @@ public struct Exporter: Sendable {
             && !renderer.hasAvatar
             && presentAudioKinds.count <= 1
             && !audioNeedsMixing(project: project, presentAudio: presentAudioKinds)
+            // Copied as is, each segment's audio (a little shorter than its video) leaves an empty edit at every join,
+            // and players that honour only the first edit (some browsers) then drift ~30 ms per pause: rendered, the
+            // audio is one continuous edit.
+            && (project.segments.count <= 1 || presentAudioKinds.isEmpty)
         guard !passthrough else {
             return Built(
                 composition: composition, videoComposition: nil, audioMix: nil, project: project, map: map, cues: cues,
