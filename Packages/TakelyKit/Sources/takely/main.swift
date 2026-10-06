@@ -8,6 +8,7 @@ let usage = """
 
       record start [--no-countdown] [--region x,y,w,h]   start recording (the chosen display, or an area)
              [--display n] [--no-camera] [--no-mic]       display n (1 = leftmost); without camera or microphone
+             [--window <app or title>]                    a window: the app's name or bundle ID, or text in its title
       record stop                                        stop, export, and print the video's path
       pause | resume | marker | retake | discard         while recording
       status                                             what Takely is doing
@@ -58,6 +59,9 @@ while let option = rest.popFirst() {
     case "--display" where command == .start:
         guard let number = rest.popFirst().flatMap({ Int($0) }), number >= 1 else { exit(2, "--display needs a number from 1 (leftmost).") }
         request.display = number
+    case "--window" where command == .start:
+        guard let text = rest.popFirst(), !text.isEmpty else { exit(2, "--window needs an app name, bundle ID or title text.") }
+        request.window = text
     case "--region" where command == .start:
         let numbers = (rest.popFirst() ?? "").split(separator: ",").compactMap { Double($0) }
         guard numbers.count == 4, numbers[2] > 0, numbers[3] > 0 else { exit(2, "--region needs x,y,width,height (points).") }

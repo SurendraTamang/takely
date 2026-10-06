@@ -63,6 +63,13 @@ final class PrompterModel {
     var scrolling = false
     var editing = false
     var practicing = false
+    /// A retake took back this many seconds: the time-paced scroll goes back as far (`id` changes per request).
+    private(set) var rewind: (id: Int, seconds: Double)?
+
+    func rewind(by seconds: Double) {
+        guard seconds > 0 else { return }
+        rewind = ((rewind?.id ?? 0) + 1, seconds)
+    }
 
     init(settings: RecordingSettings, live: LiveStatus, practice: @escaping (Bool) -> Void) {
         self.settings = settings
@@ -176,6 +183,12 @@ private struct PrompterView: View {
                     }
                 }
                 .onChange(of: model.scrolling) { lastTick = nil }
+                .onChange(of: model.rewind?.id) {
+                    // Only while it scrolls by itself (not paused, hidden, or moved by hand).
+                    guard model.scrolling, let seconds = model.rewind?.seconds else { return }
+                    offset = max(0, offset - speed * seconds)
+                    position.scrollTo(y: offset)
+                }
                 .focusable()
                 .focusEffectDisabled()
                 .focused($focused)
@@ -198,13 +211,18 @@ private struct PrompterView: View {
         return .handled
     }
 
+    /// Points per second that read the script in its spoken time.
+    private var speed: Double {
+        let words = model.settings.prompterScript.split(whereSeparator: \.isWhitespace).count
+        return PrompterScroll.pointsPerSecond(
+            scrollableHeight: maxOffset, wordCount: words, wordsPerMinute: model.settings.prompterWordsPerMinute)
+    }
+
     /// Advances by the time since the last frame, at the pace that reads the script in its spoken time.
     private func step(to now: Date) {
         defer { lastTick = now }
         guard let last = lastTick else { return }
-        let words = model.settings.prompterScript.split(whereSeparator: \.isWhitespace).count
-        let speed = PrompterScroll.pointsPerSecond(
-            scrollableHeight: maxOffset, wordCount: words, wordsPerMinute: model.settings.prompterWordsPerMinute)
+        let speed = speed
         offset = PrompterScroll.advance(offset, by: now.timeIntervalSince(last), speed: speed, maxOffset: maxOffset)
         position.scrollTo(y: offset)
     }

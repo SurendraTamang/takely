@@ -148,7 +148,8 @@ final class FakeHost: AutomationHost {
         let zero = await center.perform(ControlRequest(.start, display: 0))
         #expect(!zero.ok && host.started == nil)
         let both = await center.perform(ControlRequest(.start, region: CGRect(x: 0, y: 0, width: 100, height: 100), display: 2))
-        #expect(both.error == "Give a display or a region, not both.")
+        #expect(both.error == "Give one of a display, a region or a window.")
+        #expect(await center.perform(ControlRequest(.start, display: 1, window: "Safari")).error == both.error)
         #expect(await center.perform(ControlRequest(.start, camera: false, microphone: false, display: 2)).ok)
         #expect(host.started == StartOptions(camera: false, microphone: false, display: 2))
         let link = ControlURL(URL(string: "takely://record/start?camera=0&mic=off&display=2")!)?.request

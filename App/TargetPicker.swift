@@ -70,20 +70,24 @@ final class TargetPicker {
     }
 
     /// The window clicked, from the on-screen windows of other apps; nil if cancelled or none can be listed.
-    func pickWindow() async -> SCWindow? {
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) else { return nil }
+    /// On-screen app windows Takely can record (not its own, not tiny ones), front to back.
+    static func recordableWindows() async -> [SCWindow] {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) else { return [] }
         let own = Bundle.main.bundleIdentifier
-        // Front-to-back order, so the topmost window under the pointer wins.
         let order = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
             .compactMap { $0[kCGWindowNumber as String] as? CGWindowID }
         let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
-        let windows = content.windows
+        return content.windows
             .filter {
                 $0.windowLayer == 0 && $0.isOnScreen && $0.owningApplication?.bundleIdentifier != own
                     && $0.frame.width >= CaptureGeometry.minimumSize && $0.frame.height >= CaptureGeometry.minimumSize
             }
             .sorted { rank[$0.windowID, default: .max] < rank[$1.windowID, default: .max] }
-            .map(PickableWindow.init)
+    }
+
+    func pickWindow() async -> SCWindow? {
+        // Front-to-back order, so the topmost window under the pointer wins.
+        let windows = await Self.recordableWindows().map(PickableWindow.init)
         let picked: PickableWindow? = await present { screen, _, finish in
             AnyView(WindowSelectionView(screen: screen, windows: windows, finish: finish))
         } confirm: {

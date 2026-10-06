@@ -78,8 +78,10 @@ final class LiveRecordingSession: RecordingSession {
     }
 
     private func startNow(in folder: URL) async throws -> RecordingHandle {
+        // Read once, before any wait: another start being prepared meanwhile mustn't change what this one records.
         let meeting = meetingMode
         let options = nextStart
+        let target = target
         let useCamera = settings.camera && !meeting && options.camera != false
         let useMicrophone = (settings.microphone && options.microphone != false) || meeting
         cameraDecided(useCamera)

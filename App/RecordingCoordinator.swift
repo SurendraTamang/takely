@@ -71,18 +71,22 @@ final class RecordingCoordinator {
         guard controller.phase == .idle, !controller.isBusy, !picking else { return }
         picking = true
         defer { picking = false }
-        session.nextStart = StartOptions()  // the person's own start: their settings, not an earlier automation's
+        let target: LiveRecordingSession.Target
         switch settings.target {
         case .display:
-            session.target = .display
+            target = .display
         case .window:
             guard let window = await picker.pickWindow() else { return }
-            session.target = .window(window)
+            target = .window(window)
         case .region:
             guard let region = await picker.pickRegion(initial: settings.region) else { return }
             settings.region = region
-            session.target = .region(region)
+            target = .region(region)
         }
+        // Something else (automation, a meeting) may have started while the picker was open.
+        guard controller.phase == .idle, !controller.isBusy else { return NSSound.beep() }
+        session.target = target
+        session.nextStart = StartOptions()  // the person's own start: their settings, not an earlier automation's
         await controller.start()
     }
 
@@ -99,6 +103,8 @@ final class RecordingCoordinator {
     func retake() async -> Bool {
         guard controller.phase == .recording, let cut = await controller.retake() else { return false }
         live.rewind(to: cut)
+        // A time-paced prompter goes back as far as the take did (one following the voice rewinds through `live`).
+        prompter.model.rewind(by: CMClockGetTime(CMClockGetHostTimeClock()).seconds - cut)
         NSSound(named: "Pop")?.play()
         // The cut may have removed the bubble's latest hide or move: record where it is now.
         recordBubble(visible: settings.camera && bubbleShown)
