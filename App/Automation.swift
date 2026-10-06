@@ -34,6 +34,11 @@ extension RecordingCoordinator: AutomationHost {
                     "No window on screen matches “\(query)” (an app's name or bundle ID, or text in a window's title)."
                 return
             }
+            // The lookup waited: the person (or a meeting) may have started a recording meanwhile.
+            guard controller.phase == .idle, !controller.isBusy else {
+                controller.errorMessage = "Takely is busy."
+                return
+            }
             session.target = .window(windows[index])
         } else {
             session.target = options.region.map { .region($0) } ?? .display
@@ -120,6 +125,9 @@ final class Automation {
             // Checked again after the confirmation: a demo that started meanwhile could have pressed Allow itself.
             let demoRunning = { command.request.command != .status && self.center.isDemoRunning }
             if demoRunning() { return refuse("A demo is running.") }
+            // A window can be recorded even when covered, and a match (or no match) tells a web page which apps and
+            // titles are open: links can't choose one (the `takely` command can).
+            if command.request.window != nil { return refuse("Links can't choose a window: use the takely command.") }
             if command.request.command != .status, !settings.allowLinkControl, !(await confirm(command.request.command)) {
                 return refuse("Not allowed.")
             }

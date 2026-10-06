@@ -184,7 +184,8 @@ private struct PrompterView: View {
                 }
                 .onChange(of: model.scrolling) { lastTick = nil }
                 .onChange(of: model.rewind?.id) {
-                    guard let seconds = model.rewind?.seconds else { return }
+                    // Only while it scrolls by itself (not paused, hidden, or moved by hand).
+                    guard model.scrolling, let seconds = model.rewind?.seconds else { return }
                     offset = max(0, offset - speed * seconds)
                     position.scrollTo(y: offset)
                 }

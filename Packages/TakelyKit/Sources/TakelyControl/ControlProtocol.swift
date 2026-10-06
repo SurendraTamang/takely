@@ -101,7 +101,7 @@ public struct ControlURL: Sendable, Equatable {
         if let camera = query["camera"], off(camera) { request.camera = false }
         if let microphone = query["mic"], off(microphone) { request.microphone = false }
         request.display = query["display"].map { Int($0) ?? 0 }
-        request.window = query["window"]
+        request.window = query["window"]  // parsed so the app can refuse it (links can't choose a window)
         if let region = query["region"] {
             // Kept even when malformed, so the command is refused instead of recording the whole display.
             request.region = region.split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces)) ?? -1 }
