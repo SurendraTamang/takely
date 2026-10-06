@@ -13,7 +13,8 @@ enum CameraCheck {
         var offset = 0.0
         for segment in project.segments {
             defer { offset += segment.duration }
-            guard let index = segment.tracks.firstIndex(of: .camera) else { continue }
+            // No camera track in a segment (lost during a pause, or never delivered a frame): stopped as it began.
+            guard let index = segment.tracks.firstIndex(of: .camera) else { return offset }
             let asset = AVURLAsset(url: bundle.segmentURL(segment.file))
             guard let tracks = try? await asset.load(.tracks).sorted(by: { $0.trackID < $1.trackID }), tracks.indices.contains(index),
                 let range = try? await tracks[index].load(.timeRange)
@@ -24,12 +25,15 @@ enum CameraCheck {
         return nil
     }
 
-    /// Notes (or clears) "The camera stopped at m:ss" on the recording.
+    /// Notes (or clears) "The camera stopped at m:ss" on the recording, at that point in the video (after its cuts).
     static func note(_ bundle: ProjectBundle) async {
         let stopped = await stoppedAt(bundle)
         guard var project = try? bundle.readProject() else { return }
-        let text = stopped.map {
-            "The camera stopped at \(Duration.seconds($0).formatted(.time(pattern: .minuteSecond))): the bubble is hidden from there."
+        let cuts = (try? bundle.readEdits())?.cuts ?? []
+        let text = stopped.map { t in
+            let at = EditMap(cuts: cuts, duration: project.duration).position(t)
+            return "The camera stopped at \(Duration.seconds(at).formatted(.time(pattern: .minuteSecond))): "
+                + "the bubble is hidden where it has no picture."
         }
         guard project.notes?["camera"] != text else { return }
         project.setNote("camera", text)

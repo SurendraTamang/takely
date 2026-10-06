@@ -63,5 +63,15 @@ import Testing
         #expect(abs(stopped - 1) < 0.2, "\(stopped)")
         await CameraCheck.note(bundle)
         #expect(try bundle.readProject().notes?["camera"]?.hasPrefix("The camera stopped at 0:01") == true)
+        // In the video, after its cuts: a cut before the stop moves it earlier.
+        try bundle.write(Edits(cuts: [TimeRange(start: 0, end: 0.9)]))
+        await CameraCheck.note(bundle)
+        #expect(try bundle.readProject().notes?["camera"]?.hasPrefix("The camera stopped at 0:00") == true)
+        // A later segment without any camera track (lost during a pause) counts too.
+        var withPause = try bundle.readProject()
+        withPause.segments = [.init(file: file, duration: 0.95, tracks: config.tracks), .init(file: file, duration: 2, tracks: [.screen])]
+        try bundle.write(withPause)
+        try FileManager.default.removeItem(at: bundle.editsURL)
+        #expect(await CameraCheck.stoppedAt(bundle) == 0.95)
     }
 }

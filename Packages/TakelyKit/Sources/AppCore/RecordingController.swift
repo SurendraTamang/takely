@@ -327,7 +327,6 @@ public final class RecordingController {
     private func exportAndReport(_ bundle: ProjectBundle, failure: String? = nil, diskFull: Bool = false) async {
         phase = .exporting(0)
         wakeWaiters()
-        await CameraCheck.note(bundle)  // before post-processing, which also writes the manifest
         // Post-processing (transcript, AI title) takes the first fifth of the progress bar, when there is one.
         let share = postProcessor == nil ? 0.0 : 0.2
         let setProgress: @Sendable (Double) -> Void = { progress in
@@ -343,6 +342,7 @@ public final class RecordingController {
                 log.error("post-processing failed: \(error.localizedDescription)")
             }
         }
+        await CameraCheck.note(bundle)  // after post-processing: its cuts decide where in the video that is
         do {
             exportStage = "Exporting video…"
             let url = try await exporter.export(bundle) { setProgress(share + $0 * (1 - share)) }
