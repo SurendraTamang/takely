@@ -72,13 +72,18 @@ final class Sharing {
         self.notifier = notifier
         // Off the main thread: reading keys another build of Takely saved makes macOS ask first (the app mustn't
         // freeze until that's answered).
-        Task {
+        initialRead = Task {
             let read = await Task.detached(priority: .userInitiated) { Self.readCredentials() }.value
-            if credentials == nil { credentials = read }
+            guard !Task.isCancelled else { return }  // saved or cleared in Settings meanwhile: that wins
+            credentials = read
         }
     }
 
+    /// The launch read of the saved keys (cancelled if they're saved or cleared before it ends).
+    private var initialRead: Task<Void, Never>?
+
     func reloadCredentials() {
+        initialRead?.cancel()
         credentials = Self.readCredentials()
     }
 

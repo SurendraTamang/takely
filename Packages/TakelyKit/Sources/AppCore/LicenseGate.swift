@@ -9,10 +9,13 @@ public enum LicenseState: Sendable, Equatable {
     case licensed(product: String)
     /// No trial left and no valid key: Pro features are off (the rest of Takely keeps working).
     case locked(reason: String)
+    /// Not known yet (being read) or unreadable (Keychain access refused): Pro stays on meanwhile — a paying user is
+    /// never locked out by a prompt.
+    case unverified(reason: String)
 
     public var unlocksPro: Bool {
         switch self {
-        case .trial, .licensed: true
+        case .trial, .licensed, .unverified: true
         case .locked: false
         }
     }

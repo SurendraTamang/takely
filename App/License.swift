@@ -18,9 +18,13 @@
                     case .trial(let days): Text("Free trial: \(days) day\(days == 1 ? "" : "s") left")
                     case .licensed(let product): Text("\(product) — active on this Mac")
                     case .locked(let reason): Text(reason).foregroundStyle(.red)
+                    case .unverified(let reason): Text(reason).foregroundStyle(.secondary)
                     }
                 }
-                if license.hasKey {
+                if case .unverified = license.state {
+                    // Still reading (or access refused): no key field or Buy until it's known whether a key is here.
+                    Button(working ? "Checking…" : "Check Again") { run { await license.refresh(force: true) } }.disabled(working)
+                } else if license.hasKey {
                     HStack {
                         Button(working ? "Working…" : "Check Again") { run { await license.refresh(force: true) } }
                             .disabled(working)
