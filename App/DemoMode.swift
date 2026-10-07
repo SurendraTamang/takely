@@ -128,6 +128,7 @@
             runner.onFailure = { [weak self] index, error in await self?.askAfterFailure(index, error) ?? .stop }
             // Once the steps are over, hand the keyboard back (stopping and exporting can take a while).
             runner.onStepsDone = { [weak self] in
+                narrator.stopPlaying()  // Esc mid-line: silent before the recording stops (a microphone would keep it)
                 KeyboardShortcuts.disable(.stopDemo)
                 self?.banner?.orderOut(nil)
                 self?.banner = nil
