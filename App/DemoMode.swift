@@ -309,7 +309,7 @@
         // MARK: Avatar
 
         /// Where the person's avatar is kept (only on this Mac).
-        static let avatarFolder = URL.applicationSupportDirectory.appending(path: "Takely/Avatar", directoryHint: .isDirectory)
+        static var avatarFolder: URL { AvatarFiles.folder }
         var hasAvatar = FileManager.default.fileExists(atPath: avatarFolder.appending(path: "avatar.json").path)
         var avatarImage: NSImage? = NSImage(contentsOf: avatarFolder.appending(path: "avatar.png"))
         var showAvatar = UserDefaults.standard.object(forKey: "demoShowAvatar") as? Bool ?? true {

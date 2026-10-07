@@ -58,6 +58,8 @@ final class RecordingSettings {
     /// Takely Pro: the prompter follows the voice; the live coach shows pace and fillers while recording.
     var prompterFollowsVoice: Bool { didSet { defaults.set(prompterFollowsVoice, forKey: Key.prompterFollowsVoice) } }
     var liveCoach: Bool { didSet { defaults.set(liveCoach, forKey: Key.liveCoach) } }
+    /// Puts the person's avatar (made in Demo Mode) in recordings made without the camera; it talks with the microphone.
+    var avatarWhenCameraOff: Bool { didSet { defaults.set(avatarWhenCameraOff, forKey: Key.avatarWhenCameraOff) } }
     /// Takely Pro: keys, emails and card numbers seen on screen are blurred in the export.
     var redactSecrets: Bool { didSet { defaults.set(redactSecrets, forKey: Key.redactSecrets) } }
     /// Takely Pro: zoom in on bursts of clicks; cut long pauses where nothing happens on screen (both off: exports
@@ -119,6 +121,7 @@ final class RecordingSettings {
         aiSummary = defaults.object(forKey: Key.aiSummary) as? Bool ?? true
         prompterFollowsVoice = defaults.object(forKey: Key.prompterFollowsVoice) as? Bool ?? true
         liveCoach = defaults.object(forKey: Key.liveCoach) as? Bool ?? true
+        avatarWhenCameraOff = defaults.bool(forKey: Key.avatarWhenCameraOff)
         burnInCaptions = defaults.bool(forKey: Key.burnInCaptions)
         autoZoom = defaults.bool(forKey: Key.autoZoom)
         removeSilences = defaults.bool(forKey: Key.removeSilences)
@@ -161,6 +164,7 @@ final class RecordingSettings {
         static let aiSummary = "aiSummary"
         static let prompterFollowsVoice = "prompterFollowsVoice"
         static let liveCoach = "liveCoach"
+        static let avatarWhenCameraOff = "avatarWhenCameraOff"
         static let burnInCaptions = "burnInCaptions"
         static let redactSecrets = "redactSecrets"
         static let transcriptionLanguage = "transcriptionLanguage"

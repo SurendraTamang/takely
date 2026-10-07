@@ -203,11 +203,17 @@ public struct Exporter: Sendable {
             }
         }
         _ = narrationAssets
-        // The avatar stands in for a camera that wasn't recorded, and talks when the narration does (output time).
-        let avatar = tracks[.camera] == nil && !spokenLines.isEmpty ? Self.avatarImage(bundle) : nil
+        // The avatar stands in for a camera that wasn't recorded (its files are in the bundle only when the person
+        // chose it), and talks when the narration does — or, without narration, when the microphone does (output time).
+        var avatar: (image: CIImage, face: AvatarFace, voice: VoiceLevels)?
+        if tracks[.camera] == nil, let picture = Self.avatarImage(bundle) {
+            var lines = spokenLines
+            if lines.isEmpty, let mic = tracks[.mic], let rms = await Self.loudness(of: mic, in: composition) { lines = [(0, rms)] }
+            if !lines.isEmpty { avatar = (picture.image, picture.face, VoiceLevels.place(lines, duration: map.outputDuration)) }
+        }
         let renderer = FrameRenderer(
             project: project, cursor: cursorTrack, captions: cues, redactions: redactions, zooms: edits.zooms,
-            avatar: avatar.map { ($0.image, $0.face, VoiceLevels.place(spokenLines, duration: map.outputDuration)) })
+            avatar: avatar.map { ($0.image, $0.face, $0.voice) })
 
         let presentAudioKinds = [TrackKind.system, .mic].filter { tracks[$0] != nil }
         let passthrough =
@@ -284,6 +290,57 @@ public struct Exporter: Sendable {
             let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
         return (CIImage(cgImage: image), face)
+    }
+
+    /// RMS loudness of a composed audio track (output time, cuts applied), `VoiceLevels.rate` values a second; below
+    /// −45 dBFS counts as silent (room noise doesn't keep the mouth open). Nil if it can't be read.
+    static func loudness(of track: AVCompositionTrack, in composition: AVComposition) async -> [Float]? {
+        let rate = 16_000.0
+        guard let reader = try? AVAssetReader(asset: composition) else { return nil }
+        let output = AVAssetReaderTrackOutput(
+            track: track,
+            outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: rate, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false,
+            ])
+        guard reader.canAdd(output) else { return nil }
+        reader.add(output)
+        guard reader.startReading() else { return nil }
+        let window = Int(rate / VoiceLevels.rate)
+        var sums: [Float] = []
+        var counts: [Int] = []
+        while let sample = output.copyNextSampleBuffer() {
+            guard let block = sample.dataBuffer else { continue }
+            let start = Int((sample.presentationTimeStamp.seconds * rate).rounded())
+            var length = 0
+            var pointer: UnsafeMutablePointer<CChar>?
+            guard
+                CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &pointer)
+                    == noErr,
+                let pointer
+            else { continue }
+            let frames = length / 4
+            guard start >= 0, frames > 0 else { continue }
+            let needed = (start + frames) / window + 1
+            if sums.count < needed {
+                sums += [Float](repeating: 0, count: needed - sums.count)
+                counts += [Int](repeating: 0, count: needed - counts.count)
+            }
+            pointer.withMemoryRebound(to: Float.self, capacity: frames) { floats in
+                for i in 0..<frames {
+                    let bucket = (start + i) / window
+                    sums[bucket] += floats[i] * floats[i]
+                    counts[bucket] += 1
+                }
+            }
+        }
+        guard reader.status == .completed else { return nil }
+        let levels = zip(sums, counts).map { sum, count -> Float in
+            guard count > 0 else { return 0 }
+            let rms = (sum / Float(count)).squareRoot()
+            return rms >= 0.005_623 ? rms : 0
+        }
+        return levels.contains { $0 > 0 } ? levels : nil
     }
 
     /// RMS loudness of an audio file, `VoiceLevels.rate` values a second.
