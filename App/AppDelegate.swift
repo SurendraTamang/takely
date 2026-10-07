@@ -451,7 +451,7 @@ extension NSAlert {
     /// re-enter, so every other main-actor task (hotkey actions, the menu bar timer, recording updates) waits until
     /// the alert is answered. Started from the run loop instead, they keep running.
     func runModalFromRunLoop() async -> NSApplication.ModalResponse {
-        nonisolated(unsafe) let alert = self
+        let alert = self
         return await withCheckedContinuation { continuation in
             RunLoop.main.perform { MainActor.assumeIsolated { continuation.resume(returning: alert.runModal()) } }
         }

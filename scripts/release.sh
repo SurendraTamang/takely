@@ -4,6 +4,8 @@
 #
 #   scripts/release.sh 0.2.0            # needs the Apple Developer Program (see below)
 #   scripts/release.sh 0.2.0 --dry-run  # prints every step instead of running it
+#   scripts/release.sh 0.2.0 --local    # a Release build and DMG for this Mac only (ad-hoc signed, not notarized,
+#                                       # no appcast): checks the release build and packaging without the Developer Program
 #
 # Environment (put it in a gitignored .env.release and `source` it):
 #   DEVELOPER_ID          "Developer ID Application: Your Name (TEAMID)" — in your login keychain
@@ -18,9 +20,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-version="${1:?usage: scripts/release.sh <version> [--dry-run]}"
+version="${1:?usage: scripts/release.sh <version> [--dry-run | --local]}"
 dry=0
 [[ "${2:-}" == "--dry-run" ]] && dry=1
+local_build=0
+[[ "${2:-}" == "--local" ]] && local_build=1
 build_number="${BUILD_NUMBER:-$(date -u +%Y%m%d%H%M)}"
 dist="dist/$version"
 # Every release's DMG stays here, so the appcast lists them all (and Sparkle can make deltas).
@@ -34,6 +38,27 @@ run() {
     printf '\n'
     if ((!dry)); then "$@"; fi
 }
+
+# --local: the same Release archive, ad-hoc signed (runs only on Macs that allow it, like this one), in a DMG. The
+# license, update and buy settings are used when set (unset: a development build, Pro unlocked, no updates).
+if ((local_build)); then
+    echo "==> Takely $version local build (ad-hoc signed; not notarized; no appcast)"
+    run rm -rf "$dist"
+    run mkdir -p "$dist/export"
+    run xcodegen generate --quiet --spec project.pro.yml
+    run xcodebuild archive -project Takely.xcodeproj -scheme Takely -configuration Release \
+        -destination "generic/platform=macOS" -archivePath "$dist/Takely.xcarchive" -derivedDataPath build \
+        MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build_number" \
+        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_HARDENED_RUNTIME=YES \
+        TAKELY_APPCAST_URL="${TAKELY_APPCAST_URL:-}" TAKELY_SPARKLE_PUBLIC_KEY="${TAKELY_SPARKLE_PUBLIC_KEY:-}" \
+        TAKELY_LICENSE_URL="${TAKELY_LICENSE_URL:-}" TAKELY_LICENSE_PRODUCT_IDS="${TAKELY_LICENSE_PRODUCT_IDS:-}" \
+        TAKELY_BUY_URL="${TAKELY_BUY_URL:-}"
+    run ditto "$dist/Takely.xcarchive/Products/Applications/Takely.app" "$app"
+    run codesign --verify --deep --strict --verbose=2 "$app"
+    run hdiutil create -volname "Takely" -srcfolder "$app" -ov -format UDZO "$dist/Takely-$version-local.dmg"
+    echo "==> Done: $dist/Takely-$version-local.dmg (this Mac only)"
+    exit 0
+fi
 
 need() {
     for name in "$@"; do

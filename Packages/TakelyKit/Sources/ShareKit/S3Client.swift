@@ -105,7 +105,7 @@ public struct S3Client: Sendable {
         var headers = ["Content-Type": contentType]
         if let cacheControl { headers["Cache-Control"] = cacheControl }
         let fixed = headers
-        try await retrying { try await send("PUT", url(key), body: data, headers: fixed) }
+        _ = try await retrying { try await send("PUT", url(key), body: data, headers: fixed) }
     }
 
     public func delete(_ key: String) async throws {
