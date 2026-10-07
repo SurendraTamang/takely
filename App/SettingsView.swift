@@ -128,7 +128,9 @@ struct SettingsView: View {
                     Toggle("Live speaking coach (pace, filler words)", isOn: $settings.liveCoach)
                     Toggle(isOn: $settings.avatarWhenCameraOff) {
                         Text("Show my avatar when the camera is off")
-                        Text(AvatarFiles.exists ? "It talks when you do." : "Make your avatar in Demo Mode first.")
+                        Text(
+                            AvatarFiles.exists
+                                ? "It talks when you do (it needs the microphone)." : "Make your avatar in Demo Mode first.")
                     }
                     .disabled(!AvatarFiles.exists && !settings.avatarWhenCameraOff)
                     Text("On this Mac, in the system language. AI needs Apple Intelligence (System Settings › Apple Intelligence & Siri).")

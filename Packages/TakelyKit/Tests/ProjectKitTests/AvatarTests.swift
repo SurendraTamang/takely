@@ -21,4 +21,12 @@ import Testing
         #expect(levels.level(at: 2.5) == 0)
         #expect(VoiceLevels.place([], duration: 2).samples.allSatisfy { $0 == 0 })
     }
+
+    @Test func oneLoudBumpDoesntFlattenTheSpeech() {
+        // 3 s of speech at 0.1, one desk bump at 1.0.
+        var rms = [Float](repeating: 0.1, count: 90)
+        rms[45] = 1
+        let voice = VoiceLevels.place([(0, rms)], duration: 3)
+        #expect(voice.level(at: 1.0) > 0.8, "speech opens the mouth: \(voice.level(at: 1.0))")
+    }
 }

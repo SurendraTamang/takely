@@ -32,6 +32,8 @@ final class RecordingCoordinator {
     /// Whether the bubble is on screen (when the camera is on). Separate from `settings.camera`, which decides
     /// whether recordings include the camera: hiding the bubble doesn't turn the camera off for the next take.
     private var bubbleShown = false
+    /// Set by Demo Mode for its recording: whether its avatar shows (nil: the setting decides).
+    var avatarChoice: Bool?
     /// Whether the current recording has the camera (set as each start begins); only read while recording.
     private var recordingHasCamera = true
     private var wasRecording = false
@@ -226,7 +228,10 @@ final class RecordingCoordinator {
         if old == .starting, new == .recording, let router = session.active?.router {
             prompter.model.practicing = false
             // No camera in this recording (not a meeting: the call shows the people): the person's avatar stands in.
-            if settings.avatarWhenCameraOff, !recordingHasCamera, !session.meetingMode, let bundle = controller.recordingBundle {
+            // A demo decides for itself (its own avatar switch).
+            if avatarChoice ?? settings.avatarWhenCameraOff, !recordingHasCamera, !session.meetingMode,
+                let bundle = controller.recordingBundle
+            {
                 AvatarFiles.copy(into: bundle)
             }
             Task {

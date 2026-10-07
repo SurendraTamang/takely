@@ -63,8 +63,9 @@ public struct VoiceLevels: Sendable, Equatable {
         return i >= 0 && i < samples.count ? Double(samples[i]) : 0
     }
 
-    /// Per-clip loudness envelopes placed at their times, scaled so the loudest moment is 1, and smoothed like a
-    /// mouth moves (opens fast, closes a little slower).
+    /// Per-clip loudness envelopes placed at their times, scaled so loud speech (the 95th percentile of the sound,
+    /// not one bump on the desk) opens the mouth fully, and smoothed like a mouth moves (opens fast, closes a little
+    /// slower).
     public static func place(_ clips: [(t: Double, rms: [Float])], duration: Double) -> VoiceLevels {
         var samples = [Float](repeating: 0, count: max(0, Int((duration * rate).rounded(.up))))
         for clip in clips {
@@ -73,8 +74,9 @@ public struct VoiceLevels: Sendable, Equatable {
                 samples[start + i] = max(samples[start + i], value)
             }
         }
-        let peak = samples.max() ?? 0
-        guard peak > 0 else { return VoiceLevels(samples: samples) }
+        let sounding = samples.filter { $0 > 0 }.sorted()
+        guard !sounding.isEmpty else { return VoiceLevels(samples: samples) }
+        let peak = sounding[min(sounding.count - 1, Int(Double(sounding.count) * 0.95))]
         var smoothed = samples
         var current: Float = 0
         for i in samples.indices {

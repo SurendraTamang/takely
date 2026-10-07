@@ -28,10 +28,12 @@
         /// Stop was asked for before the steps began (e.g. while the confirmation was open).
         private var stopRequested = false
         private let center: AutomationCenter
+        private let coordinator: RecordingCoordinator
 
         init(center: AutomationCenter, coordinator: RecordingCoordinator) {
             model = DemoModel()
             self.center = center
+            self.coordinator = coordinator
             let makeRecorder = { [model] in
                 let recorder = AppDemoRecorder(center: center, coordinator: coordinator)
                 if model.showAvatar, model.hasAvatar { recorder.avatar = DemoModel.avatarFolder }
@@ -139,6 +141,7 @@
                 }
             }
             let result = await runner.run()
+            coordinator.avatarChoice = nil  // back to the setting for the person's own recordings
             observer.cancel()
             self.runner = nil
             switch result {
@@ -248,17 +251,10 @@
         var avatar: URL?
 
         func start() async throws {
+            // The demo's own avatar switch decides (the coordinator copies it in when the recording has no camera).
+            coordinator.avatarChoice = avatar != nil
             let reply = await center.perform(ControlRequest(.start, countdown: false))
             guard reply.ok else { throw Failed(errorDescription: reply.error) }
-            // The avatar stands in for the camera: only in recordings made without it.
-            if let avatar, let bundle, (try? bundle.readProject())?.camera.enabled == false {
-                do {
-                    try FileManager.default.copyItem(at: avatar.appending(path: "avatar.png"), to: bundle.avatarImageURL)
-                    try FileManager.default.copyItem(at: avatar.appending(path: "avatar.json"), to: bundle.avatarFaceURL)
-                } catch {
-                    Logger(subsystem: "app.takely", category: "demo").error("avatar not added: \(error.localizedDescription)")
-                }
-            }
         }
 
         func stop() async throws -> URL {

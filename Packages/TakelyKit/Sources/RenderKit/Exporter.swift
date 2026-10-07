@@ -3,6 +3,7 @@ import CoreImage
 import ImageIO
 import OSLog
 import ProjectKit
+import Synchronization
 
 /// Turns a finished `.takely` bundle into `exports/<name>.mp4`.
 public struct Exporter: Sendable {
@@ -208,7 +209,9 @@ public struct Exporter: Sendable {
         var avatar: (image: CIImage, face: AvatarFace, voice: VoiceLevels)?
         if tracks[.camera] == nil, let picture = Self.avatarImage(bundle) {
             var lines = spokenLines
-            if lines.isEmpty, let mic = tracks[.mic], let rms = await Self.loudness(of: mic, in: composition) { lines = [(0, rms)] }
+            if lines.isEmpty, tracks[.mic] != nil, let rms = try await Self.micLoudness(bundle, project: project) {
+                lines = [(0, Self.outputLevels(rms, map: map))]
+            }
             if !lines.isEmpty { avatar = (picture.image, picture.face, VoiceLevels.place(lines, duration: map.outputDuration)) }
         }
         let renderer = FrameRenderer(
@@ -292,55 +295,78 @@ public struct Exporter: Sendable {
         return (CIImage(cgImage: image), face)
     }
 
-    /// RMS loudness of a composed audio track (output time, cuts applied), `VoiceLevels.rate` values a second; below
-    /// −45 dBFS counts as silent (room noise doesn't keep the mouth open). Nil if it can't be read.
-    static func loudness(of track: AVCompositionTrack, in composition: AVComposition) async -> [Float]? {
+    /// The microphone's loudness over the whole recording (recording time), `VoiceLevels.rate` values a second, read
+    /// once per recording and kept: the editor's preview composes again at every edit. Below −45 dBFS counts as
+    /// silent (room noise doesn't keep the mouth open). Nil without a microphone or any sound.
+    static func micLoudness(_ bundle: ProjectBundle, project: Project) async throws -> [Float]? {
+        let key = bundle.url.path + "|" + project.segments.map { "\($0.file):\($0.duration)" }.joined(separator: ",")
+        if let cached = loudnessCache.withLock({ $0[key] }) { return cached }
         let rate = 16_000.0
-        guard let reader = try? AVAssetReader(asset: composition) else { return nil }
-        let output = AVAssetReaderTrackOutput(
-            track: track,
-            outputSettings: [
-                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: rate, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 32,
-                AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false,
-            ])
-        guard reader.canAdd(output) else { return nil }
-        reader.add(output)
-        guard reader.startReading() else { return nil }
         let window = Int(rate / VoiceLevels.rate)
-        var sums: [Float] = []
-        var counts: [Int] = []
-        while let sample = output.copyNextSampleBuffer() {
-            guard let block = sample.dataBuffer else { continue }
-            let start = Int((sample.presentationTimeStamp.seconds * rate).rounded())
-            var length = 0
-            var pointer: UnsafeMutablePointer<CChar>?
-            guard
-                CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &pointer)
-                    == noErr,
-                let pointer
-            else { continue }
-            let frames = length / 4
-            guard start >= 0, frames > 0 else { continue }
-            let needed = (start + frames) / window + 1
-            if sums.count < needed {
-                sums += [Float](repeating: 0, count: needed - sums.count)
-                counts += [Int](repeating: 0, count: needed - counts.count)
-            }
-            pointer.withMemoryRebound(to: Float.self, capacity: frames) { floats in
-                for i in 0..<frames {
-                    let bucket = (start + i) / window
-                    sums[bucket] += floats[i] * floats[i]
+        var sums = [Float](repeating: 0, count: Int((project.duration * VoiceLevels.rate).rounded(.up)) + 1)
+        var counts = [Int](repeating: 0, count: sums.count)
+        var offset = 0.0
+        for segment in project.segments {
+            defer { offset += segment.duration }
+            guard let index = segment.tracks.firstIndex(of: .mic) else { continue }
+            let asset = AVURLAsset(url: bundle.segmentURL(segment.file))
+            let tracks = try await asset.load(.tracks).sorted { $0.trackID < $1.trackID }
+            guard tracks.count == segment.tracks.count else { continue }
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(
+                track: tracks[index],
+                outputSettings: [
+                    AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: rate, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 32,
+                    AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false,
+                ])
+            guard reader.canAdd(output) else { continue }
+            reader.add(output)
+            guard reader.startReading() else { continue }
+            defer { reader.cancelReading() }
+            let first = Int((offset * rate).rounded())
+            let last = Int(((offset + segment.duration) * rate).rounded())  // a retake's cut: nothing after it
+            while let sample = output.copyNextSampleBuffer() {
+                try Task.checkCancellation()
+                guard let block = sample.dataBuffer else { continue }
+                // Copied out: a buffer can span several memory blocks (a pointer covers only the first).
+                let frames = CMSampleBufferGetNumSamples(sample)
+                var floats = [Float](repeating: 0, count: frames)
+                let copied = floats.withUnsafeMutableBytes { raw in
+                    CMBlockBufferCopyDataBytes(
+                        block, atOffset: 0, dataLength: min(raw.count, CMBlockBufferGetDataLength(block)), destination: raw.baseAddress!)
+                }
+                guard copied == kCMBlockBufferNoErr else { continue }
+                let start = first + Int((sample.presentationTimeStamp.seconds * rate).rounded())
+                for (i, value) in floats.enumerated() {
+                    let position = start + i
+                    guard position < last else { break }
+                    let bucket = position / window
+                    guard bucket >= 0, bucket < sums.count else { continue }
+                    sums[bucket] += value * value
                     counts[bucket] += 1
                 }
             }
         }
-        guard reader.status == .completed else { return nil }
         let levels = zip(sums, counts).map { sum, count -> Float in
             guard count > 0 else { return 0 }
             let rms = (sum / Float(count)).squareRoot()
             return rms >= 0.005_623 ? rms : 0
         }
-        return levels.contains { $0 > 0 } ? levels : nil
+        let result = levels.contains { $0 > 0 } ? levels : nil
+        loudnessCache.withLock { $0[key] = result }
+        return result
+    }
+
+    /// Mic loudness per recording (the editor composes again at each edit); small: ~0.4 MB per hour.
+    private static let loudnessCache = Mutex<[String: [Float]?]>([:])
+
+    /// Recording-time levels re-placed on the output timeline (after the cuts).
+    static func outputLevels(_ levels: [Float], map: EditMap) -> [Float] {
+        let count = Int((map.outputDuration * VoiceLevels.rate).rounded(.up))
+        return (0..<count).map { i in
+            let source = Int((map.sourceTime(Double(i) / VoiceLevels.rate) * VoiceLevels.rate).rounded(.down))
+            return levels.indices.contains(source) ? levels[source] : 0
+        }
     }
 
     /// RMS loudness of an audio file, `VoiceLevels.rate` values a second.
