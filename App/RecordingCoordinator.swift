@@ -3,6 +3,8 @@ import AppKit
 import CaptureKit
 import CoreMedia
 import KeyboardShortcuts
+import OSLog
+import ProjectKit
 import SwiftUI
 
 /// What happens around the controller's commands: the target picker before a recording, the camera bubble and the
@@ -30,6 +32,8 @@ final class RecordingCoordinator {
     /// Whether the bubble is on screen (when the camera is on). Separate from `settings.camera`, which decides
     /// whether recordings include the camera: hiding the bubble doesn't turn the camera off for the next take.
     private var bubbleShown = false
+    /// Set by Demo Mode for its recording: whether its avatar shows (nil: the setting decides).
+    var avatarChoice: Bool?
     /// Whether the current recording has the camera (set as each start begins); only read while recording.
     private var recordingHasCamera = true
     private var wasRecording = false
@@ -223,6 +227,13 @@ final class RecordingCoordinator {
         if old == .starting, new != .recording { live.discardPrepared() }
         if old == .starting, new == .recording, let router = session.active?.router {
             prompter.model.practicing = false
+            // No camera in this recording (not a meeting: the call shows the people): the person's avatar stands in.
+            // A demo decides for itself (its own avatar switch).
+            if avatarChoice ?? settings.avatarWhenCameraOff, !recordingHasCamera, !session.meetingMode,
+                let bundle = controller.recordingBundle
+            {
+                AvatarFiles.copy(into: bundle)
+            }
             Task {
                 await live.startRecording(router: router, script: script, coach: settings.liveCoach, locale: settings.transcriptionLocale)
             }
@@ -390,5 +401,23 @@ private struct ControlBar: View {
         alert.window.level = .floating
         NSApp.activate()
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+/// The person's avatar (made in Demo Mode), kept on this Mac; a recording gets a copy to render it.
+enum AvatarFiles {
+    static let folder = URL.applicationSupportDirectory.appending(path: "Takely/Avatar", directoryHint: .isDirectory)
+    static var exists: Bool { FileManager.default.fileExists(atPath: folder.appending(path: "avatar.json").path) }
+
+    static func copy(into bundle: ProjectBundle) {
+        guard exists else { return }
+        for (name, destination) in [("avatar.png", bundle.avatarImageURL), ("avatar.json", bundle.avatarFaceURL)]
+        where !FileManager.default.fileExists(atPath: destination.path) {
+            do {
+                try FileManager.default.copyItem(at: folder.appending(path: name), to: destination)
+            } catch {
+                Logger(subsystem: "app.takely", category: "app").error("avatar not added: \(error.localizedDescription)")
+            }
+        }
     }
 }

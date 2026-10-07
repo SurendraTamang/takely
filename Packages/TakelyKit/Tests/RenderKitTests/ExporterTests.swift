@@ -339,6 +339,48 @@ import Testing
         #expect(voice.level(at: 1.5) > 0.5 && voice.level(at: 0.5) == 0 && voice.level(at: 2.5) == 0)
     }
 
+    /// Without narration, the avatar talks when the microphone does (a recording made without the camera).
+    @Test func theAvatarTalksWithTheMicrophoneWithoutNarration() async throws {
+        let bundle = try ProjectBundle.create(in: Synthetic.temporaryFolder())
+        let config = WriterConfig(
+            tracks: [.screen, .mic], screenSize: PixelSize(width: 320, height: 200), cameraSize: PixelSize(width: 160, height: 90),
+            codec: .h264, fps: 30, videoBitrate: 1_000_000)
+        let file = ProjectBundle.segmentFileName(index: 0)
+        let writer = try SegmentWriter(url: bundle.segmentURL(file), config: config)
+        var nextAudio = 1000.0
+        for i in 0..<90 {  // 3 s; speech (a loud tone) from 1 s to 2 s
+            let t = 1000 + Double(i) / 30
+            writer.append(Synthetic.video(width: 320, height: 200, pts: Synthetic.seconds(t), rgb: (255, 0, 0)), as: .screen)
+            while nextAudio <= t {
+                let loud = nextAudio >= 1001 && nextAudio < 1002
+                let samples = (0..<1024).map { loud ? Float(0.3 * sin(Double($0) * 0.06)) : 0 }
+                writer.append(Synthetic.audio(pts: Synthetic.seconds(nextAudio), samples: samples, channels: 1), as: .mic)
+                nextAudio += 1024.0 / 48_000
+            }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let duration = try await writer.finish(at: Synthetic.seconds(1003)) ?? 0
+        var project = Project(
+            status: .finished, capture: .init(target: .display, pixelSize: PixelSize(width: 320, height: 200), fps: 30, codec: .h264),
+            camera: .init(enabled: false))
+        project.segments = [.init(file: file, duration: duration, tracks: config.tracks)]
+        try bundle.write(project)
+        let none = try await Exporter.compose(bundle, edits: Edits())
+        #expect(!none.renderer.hasAvatar)  // no avatar files: no avatar
+        let image = CIImage(color: CIColor(red: 0.9, green: 0.7, blue: 0.6)).cropped(to: CGRect(x: 0, y: 0, width: 64, height: 64))
+        let cg = try #require(CIContext().createCGImage(image, from: image.extent))
+        let destination = try #require(CGImageDestinationCreateWithURL(bundle.avatarImageURL as CFURL, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, cg, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        let face = AvatarFace(
+            mouth: .init(x: 0.4, y: 0.7, width: 0.2, height: 0.1), leftEye: .init(x: 0.3, y: 0.3, width: 0.1, height: 0.05),
+            rightEye: .init(x: 0.6, y: 0.3, width: 0.1, height: 0.05), skin: [0.9, 0.7, 0.6])
+        try JSONEncoder().encode(face).write(to: bundle.avatarFaceURL)
+        let built = try await Exporter.compose(bundle, edits: Edits())
+        let voice = try #require(built.renderer.avatarVoice)
+        #expect(voice.level(at: 1.5) > 0.5 && voice.level(at: 0.5) == 0 && voice.level(at: 2.6) < 0.05, "\(voice.samples)")
+    }
+
     @Test func oddCutsLeaveNoGapsInAnyTrack() async throws {
         let bundle = try await makeBundle(
             segments: [SegSpec(seconds: 2, tracks: [.screen, .mic]), SegSpec(seconds: 2, tracks: [.screen, .mic])], cameraEnabled: false)
