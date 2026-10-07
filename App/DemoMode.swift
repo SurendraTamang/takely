@@ -120,11 +120,15 @@
             }
             model.running = true
             defer { model.running = false }
-            let runner = DemoRunner(script: script, actions: GuardedActions(), recorder: recorder, narrator: Narrator(voice: voice))
+            let narrator = Narrator(voice: voice)
+            narrator.playsAloud = model.playAloud
+            defer { narrator.stopPlaying() }
+            let runner = DemoRunner(script: script, actions: GuardedActions(), recorder: recorder, narrator: narrator)
             self.runner = runner
             runner.onFailure = { [weak self] index, error in await self?.askAfterFailure(index, error) ?? .stop }
             // Once the steps are over, hand the keyboard back (stopping and exporting can take a while).
             runner.onStepsDone = { [weak self] in
+                narrator.stopPlaying()  // Esc mid-line: silent before the recording stops (a microphone would keep it)
                 KeyboardShortcuts.disable(.stopDemo)
                 self?.banner?.orderOut(nil)
                 self?.banner = nil
@@ -308,6 +312,10 @@
         static var avatarFolder: URL { AvatarFiles.folder }
         var hasAvatar = FileManager.default.fileExists(atPath: avatarFolder.appending(path: "avatar.json").path)
         var avatarImage: NSImage? = NSImage(contentsOf: avatarFolder.appending(path: "avatar.png"))
+        /// Plays the narration aloud while the demo runs (the recording has it either way).
+        var playAloud = UserDefaults.standard.bool(forKey: "demoPlayAloud") {
+            didSet { UserDefaults.standard.set(playAloud, forKey: "demoPlayAloud") }
+        }
         var showAvatar = UserDefaults.standard.object(forKey: "demoShowAvatar") as? Bool ?? true {
             didSet { UserDefaults.standard.set(showAvatar, forKey: "demoShowAvatar") }
         }
@@ -463,6 +471,10 @@
                     Button("Run & Record") { model.start() }
                         .keyboardShortcut(.defaultAction)
                         .disabled((try? model.parsed.get())?.steps.isEmpty ?? true || model.running || model.planning)
+                }
+                Toggle(isOn: $model.playAloud) {
+                    Text("Play the narration aloud while recording")
+                    Text("Use headphones, or record without the microphone: it would hear the narration.")
                 }
                 avatarRow
                 if let message = model.message { Text(message).font(.callout).foregroundStyle(.secondary) }
