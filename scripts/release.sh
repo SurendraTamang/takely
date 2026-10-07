@@ -4,6 +4,8 @@
 #
 #   scripts/release.sh 0.2.0            # needs the Apple Developer Program (see below)
 #   scripts/release.sh 0.2.0 --dry-run  # prints every step instead of running it
+#   scripts/release.sh 0.2.0 --local    # a Release build and DMG for this Mac only (ad-hoc signed, not notarized,
+#                                       # no appcast): checks the release build and packaging without the Developer Program
 #
 # Environment (put it in a gitignored .env.release and `source` it):
 #   DEVELOPER_ID          "Developer ID Application: Your Name (TEAMID)" — in your login keychain
@@ -18,9 +20,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-version="${1:?usage: scripts/release.sh <version> [--dry-run]}"
+version="${1:?usage: scripts/release.sh <version> [--dry-run | --local]}"
 dry=0
 [[ "${2:-}" == "--dry-run" ]] && dry=1
+local_build=0
+[[ "${2:-}" == "--local" ]] && local_build=1
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "error: the version must look like 1.2.3 (got \"$version\")" >&2; exit 1; }
 build_number="${BUILD_NUMBER:-$(date -u +%Y%m%d%H%M)}"
 dist="dist/$version"
 # Every release's DMG stays here, so the appcast lists them all (and Sparkle can make deltas).
@@ -34,6 +39,48 @@ run() {
     printf '\n'
     if ((!dry)); then "$@"; fi
 }
+
+# --local: the same Release archive, ad-hoc signed, in a DMG, for this Mac. Without the hardened runtime: ad-hoc
+# signatures have no Team ID, and the runtime's library validation would refuse to load Sparkle (it can't start).
+# In its own folder, so it never touches a real release's archive (its dSYMs). The license, update and buy settings
+# are used when set (unset: a development build, Pro unlocked, no updates). Launched once to check it starts.
+if ((local_build)); then
+    echo "==> Takely $version local build (ad-hoc signed; no hardened runtime; not notarized; no appcast)"
+    dist="dist/$version-local"
+    app="$dist/export/Takely.app"
+    run rm -rf "$dist"
+    run mkdir -p "$dist/export"
+    run xcodegen generate --quiet --spec project.pro.yml
+    run xcodebuild archive -project Takely.xcodeproj -scheme Takely -configuration Release \
+        -destination "generic/platform=macOS" -archivePath "$dist/Takely.xcarchive" -derivedDataPath build \
+        MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build_number" \
+        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_HARDENED_RUNTIME=NO \
+        TAKELY_APPCAST_URL="${TAKELY_APPCAST_URL:-}" TAKELY_SPARKLE_PUBLIC_KEY="${TAKELY_SPARKLE_PUBLIC_KEY:-}" \
+        TAKELY_LICENSE_URL="${TAKELY_LICENSE_URL:-}" TAKELY_LICENSE_PRODUCT_IDS="${TAKELY_LICENSE_PRODUCT_IDS:-}" \
+        TAKELY_BUY_URL="${TAKELY_BUY_URL:-}"
+    run ditto "$dist/Takely.xcarchive/Products/Applications/Takely.app" "$app"
+    run codesign --verify --deep --strict --verbose=2 "$app"
+    # A valid signature doesn't mean it loads: start it and check it's still running a few seconds later.
+    if ((!dry)); then
+        if pgrep -qx Takely; then
+            echo "note: Takely is running, so the launch check is skipped (quit it and run again to check)"
+        else
+            "$app/Contents/MacOS/Takely" >"$dist/launch.log" 2>&1 &
+            pid=$!
+            sleep 4
+            if ! kill -0 "$pid" 2>/dev/null; then
+                echo "error: the built app exited at launch:" >&2
+                cat "$dist/launch.log" >&2
+                exit 1
+            fi
+            kill "$pid"
+            echo "launch check: started and kept running"
+        fi
+    fi
+    run hdiutil create -volname "Takely" -srcfolder "$app" -ov -format UDZO "$dist/Takely-$version-local.dmg"
+    echo "==> Done: $dist/Takely-$version-local.dmg (this Mac only)"
+    exit 0
+fi
 
 need() {
     for name in "$@"; do

@@ -28,6 +28,7 @@ final class GentleReminders: NSObject, SPUStandardUserDriverDelegate {
 
     func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState)
     {
-        if handleShowingUpdate, !state.userInitiated { NSApp.activate() }
+        // Sparkle calls this on the main thread, but nothing in its signature says so: hop explicitly.
+        if handleShowingUpdate, !state.userInitiated { Task { @MainActor in NSApp.activate() } }
     }
 }
