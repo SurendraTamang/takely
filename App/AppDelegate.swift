@@ -183,7 +183,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: Quit
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if quitInProgress { return .terminateCancel }  // a repeated ⌘Q; the pending quit finishes on its own
+        if quitInProgress {
+            // A logout or restart while a ⌘Q waits for the export: once the recording is saved, let it go ahead (the
+            // unfinished export is offered at the next launch) rather than cancel the logout.
+            if isSystemQuit() {
+                switch controller.phase {
+                case .idle, .exporting: return .terminateNow
+                default: break
+                }
+            }
+            return .terminateCancel  // a repeated ⌘Q; the pending quit finishes on its own
+        }
         guard controller.phase != .idle || controller.isBusy else { return .terminateNow }
         let system = isSystemQuit()
         if !system && (controller.isRecording || controller.phase == .starting) {
