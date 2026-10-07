@@ -183,7 +183,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: Quit
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if quitInProgress { return .terminateCancel }  // a repeated ⌘Q; the pending quit finishes on its own
+        if quitInProgress {
+            // A logout or restart while a ⌘Q waits for the export: once the recording is saved, let it go ahead (the
+            // unfinished export is offered at the next launch) rather than cancel the logout.
+            if quitEventIsSystem() {  // this quit's own reason: a cancelled logout's notice mustn't end a ⌘Q's export
+                switch controller.phase {
+                case .idle, .exporting: return .terminateNow
+                default: break
+                }
+            }
+            return .terminateCancel  // a repeated ⌘Q; the pending quit finishes on its own
+        }
         guard controller.phase != .idle || controller.isBusy else { return .terminateNow }
         let system = isSystemQuit()
         if !system && (controller.isRecording || controller.phase == .starting) {
@@ -221,6 +231,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Logout, restart and shutdown send a quit event with a reason; a user ⌘Q has none.
     private func isSystemQuit() -> Bool {
         if let noticed = powerOffNoticedAt, ContinuousClock.now - noticed < .seconds(60) { return true }
+        return quitEventIsSystem()
+    }
+
+    /// The current quit event itself says logout/restart/shutdown (not a notice from an earlier, maybe cancelled one).
+    private func quitEventIsSystem() -> Bool {
         guard let event = NSAppleEventManager.shared().currentAppleEvent,
             let reason = event.attributeDescriptor(forKeyword: AEKeyword(kAEQuitReason))?.enumCodeValue
         else { return false }
