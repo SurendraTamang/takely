@@ -71,6 +71,25 @@ The engine is the `TakelyKit` Swift package (`Packages/TakelyKit`):
 
 The app target in `App/` is the menu bar UI.
 
+## Testing a local build
+
+`scripts/release.sh 1.0.0 --local` makes a Release build of the app and a DMG in `dist/1.0.0-local/` for this Mac (no
+Apple Developer Program needed). It launches the build once to check it starts.
+
+macOS ties privacy permissions (Screen Recording, Camera, Microphone) to how an app is signed:
+
+- With an **Apple Development** certificate in your keychain (free: sign in with your Apple ID in Xcode › Settings ›
+  Accounts, then *Manage Certificates › +*), local builds are signed with it and keep their permissions across rebuilds.
+- Without one, builds are signed ad hoc and each rebuild counts as a new app: grant Screen Recording again after every
+  rebuild. If System Settings shows Takely switched on but recording still says it's off, reset it and grant it again:
+
+  ```sh
+  tccutil reset ScreenCapture app.takely.Takely
+  ```
+
+  Several copies of Takely on the Mac (old builds, Xcode's) can take the permission instead of the one you run. The
+  local build registers itself as the one to use; `scripts/check.sh` unregisters its own test build.
+
 ## License
 
 Takely is licensed under the [GNU Affero General Public License v3.0](LICENSE). Third-party components and their licenses are listed in [NOTICE](NOTICE).
