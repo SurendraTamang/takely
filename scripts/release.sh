@@ -40,25 +40,51 @@ run() {
     if ((!dry)); then "$@"; fi
 }
 
-# --local: the same Release archive, ad-hoc signed, in a DMG, for this Mac. Without the hardened runtime: ad-hoc
-# signatures have no Team ID, and the runtime's library validation would refuse to load Sparkle (it can't start).
+# --local: the same Release archive in a DMG, for this Mac. Signed with an "Apple Development" certificate when the
+# keychain has one (free with an Apple ID in Xcode › Settings › Accounts): macOS then keeps privacy permissions across
+# rebuilds, and the hardened runtime stays on. Otherwise ad-hoc, without the hardened runtime: ad-hoc signatures have
+# no Team ID, and the runtime's library validation would refuse to load Sparkle (it can't start); permissions must be
+# granted again after every rebuild.
 # In its own folder, so it never touches a real release's archive (its dSYMs). The license, update and buy settings
 # are used when set (unset: a development build, Pro unlocked, no updates). Launched once to check it starts.
 if ((local_build)); then
-    echo "==> Takely $version local build (ad-hoc signed; no hardened runtime; not notarized; no appcast)"
+    echo "==> Takely $version local build (not notarized; no appcast)"
     dist="dist/$version-local"
     app="$dist/export/Takely.app"
     run rm -rf "$dist"
     run mkdir -p "$dist/export"
-    run xcodegen generate --quiet --spec project.pro.yml
+    # With Takely Pro when it's here (the private checkout), else the open-source app.
+    spec=project.yml
+    [[ -d Packages/TakelyPro ]] && spec=project.pro.yml
+    run xcodegen generate --quiet --spec "$spec"
+    development=$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1 || true)
+    team=""
+    if [[ -n "$development" ]]; then
+        team=$(security find-certificate -c "$development" -p 2>/dev/null | openssl x509 -noout -subject 2>/dev/null |
+            sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' || true)
+    fi
+    if [[ -n "$development" && -n "$team" ]]; then
+        echo "signing with: $development"
+        signing=(CODE_SIGN_IDENTITY="$development" DEVELOPMENT_TEAM="$team" ENABLE_HARDENED_RUNTIME=YES)
+    else
+        echo "no Apple Development certificate: ad-hoc (grant permissions again after each rebuild)"
+        signing=(CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_HARDENED_RUNTIME=NO)
+    fi
     run xcodebuild archive -project Takely.xcodeproj -scheme Takely -configuration Release \
         -destination "generic/platform=macOS" -archivePath "$dist/Takely.xcarchive" -derivedDataPath build \
         MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build_number" \
-        CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ENABLE_HARDENED_RUNTIME=NO \
+        CODE_SIGN_STYLE=Manual "${signing[@]}" \
         TAKELY_APPCAST_URL="${TAKELY_APPCAST_URL:-}" TAKELY_SPARKLE_PUBLIC_KEY="${TAKELY_SPARKLE_PUBLIC_KEY:-}" \
         TAKELY_LICENSE_URL="${TAKELY_LICENSE_URL:-}" TAKELY_LICENSE_PRODUCT_IDS="${TAKELY_LICENSE_PRODUCT_IDS:-}" \
         TAKELY_BUY_URL="${TAKELY_BUY_URL:-}"
     run ditto "$dist/Takely.xcarchive/Products/Applications/Takely.app" "$app"
+    # Only this copy registered with macOS, so permissions granted in System Settings go to it (stale copies with the
+    # same bundle ID — older builds, Xcode's — can take them otherwise).
+    lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    if ((!dry)); then
+        "$lsregister" -u build/Build/Intermediates.noindex/ArchiveIntermediates/Takely/InstallationBuildProductsLocation/Applications/Takely.app 2>/dev/null || true
+        "$lsregister" -f "$app"
+    fi
     run codesign --verify --deep --strict --verbose=2 "$app"
     # A valid signature doesn't mean it loads: start it and check it's still running a few seconds later.
     if ((!dry)); then

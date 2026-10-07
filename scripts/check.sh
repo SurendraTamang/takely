@@ -31,5 +31,9 @@ if [[ -f project.yml ]]; then
     # With Takely Pro when it's here (the private checkout), else the open-source app.
     if [[ -d Packages/TakelyPro ]]; then xcodegen generate --quiet --spec project.pro.yml; else xcodegen generate --quiet; fi
     xcodebuild -project Takely.xcodeproj -scheme Takely -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath build build -quiet
+    # This build only checks that the app compiles. Left registered, it's one more Takely that macOS may tie a privacy
+    # permission (Screen Recording…) to instead of the copy being tested: unregister it.
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+        -u build/Build/Products/Debug/Takely.app 2>/dev/null || true
 fi
 echo "==> all checks passed"
