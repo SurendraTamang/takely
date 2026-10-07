@@ -70,15 +70,22 @@ final class Sharing {
     init(settings: RecordingSettings, notifier: ReadyNotifier) {
         self.settings = settings
         self.notifier = notifier
-        reloadCredentials()
+        // Off the main thread: reading keys another build of Takely saved makes macOS ask first (the app mustn't
+        // freeze until that's answered).
+        Task {
+            let read = await Task.detached(priority: .userInitiated) { Self.readCredentials() }.value
+            if credentials == nil { credentials = read }
+        }
     }
 
     func reloadCredentials() {
-        if let access = ShareKeychain.read("access-key"), let secret = ShareKeychain.read("secret"), !access.isEmpty, !secret.isEmpty {
-            credentials = (access, secret)
-        } else {
-            credentials = nil
-        }
+        credentials = Self.readCredentials()
+    }
+
+    private nonisolated static func readCredentials() -> (access: String, secret: String)? {
+        guard let access = ShareKeychain.read("access-key"), let secret = ShareKeychain.read("secret"), !access.isEmpty, !secret.isEmpty
+        else { return nil }
+        return (access, secret)
     }
 
     var isConfigured: Bool { settings.shareBucket != nil && credentials != nil }
