@@ -176,7 +176,7 @@ public struct ShareService: Sendable {
     }
 }
 
-public enum ShareError: Error, LocalizedError {
+public enum ShareError: Error, LocalizedError, Equatable {
     case notExported
     case notConfigured
     case otherBucket(String)
@@ -234,7 +234,9 @@ public final class ShareSnapshot: Sendable {
     /// Strict (automation): the bundle must sit directly in one of `folders` (checked on what's actually opened),
     /// with no symbolic link under it, and each file must be a regular file with no other hard link (else it could be
     /// any file on the volume); captions that aren't WebVTT are left out; there must be a preview; and the copy is
-    /// hashed before and after the preview is read, and checked again part by part as it's uploaded.
+    /// hashed before and after the preview is read, and checked again part by part as it's uploaded. (Not caught: a
+    /// process that opened the copy in the instant it had a name, changing it only while the preview is read and
+    /// back afterwards — two tight races. An AVAssetResourceLoader serving checked bytes would close it.)
     /// Not strict (the person shares it from Takely): the export as it is, links and all.
     public static func make(of bundle: ProjectBundle, inside folders: [URL], strict: Bool = true) async throws -> ShareSnapshot {
         let allowed = Set(folders.compactMap(realPath))
@@ -261,8 +263,8 @@ public final class ShareSnapshot: Sendable {
             (try? await asset.loadTracks(withMediaType: .video).first?.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
         let chapters = await ShareService.chapters(asset)
 
-        // Only a handle opened in the instant the copy had a name could still write to it: a change while the
-        // preview was read shows here, a later one when its part is uploaded.
+        // Only a handle opened in the instant the copy had a name could still write to it: a change that's still
+        // there shows here, a later one when its part is uploaded.
         let after = strict ? try partDigests(descriptor) : nil
         if let before, let after, before.parts != after.parts || before.size != after.size {
             throw ShareError.changedWhileReading
@@ -307,10 +309,14 @@ public final class ShareSnapshot: Sendable {
         return descriptor
     }
 
+    /// Up to the size it had when the copy began: a file that keeps growing can't fill the disk.
     static func copy(from source: Int32, to destination: Int32) throws {
+        var info = stat()
+        guard fstat(source, &info) == 0 else { throw ShareError.copyFailed }
+        let size = Int(info.st_size)
         var offset = 0
-        while true {
-            let chunk = try readFully(source, offset..<(offset + (8 << 20)), exact: false)
+        while offset < size {
+            let chunk = try readFully(source, offset..<min(offset + (8 << 20), size), exact: false)
             if chunk.isEmpty { return }
             let written = chunk.withUnsafeBytes { pwrite(destination, $0.baseAddress, chunk.count, off_t(offset)) }
             guard written == chunk.count else { throw ShareError.copyFailed }

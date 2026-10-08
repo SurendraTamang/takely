@@ -211,17 +211,22 @@ final class Sharing {
             snapshot.title.flatMap { $0.isEmpty ? nil : "Title: \($0)" },
             snapshot.summary.flatMap { $0.isEmpty ? nil : "Summary: \($0)" },
             snapshot.chapters.isEmpty ? nil : "Chapters: " + snapshot.chapters.map(\.title).joined(separator: ", "),
-            cues.isEmpty ? nil : "Captions: “" + cues.prefix(3).joined(separator: " ") + (cues.count > 3 ? " …" : "") + "”",
+            cues.isEmpty
+                ? nil
+                : (cues.count > 3 ? "Captions (\(cues.count) lines, the first 3): “" : "Captions: “")
+                    + cues.prefix(3).joined(separator: " ") + "”",
         ]
         .compactMap { $0 }.map { clipped($0, to: 300) }
     }
 
-    /// One line of at most `limit` Unicode scalars: text anyone could have written can't fill or reshape the alert.
+    /// One line of at most `limit` Unicode scalars, saying how much more is published: text anyone could have
+    /// written can't fill or reshape the alert (line and paragraph separators included).
     static func clipped(_ text: String, to limit: Int) -> String {
+        let breaks = CharacterSet.controlCharacters.union(.newlines)
         var scalars = String.UnicodeScalarView()
-        scalars.append(
-            contentsOf: text.unicodeScalars.prefix(limit).map { CharacterSet.controlCharacters.contains($0) ? " " : $0 })
-        return String(scalars) + (text.unicodeScalars.count > limit ? "…" : "")
+        scalars.append(contentsOf: text.unicodeScalars.prefix(limit).map { breaks.contains($0) ? " " : $0 })
+        let more = text.unicodeScalars.count - limit
+        return String(scalars) + (more > 0 ? "… (\(more) more characters)" : "")
     }
 
     /// Uploads (or re-uploads, keeping the link), then copies the link and says so.

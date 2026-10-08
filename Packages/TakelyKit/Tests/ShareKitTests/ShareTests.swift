@@ -197,8 +197,26 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
             descriptor: descriptor, sealed: try ShareSnapshot.partDigests(descriptor), poster: Data([0xFF, 0xD8]), duration: 1,
             dimensions: CGSize(width: 64, height: 64), chapters: [], title: nil, summary: nil, captions: nil)
         _ = Data("evil".utf8).withUnsafeBytes { pwrite(descriptor, $0.baseAddress, 4, 100) }
-        await #expect(throws: ShareError.self) { try await ShareService(client: client()).share(bundle, snapshot: snapshot) }
+        await #expect(throws: ShareError.changedWhileReading) {
+            try await ShareService(client: client()).share(bundle, snapshot: snapshot)
+        }
         #expect(FakeS3.state.withLock { $0.objects.keys.filter { $0.hasSuffix("index.html") || $0.contains("/video-") } }.isEmpty)
+    }
+
+    /// The same in parts: the changed part stops the upload, which is aborted.
+    @Test func aChangedPartStopsAMultipartUpload() async throws {
+        let client = client()
+        let file = try file(bytes: 17 << 20)
+        let descriptor = open(file.path, O_RDWR)
+        defer { close(descriptor) }
+        let sealed = try ShareSnapshot.partDigests(descriptor)
+        #expect(sealed.parts.count == 3)
+        _ = Data("evil".utf8).withUnsafeBytes { pwrite(descriptor, $0.baseAddress, 4, off_t(16 << 20)) }
+        await #expect(throws: ShareError.changedWhileReading) {
+            try await client.upload(descriptor: descriptor, sealed: sealed, key: "k", contentType: "video/mp4")
+        }
+        for _ in 0..<40 where FakeS3.state.withLock({ $0.aborted.isEmpty }) { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(FakeS3.state.withLock { $0.aborted.count } == 1 && FakeS3.state.withLock { $0.objects["videos/k"] } == nil)
     }
 
     /// The page's text is what the person was shown, even if project.json changes afterwards.
@@ -217,6 +235,17 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
             String(decoding: $0, as: UTF8.self)
         }
         #expect(page?.contains("Shown title") == true && page?.contains("Swapped") == false)
+    }
+
+    @Test func theFallbackCopyStopsAtTheSizeItStartedWith() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(repeating: 7, count: 100).write(to: folder.appending(path: "a"))
+        let source = open(folder.appending(path: "a").path, O_RDONLY)
+        let destination = open(folder.appending(path: "b").path, O_RDWR | O_CREAT, 0o600)
+        defer { close(source); close(destination) }
+        try ShareSnapshot.copy(from: source, to: destination)
+        #expect(try Data(contentsOf: folder.appending(path: "b")) == Data(repeating: 7, count: 100))
     }
 
     @Test func aFileCutShortWhileReadingThrows() throws {
