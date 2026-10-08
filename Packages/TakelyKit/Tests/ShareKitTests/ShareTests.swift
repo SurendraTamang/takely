@@ -450,4 +450,24 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
         await #expect(throws: ShareError.self) { try await make(bundle) }
     }
 
+    /// What the person reads before sharing: all of it, only what's there, nothing that can reorder or fake lines.
+    @Test func thePublishedTextIsShownInFull() {
+        let captions = Data(
+            "WEBVTT\n\nNOTE made by Takely\n\n1\n00:00.000 --> 00:02.000\nHello there\n\n00:02.000 --> 00:04.000\nsecond\nline\n".utf8)
+        let long = String(repeating: "word ", count: 200)
+        let snapshot = ShareSnapshot(
+            descriptor: -1, sealed: nil, poster: nil, duration: 4, dimensions: .zero,
+            chapters: [.init(t: 0, title: "Intro"), .init(t: 65, title: "Demo")], title: "Fix \u{202E}login\u{0007}",
+            summary: long, captions: captions)
+        let shown = snapshot.publishedText
+        #expect(shown.map(\.heading) == ["Title", "Summary", "Chapters", "Captions"])
+        #expect(shown[0].text == "Fix  login ")
+        #expect(shown[1].text == long)
+        #expect(shown[2].text == "0:00  Intro\n1:05  Demo")
+        #expect(shown[3].text == "Hello there\nsecond line")
+        let empty = ShareSnapshot(
+            descriptor: -1, sealed: nil, poster: nil, duration: 1, dimensions: .zero, chapters: [], title: " ", summary: nil,
+            captions: Data("WEBVTT\n".utf8))
+        #expect(empty.publishedText.isEmpty)
+    }
 }

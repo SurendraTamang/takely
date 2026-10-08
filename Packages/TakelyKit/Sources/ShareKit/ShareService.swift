@@ -367,6 +367,45 @@ public final class ShareSnapshot: Sendable {
 
 }
 
+extension ShareSnapshot {
+    /// Everything published with the video when text is on, in full, as the person is shown it before sharing: the
+    /// title, summary, chapter names and what the captions say. Only what's there.
+    public var publishedText: [(heading: String, text: String)] {
+        let chapterList = chapters.map { "\(Duration.seconds($0.t).formatted(.time(pattern: .minuteSecond)))  \($0.title)" }
+        let items: [(String, String?)] = [
+            ("Title", title), ("Summary", summary), ("Chapters", chapterList.isEmpty ? nil : chapterList.joined(separator: "\n")),
+            ("Captions", captions.map(Self.captionText)),
+        ]
+        return items.compactMap { heading, text in
+            guard let text = text.map(Self.displayable), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return (heading, text)
+        }
+    }
+
+    /// What WebVTT captions say: each cue's text (the lines after its timing), one cue per line.
+    static func captionText(_ data: Data) -> String {
+        String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n\n")
+            .compactMap { block -> String? in
+                let lines = block.components(separatedBy: "\n")
+                guard let timing = lines.firstIndex(where: { $0.contains("-->") }) else { return nil }  // header, NOTE, STYLE
+                let text = lines[(timing + 1)...].filter { !$0.isEmpty }.joined(separator: " ")
+                return text.isEmpty ? nil : text
+            }
+            .joined(separator: "\n")
+    }
+
+    /// Text anyone could have written, safe to show: control and direction-override characters (which can reorder
+    /// what's displayed) become spaces; line breaks stay.
+    static func displayable(_ text: String) -> String {
+        let hidden = CharacterSet.controlCharacters.subtracting(.init(charactersIn: "\n"))
+            .union(.init(charactersIn: "\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}\u{200E}\u{200F}"))
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: text.unicodeScalars.map { hidden.contains($0) ? " " : $0 })
+        return String(scalars)
+    }
+}
+
 /// Serves the sealed copy to AVFoundation (a custom URL scheme, so it never opens a path), part by part as `S3Client`
 /// uploads it; with a seal, a part whose SHA-256 differs fails the read and sets `changed`.
 final class SealedLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
