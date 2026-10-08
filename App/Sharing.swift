@@ -1,4 +1,3 @@
-import AVFoundation
 import AppCore
 import AppKit
 import OSLog
@@ -128,30 +127,25 @@ final class Sharing {
             return .failure(
                 AutomationFailure("Secrets were found on screen: review the blurs in Takely (Review Blurs), then share it from Takely."))
         }
-        // What's uploaded is a private copy, checked and shown to the person: the file on disk may change meanwhile.
+        // What's uploaded is a private copy, sealed before the person is asked: what they see is what's published.
         let snapshot: ShareSnapshot
         do {
-            snapshot = try await Task.detached { try ShareSnapshot.make(of: bundle, inside: folders) }.value
+            snapshot = try await Task.detached { try await ShareSnapshot.make(of: bundle, inside: folders) }.value
         } catch let error as ShareError {
             return .failure(AutomationFailure(error.localizedDescription))
         } catch {
-            return .failure(AutomationFailure("This recording hasn't been exported yet."))
+            return .failure(AutomationFailure("Takely couldn't copy the recording to share it: \(error.localizedDescription)"))
         }
-        defer { snapshot.discard() }
-        let asset = AVURLAsset(url: snapshot.video)
-        guard (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false else {
-            return .failure(AutomationFailure("The recording's video can't be read."))
+        guard let image = NSImage(data: snapshot.poster) else {
+            return .failure(AutomationFailure(ShareError.unreadableVideo.localizedDescription))
         }
-        guard let poster = await ShareService.poster(asset), let image = NSImage(data: poster) else {
-            return .failure(AutomationFailure("Takely couldn't show a preview of this video, so it can't ask to share it."))
-        }
-        guard await confirmShare(asset, image: image, withText: settings.sharePublishText) else {
+        let includeText = settings.sharePublishText
+        guard await confirmShare(snapshot, image: image, withText: includeText) else {
             return .failure(AutomationFailure("The person chose not to share it. Don't ask again unless they tell you to."))
         }
         if let reason = busy() { return .failure(AutomationFailure(reason)) }
         guard upload == nil else { return .failure(AutomationFailure("Another upload is running: try again when it's done.")) }
         state = .uploading(bundle.url, 0)
-        let includeText = settings.sharePublishText
         let work = Task { () -> Result<URL, any Error> in
             do {
                 return .success(try await service.share(bundle, includeText: includeText, snapshot: snapshot) { _ in })
@@ -186,15 +180,21 @@ final class Sharing {
         return redactions.contains { $0.enabled && $0.kind != .manual }
     }
 
-    /// Publishing is the person's call: an agent or a command asks, and they see what would be shared — a frame of the
-    /// very copy that would be uploaded, and its length (not a title anyone could have written).
-    private func confirmShare(_ asset: AVURLAsset, image: NSImage, withText: Bool) async -> Bool {
-        let seconds = (try? await asset.load(.duration).seconds) ?? 0
+    /// Publishing is the person's call: an agent or a command asks, and they see what would be published — a frame
+    /// and the length of the very copy that's uploaded, and the text that goes with it.
+    private func confirmShare(_ snapshot: ShareSnapshot, image: NSImage, withText: Bool) async -> Bool {
         let alert = NSAlert()
         alert.messageText = "Share this recording?"
-        alert.informativeText =
-            "An AI agent or a command wants to upload this \(Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond))) video to your bucket and get a link anyone with it can open."
-            + (withText ? " Its title, summary and captions are published with it (Settings › Share)." : "")
+        let length = Duration.seconds(snapshot.duration).formatted(.time(pattern: .minuteSecond))
+        var text =
+            "An AI agent or a command wants to upload this \(length) video to your bucket and get a link anyone with it can open."
+        if withText {
+            let shown = [snapshot.title.map { "Title: \($0)" }, snapshot.summary.map { "Summary: \($0)" }].compactMap { $0 }
+                .map { Self.clipped($0, to: 300) }
+            text += "\n\nPublished with it (Settings › Share): captions, chapter names"
+            text += shown.isEmpty ? "." : ", and\n" + shown.joined(separator: "\n")
+        }
+        alert.informativeText = text
         let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
         view.image = image
         view.imageScaling = .scaleProportionallyUpOrDown
@@ -204,6 +204,12 @@ final class Sharing {
         alert.window.level = .floating
         NSApp.activate()
         return await alert.runModalFromRunLoop() == .alertSecondButtonReturn
+    }
+
+    /// One paragraph, at most `limit` characters: text anyone could have written can't fill or reshape the alert.
+    static func clipped(_ text: String, to limit: Int) -> String {
+        let line = String(text.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) })
+        return line.count > limit ? line.prefix(limit) + "…" : line
     }
 
     /// Uploads (or re-uploads, keeping the link), then copies the link and says so.

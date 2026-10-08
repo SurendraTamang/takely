@@ -122,9 +122,25 @@ public struct S3Client: Sendable {
         _ file: URL, key: String, contentType: String, cacheControl: String? = nil,
         progress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws {
-        let size = (try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+        // One open file for every part: if the file is replaced meanwhile, all parts still come from one version.
+        let descriptor = open(file.path, O_RDONLY | O_CLOEXEC)
+        guard descriptor >= 0 else { throw CocoaError(.fileReadNoSuchFile) }
+        defer { close(descriptor) }
+        try await upload(descriptor: descriptor, key: key, contentType: contentType, cacheControl: cacheControl, progress: progress)
+    }
+
+    /// Uploads what an open file holds (read with pread, so the descriptor's offset doesn't matter). The caller
+    /// keeps it open until this returns.
+    public func upload(
+        descriptor: Int32, key: String, contentType: String, cacheControl: String? = nil,
+        progress: @escaping @Sendable (Double) -> Void = { _ in }
+    ) async throws {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else { throw CocoaError(.fileReadUnknown) }
+        let size = Int(info.st_size)
+        let reader = PartReader(descriptor)
         guard size > Self.multipartThreshold else {
-            try await put(key, data: try Data(contentsOf: file), contentType: contentType, cacheControl: cacheControl)
+            try await put(key, data: try reader.read(offset: 0, length: size), contentType: contentType, cacheControl: cacheControl)
             return progress(1)
         }
         var initial = ["Content-Type": contentType]
@@ -138,8 +154,6 @@ public struct S3Client: Sendable {
         let partSize = max(Self.partSize, (size + 9_999) / 10_000)
         let parts = (size + partSize - 1) / partSize
         let sent = SentCounter(total: size, progress: progress)
-        // One open file for every part: if the file is replaced meanwhile, all parts still come from one version.
-        let reader = try PartReader(file)
         do {
             var etags = [String](repeating: "", count: parts)
             try await withThrowingTaskGroup(of: (Int, String).self) { group in
@@ -243,12 +257,8 @@ private final class SentCounter: @unchecked Sendable {
 private final class PartReader: Sendable {
     let descriptor: Int32
 
-    init(_ file: URL) throws {
-        descriptor = open(file.path, O_RDONLY)
-        guard descriptor >= 0 else { throw CocoaError(.fileReadNoSuchFile) }
-    }
-
-    deinit { close(descriptor) }
+    /// Not owned: whoever opened it closes it.
+    init(_ descriptor: Int32) { self.descriptor = descriptor }
 
     func read(offset: Int, length: Int) throws -> Data {
         var data = Data(count: length)
