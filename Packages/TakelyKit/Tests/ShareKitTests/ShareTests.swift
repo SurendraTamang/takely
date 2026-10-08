@@ -402,6 +402,48 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
         await #expect(throws: ShareError.self) { try await make(linked, inside: [saveFolder]) }
     }
 
+    /// The preview is read only through bytes that match the seal, in parts: after a change, the poster is either
+    /// made from bytes AVFoundation already had (checked when served) or the read fails and the change is reported.
+    @Test func thePreviewIsMadeOnlyFromSealedBytes() async throws {
+        let bundle = try await bundle()
+        let descriptor = open(bundle.exportURL.path, O_RDWR)
+        defer { close(descriptor) }
+        let small: (Int) -> [Range<Int>] = { S3Client.partRanges(size: $0, partSize: 128, threshold: 0) }
+        let sealed = try ShareSnapshot.partDigests(descriptor, ranges: small)
+        #expect(sealed.parts.count > 4)
+
+        let intact = SealedLoader(descriptor: descriptor, sealed: sealed, ranges: small)
+        let good = intact.asset()
+        #expect(try await good.loadTracks(withMediaType: .video).count == 1)
+        let original = await ShareService.poster(good)
+        #expect(original != nil && !intact.changed)
+
+        let loader = SealedLoader(descriptor: descriptor, sealed: sealed, ranges: small)
+        let asset = loader.asset()
+        #expect(try await asset.loadTracks(withMediaType: .video).count == 1)
+        // The sample data, in the middle of the file (the movie's index is at its end).
+        _ = Data(repeating: 0xEE, count: 64).withUnsafeBytes { pwrite(descriptor, $0.baseAddress, 64, off_t(sealed.size / 3)) }
+        let poster = await ShareService.poster(asset)
+        #expect(poster == original || (poster == nil && loader.changed))
+        // Read afresh, the change is caught.
+        let fresh = SealedLoader(descriptor: descriptor, sealed: sealed, ranges: small)
+        let freshAsset = fresh.asset()
+        if (try? await freshAsset.loadTracks(withMediaType: .video)) != nil { _ = await ShareService.poster(freshAsset) }
+        #expect(fresh.changed)
+    }
+
+    /// Opt-in: TAKELY_REAL_SHARE_FILE=<an exported MP4> — a real recording, big enough for the 4 MB cap and parts.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TAKELY_REAL_SHARE_FILE"] != nil))
+    func aRealRecordingPreviewsThroughTheSeal() async throws {
+        let descriptor = open(ProcessInfo.processInfo.environment["TAKELY_REAL_SHARE_FILE"]!, O_RDONLY)
+        defer { close(descriptor) }
+        let sealed = try ShareSnapshot.partDigests(descriptor)
+        let loader = SealedLoader(descriptor: descriptor, sealed: sealed)
+        let asset = loader.asset()
+        #expect(try await asset.loadTracks(withMediaType: .video).count == 1)
+        #expect(await ShareService.poster(asset) != nil && !loader.changed)
+    }
+
     @Test func aFileThatIsntAVideoIsRefused() async throws {
         let bundle = try await bundle(video: false)
         try Data("not a movie".utf8).write(to: bundle.exportURL)

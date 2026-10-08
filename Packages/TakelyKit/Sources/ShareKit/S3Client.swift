@@ -132,9 +132,9 @@ public struct S3Client: Sendable {
     }
 
     /// How a file of `size` bytes is uploaded: one PUT, or parts (at most 10,000, so very large files get bigger ones).
-    static func partRanges(size: Int) -> [Range<Int>] {
-        guard size > multipartThreshold else { return [0..<size] }
-        let partSize = max(Self.partSize, (size + 9_999) / 10_000)
+    static func partRanges(size: Int, partSize minimum: Int = partSize, threshold: Int = multipartThreshold) -> [Range<Int>] {
+        guard size > threshold else { return [0..<size] }
+        let partSize = max(minimum, (size + 9_999) / 10_000)
         return stride(from: 0, to: size, by: partSize).map { $0..<min($0 + partSize, size) }
     }
 
