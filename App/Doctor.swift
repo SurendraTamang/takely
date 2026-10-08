@@ -10,7 +10,7 @@ import UserNotifications
 /// the app, so only the app can tell).
 @MainActor
 enum Doctor {
-    static func checks(settings: RecordingSettings, license: String?) async -> [DoctorCheck] {
+    static func checks(settings: RecordingSettings, license: (status: DoctorCheck.Status, text: String)?) async -> [DoctorCheck] {
         var checks: [DoctorCheck] = []
         let privacy = "System Settings › Privacy & Security › "
 
@@ -85,19 +85,24 @@ enum Doctor {
         }
 
         // Where recordings go, and room for them.
+        // A folder that doesn't exist yet (a fresh install) is made at the first recording: check where it would go.
         let folder = settings.saveFolder
-        let values = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        if !FileManager.default.isWritableFile(atPath: folder.path) {
+        var existing = folder
+        while !FileManager.default.fileExists(atPath: existing.path), existing.pathComponents.count > 1 {
+            existing = existing.deletingLastPathComponent()
+        }
+        let note = existing == folder ? "" : " (made at the first recording)"
+        let values = try? existing.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        if !FileManager.default.isWritableFile(atPath: existing.path) {
             checks.append(
                 DoctorCheck(
                     "Save folder", .problem, "\(folder.path) can't be written to", fix: "Choose another folder in Settings › General."))
         } else if let free = values?.volumeAvailableCapacityForImportantUsage {
-            let gigabytes = Double(free) / 1_000_000_000
+            let gigabytes = String(format: "%.0f", Double(free) / 1_000_000_000)
             checks.append(
                 DoctorCheck(
-                    "Save folder", gigabytes < 5 ? .problem : .ok,
-                    "\(folder.path), \(String(format: "%.0f", gigabytes)) GB free",
-                    fix: "Free some space: Takely stops recording when the disk is almost full."))
+                    "Save folder", free < StorageGuard.minimumFreeToStart ? .problem : .ok, "\(folder.path)\(note), \(gigabytes) GB free",
+                    fix: "Free some space: Takely won't start a recording with less than 2 GB free."))
         }
 
         // Apple Intelligence (AI titles and summaries, Write Script, the Demo planner).
@@ -115,7 +120,10 @@ enum Doctor {
         case .unavailable:
             checks.append(DoctorCheck("Apple Intelligence", .note, "unavailable"))
         }
-        if let license { checks.append(DoctorCheck("Takely Pro", .ok, license)) }
+        if let license {
+            checks.append(
+                DoctorCheck("Takely Pro", license.status, license.text, fix: "Settings › License: enter a key or buy Takely Pro."))
+        }
         return checks
     }
 }

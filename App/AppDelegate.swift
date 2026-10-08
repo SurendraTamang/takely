@@ -325,13 +325,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: Windows
 
     /// The license for `takely doctor` (Takely Pro builds).
-    private var licenseSummary: String? {
+    private var licenseSummary: (status: DoctorCheck.Status, text: String)? {
         #if canImport(TakelyPro)
             switch license.state {
-            case .trial(let days): "trial, \(days) day\(days == 1 ? "" : "s") left"
-            case .licensed(let product): product
-            case .locked(let reason): "locked: \(reason)"
-            case .unverified(let reason): reason
+            case .trial(let days): (.ok, "trial, \(days) day\(days == 1 ? "" : "s") left")
+            case .licensed(let product): (.ok, product)
+            case .locked(let reason): (.problem, "locked: \(reason)")
+            case .unverified(let reason): (.note, reason)
             }
         #else
             nil

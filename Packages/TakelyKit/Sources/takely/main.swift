@@ -146,7 +146,11 @@ do {
         if !json, let report = reply.report {
             print(report)  // doctor found problems: the report says which
         } else if !json {
-            FileHandle.standardError.write(Data(((reply.error ?? "Failed.") + "\n").utf8))
+            // An app older than this command doesn't know the request (e.g. updated but not restarted).
+            let error =
+                reply.error == "Couldn't read the request" && request.command == .doctor
+                ? "This Takely is older than the takely command: quit and reopen Takely (or update it)." : reply.error ?? "Failed."
+            FileHandle.standardError.write(Data((error + "\n").utf8))
         }
         exit(1)
     }
