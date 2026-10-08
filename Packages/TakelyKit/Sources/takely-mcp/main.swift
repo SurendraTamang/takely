@@ -36,9 +36,19 @@ await server.withMethodHandler(GetPrompt.self) { params in
 let calls = DispatchQueue(label: "app.takely.mcp.calls", attributes: .concurrent)
 
 await server.withMethodHandler(CallTool.self) { params in
-    await TakelyTools.call(params.name, arguments: params.arguments) { request in
-        try await withCheckedThrowingContinuation { continuation in
-            calls.async { continuation.resume(with: Result { try send(request) }) }
+    await TakelyTools.whileRunning(
+        progress: params._meta?.progressToken.map { token in
+            { seconds in
+                try? await server.notify(
+                    ProgressNotification.message(
+                        .init(progressToken: token, progress: seconds, message: "\(params.name): still working (\(Int(seconds)) s)")))
+            }
+        }
+    ) {
+        await TakelyTools.call(params.name, arguments: params.arguments) { request in
+            try await withCheckedThrowingContinuation { continuation in
+                calls.async { continuation.resume(with: Result { try send(request) }) }
+            }
         }
     }
 }

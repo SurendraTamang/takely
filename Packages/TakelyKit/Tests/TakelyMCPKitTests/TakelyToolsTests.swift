@@ -125,4 +125,19 @@ import Testing
         _ = await TakelyTools.call("share", arguments: ["path": "~/Movies/Takely/x.takely/exports/x.mp4"], send: app.send)
         #expect(app.sent.withLock { $0 }.first?.path == NSHomeDirectory() + "/Movies/Takely/x.takely/exports/x.mp4")
     }
+
+    /// Long calls report progress until they finish, then stop.
+    @Test func longCallsReportProgressUntilDone() async throws {
+        let ticks = Mutex<[Double]>([])
+        let result = await TakelyTools.whileRunning(
+            every: .milliseconds(20), progress: { seconds in ticks.withLock { $0.append(seconds) } }
+        ) {
+            try? await Task.sleep(for: .milliseconds(110))
+            return "done"
+        }
+        let seen = ticks.withLock { $0 }
+        #expect(result == "done" && seen.count >= 3 && seen == seen.sorted())
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(ticks.withLock { $0 }.count == seen.count)
+    }
 }

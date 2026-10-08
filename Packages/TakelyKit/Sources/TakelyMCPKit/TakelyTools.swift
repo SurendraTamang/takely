@@ -112,6 +112,26 @@ public enum TakelyTools {
         return CallTool.Result(content: [text(lines.joined(separator: "\n"))], isError: false)
     }
 
+    /// Runs `work`, calling `progress` with the seconds elapsed every `interval` until it's done. A demo or an export
+    /// can outlast a client's request timeout; MCP clients may reset it on progress (when they asked for progress).
+    public static func whileRunning<T: Sendable>(
+        every interval: Duration = .seconds(10), progress: (@Sendable (Double) async -> Void)?,
+        _ work: @Sendable () async -> T
+    ) async -> T {
+        let heartbeat = progress.map { progress in
+            Task {
+                var elapsed = Duration.zero
+                while !Task.isCancelled {
+                    try await Task.sleep(for: interval)
+                    elapsed += interval
+                    await progress(Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
+                }
+            }
+        }
+        defer { heartbeat?.cancel() }
+        return await work()
+    }
+
     /// A clickable poster (GitHub, GitLab and most Markdown renderers show the image), or a plain link without one.
     static func markdown(link: String, poster: String?, title: String?, duration: Double?) -> String {
         let length = duration.map { " (" + Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) + ")" } ?? ""
