@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import MCP
 import ProjectKit
@@ -139,5 +140,43 @@ import Testing
         #expect(result == "done" && seen.count >= 3 && seen == seen.sorted())
         try await Task.sleep(for: .milliseconds(80))
         #expect(ticks.withLock { $0 }.count == seen.count)
+    }
+
+    /// An agent checks what it recorded: evenly spaced JPEG stills from the export, with their times.
+    @Test func framesAreReadFromTheExport() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())")
+        let bundle = try ProjectBundle.create(in: folder)
+        try FileManager.default.createDirectory(at: bundle.exportsURL, withIntermediateDirectories: true)
+        try await Self.writeVideo(to: bundle.exportURL, seconds: 2)
+        let result = await TakelyTools.call(
+            "frames", arguments: ["path": .string(bundle.exportURL.path), "count": .double(3)], send: { _ in throw CancellationError() })
+        #expect(result.isError == false)
+        let images = result.content.compactMap { content -> Data? in
+            guard case .image(let data, "image/jpeg", _, _) = content else { return nil }
+            return Data(base64Encoded: data)
+        }
+        #expect(images.count == 3 && images.allSatisfy { $0.starts(with: [0xFF, 0xD8]) })
+        let notExported = await TakelyTools.call(
+            "frames", arguments: ["path": .string(folder.appending(path: "x.takely/exports/x.mp4").path)],
+            send: { _ in throw CancellationError() })
+        #expect(notExported.isError == true)
+    }
+
+    static func writeVideo(to url: URL, seconds: Int) async throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(
+            mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 64])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: nil)
+        writer.add(input)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+        for frame in 0..<(seconds * 10) {
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(5)) }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_32BGRA, nil, &buffer)
+            adaptor.append(buffer!, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: 10))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
     }
 }

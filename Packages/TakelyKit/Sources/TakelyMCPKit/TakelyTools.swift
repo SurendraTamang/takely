@@ -1,7 +1,9 @@
+import AVFoundation
 import Foundation
 import MCP
 import ProjectKit
 import TakelyControl
+import UniformTypeIdentifiers
 
 /// Takely's tools for AI agents (MCP). Each one is a control command to the running app — the same path as the
 /// `takely` CLI, with the same safety: the socket is this user's only, a demo plan is confirmed on screen, recording
@@ -50,6 +52,15 @@ public enum TakelyTools {
             "transcript", "What was said in a recording, with times (made at export when transcription is on).",
             ["path": ("string", "The recording's MP4")], required: ["path"], readOnly: true),
         tool(
+            "frames",
+            "Still images from a finished recording, evenly spaced, with their times — to check the video shows what "
+                + "it should before sharing it. Secrets found on screen are blurred in them as in the video.",
+            [
+                "path": ("string", "The recording's MP4"),
+                "count": ("integer", "How many images, 1–\(maxFrames) (default 4)"),
+            ],
+            required: ["path"], readOnly: true),
+        tool(
             "doctor", "Check what Takely needs (permissions, disk, Apple Intelligence) and what to fix.", [:], readOnly: true),
     ]
 
@@ -86,6 +97,11 @@ public enum TakelyTools {
                     return failure("transcript needs the recording's full path.")
                 }
                 return transcript(URL(filePath: path))
+            case "frames":
+                guard let path = args["path"]?.stringValue.flatMap(absolute) else {
+                    return failure("frames needs the recording's full path.")
+                }
+                return await frames(URL(filePath: path), count: args["count"]?.intValue ?? args["count"]?.doubleValue.map { Int($0) } ?? 4)
             default: return failure("Unknown tool \(name).")
             }
         } catch {
@@ -159,6 +175,43 @@ public enum TakelyTools {
     }
 
     /// "[0:12] Hello there" per phrase; read straight from the recording (no app needed).
+    static let maxFrames = 8
+
+    /// JPEG stills from the exported video (blurs and edits already in it), evenly spaced; read from the file.
+    static func frames(_ url: URL, count: Int) async -> CallTool.Result {
+        guard let bundle = ProjectBundle.containing(url) ?? (url.pathExtension == "takely" ? ProjectBundle(url: url) : nil) else {
+            return failure("That isn't a Takely recording.")
+        }
+        let asset = AVURLAsset(url: bundle.exportURL)
+        guard let duration = try? await asset.load(.duration).seconds, duration > 0,
+            (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false
+        else { return failure("This recording hasn't been exported yet, or its video can't be read.") }
+        let count = min(max(count, 1), maxFrames)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 1024, height: 1024)  // ponytail: enough to read a UI, small for the model
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        var content: [Tool.Content] = []
+        for index in 0..<count {
+            let seconds = duration * (Double(index) + 0.5) / Double(count)
+            guard let image = try? await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600)).image,
+                let jpeg = jpeg(image)
+            else { continue }
+            content.append(text("[\(Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond)))]"))
+            content.append(.image(data: jpeg.base64EncodedString(), mimeType: "image/jpeg", annotations: nil, _meta: nil))
+        }
+        guard !content.isEmpty else { return failure("No images could be read from the video.") }
+        return CallTool.Result(content: content, isError: false)
+    }
+
+    static func jpeg(_ image: CGImage) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.7] as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
+    }
+
     static func transcript(_ url: URL) -> CallTool.Result {
         guard let bundle = ProjectBundle.containing(url) ?? (url.pathExtension == "takely" ? ProjectBundle(url: url) : nil) else {
             return failure("That isn't a Takely recording.")

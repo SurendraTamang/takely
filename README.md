@@ -85,7 +85,7 @@ claude mcp add takely -- /Applications/Takely.app/Contents/Helpers/takely-mcp
 
 - **Tools:** `status`, `record_start` (a display, one app's window, camera/microphone on or off), `record_stop` (the
   video's path, length and title), `pause`, `resume`, `marker`, `run_demo` (a step-by-step plan, narrated), `share`
-  (a link to the video in your own bucket, plus Markdown with a clickable poster), `transcript`, `doctor`.
+  (a link to the video in your own bucket, plus Markdown with a clickable poster), `transcript`, `frames` (stills to check the video before sharing), `doctor`.
 - **Prompt:** `pr_demo` — record a short narrated demo of a change and add it to the pull request.
 - **Safety:** the server talks to Takely over the same private socket as the `takely` command (your user only). You
   always see when Takely records; a demo plan is shown to you and runs only when you confirm; secrets on screen (API

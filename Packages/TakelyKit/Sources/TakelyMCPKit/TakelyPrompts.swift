@@ -36,10 +36,12 @@ public enum TakelyPrompts {
         3. Call `run_demo` with the plan. The person sees the plan and confirms it before anything runs; if they \
         decline, ask what to change. (To record manually instead: `record_start` with the app's window, do the steps, \
         `record_stop`.)
-        4. Call `share` with the returned path. The person sees the video and confirms before it uploads to their own \
+        4. Call `frames` with the returned path and look at the images: if the video doesn't show the change working, \
+        say so and record again instead of sharing it.
+        5. Call `share` with the returned path. The person sees the video and confirms before it uploads to their own \
         storage; if they decline, don't share it and don't retry unless they ask. If secrets were found on screen, it's \
         refused until the person reviews the blurs in Takely. It returns Markdown with a clickable poster.
-        5. Add that Markdown to the pull request description under "Demo" (e.g. `gh pr edit --body-file` or a PR \
+        6. Add that Markdown to the pull request description under "Demo" (e.g. `gh pr edit --body-file` or a PR \
         comment), and mention the video's length.
         """
     }
