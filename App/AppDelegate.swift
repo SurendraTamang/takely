@@ -1,3 +1,4 @@
+import AVFoundation
 import AppCore
 import AppIntents
 import AppKit
@@ -139,9 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         automation = Automation(host: coordinator, settings: settings)
         automation?.center.share = { [weak self] url in
-            guard let self, let bundle = ProjectBundle.containing(url) ?? (url.pathExtension == "takely" ? ProjectBundle(url: url) : nil)
-            else { return .failure(AutomationFailure("That isn't a Takely recording.")) }
-            return await sharing.shareNow(bundle)
+            guard let self else { return .failure(AutomationFailure("Takely is quitting.")) }
+            switch await Self.shareableRecording(url, folders: [settings.saveFolder.path] + settings.pastSaveFolders) {
+            case .success(let bundle): return await sharing.shareNow(bundle)
+            case .failure(let failure): return .failure(failure)
+            }
         }
         automation?.center.doctor = { [weak self] in
             guard let self else { return [] }
@@ -328,6 +331,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // MARK: Windows
+
+    /// What automation may share: a Takely recording in one of the save folders (links resolved), whose export is a
+    /// real file with a video track — never any other file someone dresses up as one.
+    static func shareableRecording(_ url: URL, folders: [String]) async -> Result<ProjectBundle, AutomationFailure> {
+        let resolved = url.resolvingSymlinksInPath()
+        guard let found = ProjectBundle.containing(resolved) ?? (resolved.pathExtension == "takely" ? ProjectBundle(url: resolved) : nil)
+        else { return .failure(AutomationFailure("That isn't a Takely recording.")) }
+        let bundle = ProjectBundle(url: found.url.resolvingSymlinksInPath())
+        let inside = folders.map { URL(filePath: $0, directoryHint: .isDirectory).resolvingSymlinksInPath().path }.contains { folder in
+            bundle.url.deletingLastPathComponent().path == folder
+        }
+        guard inside else { return .failure(AutomationFailure("Only recordings in Takely's save folders can be shared.")) }
+        let values = try? bundle.exportURL.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+        guard values?.isRegularFile == true, values?.isSymbolicLink != true, (try? bundle.readProject()) != nil else {
+            return .failure(AutomationFailure("This recording hasn't been exported yet."))
+        }
+        guard (try? await AVURLAsset(url: bundle.exportURL).loadTracks(withMediaType: .video).isEmpty) == false else {
+            return .failure(AutomationFailure("The recording's video can't be read."))
+        }
+        return .success(bundle)
+    }
 
     /// The license for `takely doctor` (Takely Pro builds).
     private var licenseSummary: (status: DoctorCheck.Status, text: String)? {

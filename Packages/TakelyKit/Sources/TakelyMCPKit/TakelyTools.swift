@@ -72,13 +72,17 @@ public enum TakelyTools {
                 guard let plan = args["plan"]?.stringValue else { return failure("run_demo needs a plan.") }
                 return try await reply(send(ControlRequest(.demo, plan: plan)))
             case "share":
-                guard let path = args["path"]?.stringValue else { return failure("share needs the recording's path.") }
+                guard let path = args["path"]?.stringValue.flatMap(absolute) else {
+                    return failure("share needs the recording's full path (from record_stop or run_demo).")
+                }
                 var request = ControlRequest(.share)
                 request.path = path
                 return try await reply(send(request))
             case "doctor": return try await reply(send(ControlRequest(.doctor)))
             case "transcript":
-                guard let path = args["path"]?.stringValue else { return failure("transcript needs the recording's path.") }
+                guard let path = args["path"]?.stringValue.flatMap(absolute) else {
+                    return failure("transcript needs the recording's full path.")
+                }
                 return transcript(URL(filePath: path))
             default: return failure("Unknown tool \(name).")
             }
@@ -96,9 +100,23 @@ public enum TakelyTools {
         if let path = reply.path { lines.append("path: \(path)") }
         if let duration = reply.duration { lines.append(String(format: "duration: %.1f s", duration)) }
         if let title = reply.title { lines.append("title: \(title)") }
-        if let link = reply.link { lines.append("link: \(link)") }
+        if let link = reply.link {
+            lines.append("link: \(link)")
+            lines.append(
+                "markdown (for a pull request or issue):\n\(markdown(link: link, poster: reply.poster, title: reply.title, duration: reply.duration))"
+            )
+        }
         if let report = reply.report { lines.append(report) }
         return CallTool.Result(content: [text(lines.joined(separator: "\n"))], isError: false)
+    }
+
+    /// A clickable poster (GitHub, GitLab and most Markdown renderers show the image), or a plain link without one.
+    static func markdown(link: String, poster: String?, title: String?, duration: Double?) -> String {
+        let length = duration.map { " (" + Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) + ")" } ?? ""
+        // Brackets escaped (CommonMark), so a title can't end the link text early.
+        let name = (title ?? "Demo video").replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]") + length
+        guard let poster else { return "[▶︎ \(name)](\(link))" }
+        return "[![▶︎ \(name)](\(poster))](\(link))"
     }
 
     /// "[0:12] Hello there" per phrase; read straight from the recording (no app needed).
@@ -113,6 +131,12 @@ public enum TakelyTools {
             "[\(Duration.seconds(phrase.start).formatted(.time(pattern: .minuteSecond)))] \(phrase.text)"
         }
         return CallTool.Result(content: [text(lines.joined(separator: "\n"))], isError: false)
+    }
+
+    /// A full path (`~` expanded); nil for a relative one — the app and this server don't share a working directory.
+    static func absolute(_ path: String) -> String? {
+        let expanded = (path as NSString).expandingTildeInPath
+        return expanded.hasPrefix("/") ? URL(filePath: expanded).standardizedFileURL.path : nil
     }
 
     static func failure(_ message: String) -> CallTool.Result {

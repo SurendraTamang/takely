@@ -71,6 +71,28 @@ The engine is the `TakelyKit` Swift package (`Packages/TakelyKit`):
 
 The app target in `App/` is the menu bar UI.
 
+## AI agents (MCP)
+
+Takely includes an [MCP](https://modelcontextprotocol.io) server, so AI agents such as Claude Code, Codex and Cursor
+can record your screen, run narrated demos of native Mac apps, and share the video — for example as proof that a change
+works, right in its pull request.
+
+```sh
+claude mcp add takely -- /Applications/Takely.app/Contents/Helpers/takely-mcp
+```
+
+(Settings › Automation has the command for where Takely is installed. Other clients: run that file as a stdio server.)
+
+- **Tools:** `status`, `record_start` (a display, one app's window, camera/microphone on or off), `record_stop` (the
+  video's path, length and title), `pause`, `resume`, `marker`, `run_demo` (a step-by-step plan, narrated), `share`
+  (a link to the video in your own bucket, plus Markdown with a clickable poster), `transcript`, `doctor`.
+- **Prompt:** `pr_demo` — record a short narrated demo of a change and add it to the pull request.
+- **Safety:** the server talks to Takely over the same private socket as the `takely` command (your user only). You
+  always see when Takely records; a demo plan is shown to you and runs only when you confirm; secrets on screen (API
+  keys, emails, card numbers) are blurred when that's on; videos go only to your own storage. `takely://` links can't
+  do any of this.
+- Everything runs on your Mac: recording, transcription, and AI titles and summaries (Apple Intelligence).
+
 ## Testing a local build
 
 `scripts/release.sh 1.0.0 --local` makes a Release build of the app and a DMG in `dist/1.0.0-local/` for this Mac (no

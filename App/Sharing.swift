@@ -115,19 +115,58 @@ final class Sharing {
 
     /// For automation (`takely share`, AI agents): uploads and waits, returning the link or why it couldn't. Never
     /// while another upload runs (one at a time); secrets blurred on screen stay blurred (the export is what's sent).
-    func shareNow(_ bundle: ProjectBundle) async -> Result<URL, AutomationFailure> {
+    func shareNow(_ bundle: ProjectBundle) async -> Result<(link: URL, poster: URL?), AutomationFailure> {
         guard let service else { return .failure(AutomationFailure(ShareError.notConfigured.localizedDescription)) }
         guard upload == nil else { return .failure(AutomationFailure("Another upload is running: try again when it's done.")) }
-        guard bundle.hasExport else { return .failure(AutomationFailure("This recording hasn't been exported yet.")) }
+        // Secrets found on screen: the person reviews the blurs first (the same rule as uploading after recording).
+        let blurred = ((try? bundle.readRedactions()) ?? []).contains { $0.enabled && $0.kind != .manual }
+        guard !blurred else {
+            return .failure(
+                AutomationFailure("Secrets were found on screen: review the blurs in Takely (Review Blurs), then share it from Takely."))
+        }
+        guard await confirmShare(bundle) else { return .failure(AutomationFailure("The person chose not to share it.")) }
+        guard upload == nil else { return .failure(AutomationFailure("Another upload is running: try again when it's done.")) }
         state = .uploading(bundle.url, 0)
-        do {
-            let link = try await service.share(bundle, includeText: settings.sharePublishText) { _ in }
+        let includeText = settings.sharePublishText
+        let work = Task { () -> Result<URL, any Error> in
+            do { return .success(try await service.share(bundle, includeText: includeText) { _ in }) } catch { return .failure(error) }
+        }
+        upload = Task { _ = await work.value }  // one upload at a time, whoever started it
+        let result = await work.value
+        upload = nil
+        defer {
+            if let next = queued {
+                queued = nil
+                share(next)
+            }
+        }
+        switch result {
+        case .success(let link):
             state = .shared(bundle.url, link)
-            return .success(link)
-        } catch {
+            // The poster sits beside the page (record.keys hold its name).
+            let poster = bundle.readShareRecord()?.keys.first { $0.contains("/poster-") }.map {
+                link.deletingLastPathComponent().appending(path: ($0 as NSString).lastPathComponent)
+            }
+            return .success((link, poster))
+        case .failure(let error):
             state = .failed(bundle.url, "Upload failed: \(error.localizedDescription)")
             return .failure(AutomationFailure("Upload failed: \(error.localizedDescription)"))
         }
+    }
+
+    /// Publishing is the person's call: an agent or a command asks, and they see what would be shared.
+    private func confirmShare(_ bundle: ProjectBundle) async -> Bool {
+        let project = try? bundle.readProject()
+        let alert = NSAlert()
+        alert.messageText = "Share this recording?"
+        let length = project.map { Duration.seconds($0.duration).formatted(.time(pattern: .minuteSecond)) } ?? ""
+        alert.informativeText =
+            "An AI agent or a command wants to upload “\(project?.title ?? bundle.name)” (\(length)) to your bucket and get a link anyone with it can open."
+        alert.addButton(withTitle: "Don't Share")
+        alert.addButton(withTitle: "Share")
+        alert.window.level = .floating
+        NSApp.activate()
+        return await alert.runModalFromRunLoop() == .alertSecondButtonReturn
     }
 
     /// Uploads (or re-uploads, keeping the link), then copies the link and says so.

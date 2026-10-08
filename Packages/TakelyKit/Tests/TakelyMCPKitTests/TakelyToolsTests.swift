@@ -61,11 +61,20 @@ import Testing
     @Test func shareAndDemoCarryTheirInput() async {
         let app = FakeApp { request in
             var reply = ControlReply(ok: true, state: "idle")
-            if request.command == .share { reply.link = "https://cdn.example/takely/abc/" }
+            if request.command == .share {
+                reply.link = "https://cdn.example/takely/abc/index.html"
+                reply.poster = "https://cdn.example/takely/abc/poster-1.jpg"
+                reply.title = "Fix [login]"
+                reply.duration = 75
+            }
             return reply
         }
         let shared = await TakelyTools.call("share", arguments: ["path": "/Movies/a.mp4"], send: app.send)
-        #expect(Self.text(shared).contains("link: https://cdn.example/takely/abc/"))
+        #expect(Self.text(shared).contains("link: https://cdn.example/takely/abc/index.html"))
+        // Ready for a pull request: a clickable poster (brackets in the title escaped).
+        #expect(
+            Self.text(shared).contains(
+                #"[![▶︎ Fix \[login\] (1:15)](https://cdn.example/takely/abc/poster-1.jpg)](https://cdn.example/takely/abc/index.html)"#))
         _ = await TakelyTools.call("run_demo", arguments: ["plan": "open TextEdit\nkey cmd+n"], send: app.send)
         let sent = app.sent.withLock { $0 }
         #expect(sent.map(\.command) == [.share, .demo])
@@ -87,5 +96,25 @@ import Testing
             return ControlReply(ok: true, state: "idle")
         }
         #expect(Self.text(result) == "[0:01] Here's the fix.\n[1:05] Done.")
+    }
+
+    @Test func prDemoPromptWalksThroughConfirmedRecordingAndSharing() throws {
+        #expect(TakelyPrompts.all.map(\.name) == ["pr_demo"])
+        let result = try #require(TakelyPrompts.get("pr_demo", arguments: ["change": "the new Export button", "app": "Takely"]))
+        guard case .text(let text) = result.messages.first?.content else {
+            Issue.record("no text")
+            return
+        }
+        #expect(text.contains("the new Export button working in Takely"))
+        for step in ["run_demo", "confirms", "share", "pull request"] { #expect(text.contains(step), "\(step)") }
+        #expect(TakelyPrompts.get("nope", arguments: nil) == nil)
+    }
+
+    @Test func pathsMustBeFull() async {
+        let app = FakeApp { _ in ControlReply(ok: true, state: "idle") }
+        #expect(await TakelyTools.call("share", arguments: ["path": "a.mp4"], send: app.send).isError == true)
+        #expect(app.sent.withLock { $0 }.isEmpty)  // never sent: the app would resolve it elsewhere
+        _ = await TakelyTools.call("share", arguments: ["path": "~/Movies/Takely/x.takely/exports/x.mp4"], send: app.send)
+        #expect(app.sent.withLock { $0 }.first?.path == NSHomeDirectory() + "/Movies/Takely/x.takely/exports/x.mp4")
     }
 }

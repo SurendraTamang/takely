@@ -121,10 +121,6 @@ enum CLIError: Error, LocalizedError {
 /// Ctrl-C during `takely demo` stops the demo in the app (what was recorded is kept) and waits for its answer; a
 /// second Ctrl-C quits without waiting.
 var interrupt: DispatchSourceSignal?
-if command == .share {
-    guard let file = rest.popFirst(), rest.isEmpty else { exit(2, "share needs the recording's MP4.\n\n" + usage) }
-    request.path = URL(filePath: file).standardizedFileURL.path
-}
 if command == .demo {
     signal(SIGINT, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())

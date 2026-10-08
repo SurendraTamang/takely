@@ -67,8 +67,9 @@ public struct ControlReply: Codable, Sendable, Equatable {
     public var error: String?
     /// `doctor`: the report, one line per check.
     public var report: String?
-    /// `share`: the recording's link.
+    /// `share`: the recording's link, and its poster image (a frame from the video) when there is one.
     public var link: String?
+    public var poster: String?
 
     public init(
         ok: Bool, state: String, path: String? = nil, duration: Double? = nil, title: String? = nil, error: String? = nil,
