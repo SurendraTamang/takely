@@ -115,7 +115,7 @@ public struct SharePage: Sendable, Equatable {
         .replacingOccurrences(of: "\"", with: "&quot;").replacingOccurrences(of: "'", with: "&#39;")
     }
 
-    static func time(_ t: Double) -> String {
+    public static func time(_ t: Double) -> String {
         let s = t.isFinite ? Int(max(0, t).rounded(.down)) : 0
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }

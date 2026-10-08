@@ -188,13 +188,10 @@ final class Sharing {
         let length = Duration.seconds(snapshot.duration).formatted(.time(pattern: .minuteSecond))
         var text =
             "An AI agent or a command wants to upload this \(length) video to your bucket and get a link anyone with it can open."
-        let published = withText ? Self.publishedText(snapshot) : []
-        if !published.isEmpty { text += "\n\nPublished with it (Settings › Share):\n" + published.joined(separator: "\n") }
+        let published = snapshot.publishedText(includeText: withText)
+        if !published.isEmpty { text += " Below the preview: the text published with it (Settings › Share)." }
         alert.informativeText = text
-        let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
-        view.image = image
-        view.imageScaling = .scaleProportionallyUpOrDown
-        alert.accessoryView = view
+        alert.accessoryView = Self.preview(image, published)
         alert.addButton(withTitle: "Don't Share")
         alert.addButton(withTitle: "Share")
         alert.window.level = .floating
@@ -202,31 +199,32 @@ final class Sharing {
         return await alert.runModalFromRunLoop() == .alertSecondButtonReturn
     }
 
-    /// The text that goes on the page, as the person is shown it: each item one line, clipped.
-    static func publishedText(_ snapshot: ShareSnapshot) -> [String] {
-        let cues =
-            snapshot.captions.map { String(decoding: $0, as: UTF8.self) }?.components(separatedBy: .newlines)
-            .filter { !$0.isEmpty && $0 != "WEBVTT" && !$0.contains("-->") && Int($0) == nil } ?? []
-        return [
-            snapshot.title.flatMap { $0.isEmpty ? nil : "Title: \($0)" },
-            snapshot.summary.flatMap { $0.isEmpty ? nil : "Summary: \($0)" },
-            snapshot.chapters.isEmpty ? nil : "Chapters: " + snapshot.chapters.map(\.title).joined(separator: ", "),
-            cues.isEmpty
-                ? nil
-                : (cues.count > 3 ? "Captions (\(cues.count) lines, the first 3): “" : "Captions: “")
-                    + cues.prefix(3).joined(separator: " ") + "”",
-        ]
-        .compactMap { $0 }.map { clipped($0, to: 300) }
-    }
-
-    /// One line of at most `limit` Unicode scalars, saying how much more is published: text anyone could have
-    /// written can't fill or reshape the alert (line and paragraph separators included).
-    static func clipped(_ text: String, to limit: Int) -> String {
-        let breaks = CharacterSet.controlCharacters.union(.newlines)
-        var scalars = String.UnicodeScalarView()
-        scalars.append(contentsOf: text.unicodeScalars.prefix(limit).map { breaks.contains($0) ? " " : $0 })
-        let more = text.unicodeScalars.count - limit
-        return String(scalars) + (more > 0 ? "… (\(more) more characters)" : "")
+    /// The poster, and below it everything published with the video in full (scrolling), under bold headings plain
+    /// text can't imitate.
+    static func preview(_ image: NSImage, _ published: [(heading: String, text: String)]) -> NSView {
+        let width: CGFloat = 360
+        let textHeight: CGFloat = published.isEmpty ? 0 : 170
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 200 + (textHeight > 0 ? textHeight + 8 : 0)))
+        let poster = NSImageView(frame: NSRect(x: 0, y: container.frame.height - 200, width: width, height: 200))
+        poster.image = image
+        poster.imageScaling = .scaleProportionallyUpOrDown
+        container.addSubview(poster)
+        guard !published.isEmpty else { return container }
+        let scroll = NSTextView.scrollableTextView()
+        scroll.frame = NSRect(x: 0, y: 0, width: width, height: textHeight)
+        scroll.borderType = .bezelBorder
+        let textView = scroll.documentView as! NSTextView
+        textView.isEditable = false
+        let text = NSMutableAttributedString()
+        let bold: [NSAttributedString.Key: Any] = [.font: NSFont.boldSystemFont(ofSize: 11), .foregroundColor: NSColor.labelColor]
+        let plain: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor]
+        for (index, item) in published.enumerated() {
+            text.append(NSAttributedString(string: (index == 0 ? "" : "\n\n") + item.heading + "\n", attributes: bold))
+            text.append(NSAttributedString(string: item.text, attributes: plain))
+        }
+        textView.textStorage?.setAttributedString(text)
+        container.addSubview(scroll)
+        return container
     }
 
     /// Uploads (or re-uploads, keeping the link), then copies the link and says so.
