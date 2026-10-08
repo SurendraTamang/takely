@@ -21,3 +21,9 @@ Sparkle — https://sparkle-project.org
   MIT License (with notices for its bundled components)
 
 The full license texts are in Licenses/ and inside the app (Settings › General › Acknowledgements).
+
+Model Context Protocol Swift SDK — https://github.com/modelcontextprotocol/swift-sdk (in takely-mcp)
+  Copyright (c) Model Context Protocol a Series of LF Projects, LLC and contributors
+  Apache License 2.0 (earlier contributions MIT)
+  With its dependencies: SwiftNIO, swift-log, swift-collections, swift-system, swift-atomics (Apple Inc. and the
+  Swift project authors, Apache License 2.0) and EventSource (Mattt, MIT License).

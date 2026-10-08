@@ -1,3 +1,4 @@
+import AppCore
 import AppKit
 import OSLog
 import Observation
@@ -110,6 +111,23 @@ final class Sharing {
         let blurred = ((try? bundle.readRedactions()) ?? []).contains { $0.enabled && $0.kind != .manual }
         guard !blurred else { return log.info("not uploaded automatically: secrets were blurred, review first") }
         share(bundle)
+    }
+
+    /// For automation (`takely share`, AI agents): uploads and waits, returning the link or why it couldn't. Never
+    /// while another upload runs (one at a time); secrets blurred on screen stay blurred (the export is what's sent).
+    func shareNow(_ bundle: ProjectBundle) async -> Result<URL, AutomationFailure> {
+        guard let service else { return .failure(AutomationFailure(ShareError.notConfigured.localizedDescription)) }
+        guard upload == nil else { return .failure(AutomationFailure("Another upload is running: try again when it's done.")) }
+        guard bundle.hasExport else { return .failure(AutomationFailure("This recording hasn't been exported yet.")) }
+        state = .uploading(bundle.url, 0)
+        do {
+            let link = try await service.share(bundle, includeText: settings.sharePublishText) { _ in }
+            state = .shared(bundle.url, link)
+            return .success(link)
+        } catch {
+            state = .failed(bundle.url, "Upload failed: \(error.localizedDescription)")
+            return .failure(AutomationFailure("Upload failed: \(error.localizedDescription)"))
+        }
     }
 
     /// Uploads (or re-uploads, keeping the link), then copies the link and says so.

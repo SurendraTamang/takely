@@ -66,6 +66,8 @@ public final class AutomationCenter {
     public var isDemoRunning = false
     /// Stops the running demo (set by Takely Pro).
     public var stopDemo: (() -> Void)?
+    /// Uploads a recording to the person's bucket and returns its link (set by the app).
+    public var share: ((URL) async -> Result<URL, AutomationFailure>)?
     /// Runs the checks for `takely doctor` (set by the app).
     public var doctor: (() async -> [DoctorCheck])?
 
@@ -126,6 +128,18 @@ public final class AutomationCenter {
             guard host.phase == .idle, !host.isBusy else { return fail(host, isRecording(host) ? "Already recording." : "Takely is busy.") }
             switch await runDemo(plan) {
             case .success(let url): return reply(host, path: url)
+            case .failure(let failure): return fail(host, failure.message)
+            }
+        case .share:
+            guard let share else { return fail(host, "Sharing isn't available.") }
+            guard let path = request.path, FileManager.default.fileExists(atPath: path) else {
+                return fail(host, "No recording at that path.")
+            }
+            switch await share(URL(filePath: path)) {
+            case .success(let link):
+                var answer = reply(host)
+                answer.link = link.absoluteString
+                return answer
             case .failure(let failure): return fail(host, failure.message)
             }
         case .doctor:

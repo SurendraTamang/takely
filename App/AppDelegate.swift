@@ -138,6 +138,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         automation = Automation(host: coordinator, settings: settings)
+        automation?.center.share = { [weak self] url in
+            guard let self, let bundle = ProjectBundle.containing(url) ?? (url.pathExtension == "takely" ? ProjectBundle(url: url) : nil)
+            else { return .failure(AutomationFailure("That isn't a Takely recording.")) }
+            return await sharing.shareNow(bundle)
+        }
         automation?.center.doctor = { [weak self] in
             guard let self else { return [] }
             return await Doctor.checks(settings: settings, license: licenseSummary)

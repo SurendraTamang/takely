@@ -11,6 +11,8 @@ public struct ControlRequest: Codable, Sendable, Equatable {
         case stopDemo = "demo-stop"
         /// Checks what Takely depends on (permissions, copies of the app, disk, Apple Intelligence) and says what to fix.
         case doctor
+        /// Uploads a finished recording (its MP4) to the person's own bucket; replies with the link.
+        case share
     }
 
     public var command: Command
@@ -27,6 +29,8 @@ public struct ControlRequest: Codable, Sendable, Equatable {
     public var display: Int?
     /// `start`: record the window of this app (name or bundle ID) or with this text in its title, frontmost first.
     public var window: String?
+    /// `share`: the recording's MP4 (or its .takely bundle).
+    public var path: String?
 
     public init(
         _ command: Command, countdown: Bool? = nil, region: CGRect? = nil, plan: String? = nil, camera: Bool? = nil,
@@ -63,6 +67,8 @@ public struct ControlReply: Codable, Sendable, Equatable {
     public var error: String?
     /// `doctor`: the report, one line per check.
     public var report: String?
+    /// `share`: the recording's link.
+    public var link: String?
 
     public init(
         ok: Bool, state: String, path: String? = nil, duration: Double? = nil, title: String? = nil, error: String? = nil,
@@ -101,8 +107,9 @@ public struct ControlURL: Sendable, Equatable {
         let parts = ([url.host() ?? ""] + url.pathComponents.filter { $0 != "/" }).filter { !$0.isEmpty }
         let name = parts.first == "record" ? parts.dropFirst().first : parts.first
         // A demo drives the keyboard and mouse: never from a link (any web page can open one).
-        guard let name, let command = ControlRequest.Command(rawValue: name), command != .demo, command != .stopDemo, command != .doctor
-        else { return nil }  // `doctor` too: a web page mustn't learn what's on the Mac
+        guard let name, let command = ControlRequest.Command(rawValue: name), command != .demo, command != .stopDemo, command != .doctor,
+            command != .share
+        else { return nil }  // `doctor`, `share`: a web page mustn't learn what's on the Mac or publish it
         let query = Dictionary((components.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { $1 })
         var request = ControlRequest(command)
         if let countdown = query["countdown"] { request.countdown = !["0", "false", "no", "off"].contains(countdown.lowercased()) }
