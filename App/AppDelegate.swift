@@ -1,4 +1,3 @@
-import AVFoundation
 import AppCore
 import AppIntents
 import AppKit
@@ -142,7 +141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         automation?.center.share = { [weak self] url in
             guard let self else { return .failure(AutomationFailure("Takely is quitting.")) }
             switch await Self.shareableRecording(url, folders: [settings.saveFolder.path] + settings.pastSaveFolders) {
-            case .success(let bundle): return await sharing.shareNow(bundle)
+            case .success(let bundle):
+                return await sharing.shareNow(bundle) { [weak self] in
+                    guard let self else { return "Takely is quitting." }
+                    if automation?.center.isDemoRunning == true { return "A demo is running: share when it's done." }
+                    return controller.isRecording || controller.isBusy ? "Takely is recording: share when it's done." : nil
+                }
             case .failure(let failure): return .failure(failure)
             }
         }
@@ -343,13 +347,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             bundle.url.deletingLastPathComponent().path == folder
         }
         guard inside else { return .failure(AutomationFailure("Only recordings in Takely's save folders can be shared.")) }
-        let values = try? bundle.exportURL.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
-        guard values?.isRegularFile == true, values?.isSymbolicLink != true, (try? bundle.readProject()) != nil else {
-            return .failure(AutomationFailure("This recording hasn't been exported yet."))
-        }
-        guard (try? await AVURLAsset(url: bundle.exportURL).loadTracks(withMediaType: .video).isEmpty) == false else {
-            return .failure(AutomationFailure("The recording's video can't be read."))
-        }
+        // The export itself is copied without following links and checked when it's shared (ShareSnapshot).
+        guard (try? bundle.readProject()) != nil else { return .failure(AutomationFailure("This recording hasn't been exported yet.")) }
         return .success(bundle)
     }
 

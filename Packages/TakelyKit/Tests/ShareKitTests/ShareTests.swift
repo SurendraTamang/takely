@@ -210,3 +210,51 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         #expect(BucketConfig.endpoint(for: .b2, accountOrRegion: "us-west-004")?.absoluteString == "https://s3.us-west-004.backblazeb2.com")
     }
 }
+
+/// Automation uploads a private copy made without following links: a recording can't be swapped for another file.
+@Suite struct ShareSnapshotTests {
+    func bundle() throws -> ProjectBundle {
+        let bundle = try ProjectBundle.create(in: FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())"))
+        try FileManager.default.createDirectory(at: bundle.exportsURL, withIntermediateDirectories: true)
+        return bundle
+    }
+
+    @Test func copiesTheExportAndCaptions() throws {
+        let bundle = try bundle()
+        try Data("video".utf8).write(to: bundle.exportURL)
+        try Data("WEBVTT".utf8).write(to: bundle.captionsURL)
+        let snapshot = try ShareSnapshot.make(of: bundle)
+        defer { snapshot.discard() }
+        #expect(try Data(contentsOf: snapshot.video) == Data("video".utf8))
+        #expect(snapshot.captions == Data("WEBVTT".utf8))
+        try Data("changed".utf8).write(to: bundle.exportURL)
+        #expect(try Data(contentsOf: snapshot.video) == Data("video".utf8))
+    }
+
+    @Test func refusesALinkedExportOrExportsFolder() throws {
+        let secret = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())-secret")
+        try FileManager.default.createDirectory(at: secret, withIntermediateDirectories: true)
+        try Data("private".utf8).write(to: secret.appending(path: "x.mp4"))
+
+        let linkedFile = try bundle()
+        try FileManager.default.createSymbolicLink(at: linkedFile.exportURL, withDestinationURL: secret.appending(path: "x.mp4"))
+        #expect(throws: (any Error).self) { try ShareSnapshot.make(of: linkedFile) }
+
+        let linkedFolder = try bundle()
+        try FileManager.default.removeItem(at: linkedFolder.exportsURL)
+        try FileManager.default.copyItem(at: secret.appending(path: "x.mp4"), to: secret.appending(path: "\(linkedFolder.name).mp4"))
+        try FileManager.default.createSymbolicLink(at: linkedFolder.exportsURL, withDestinationURL: secret)
+        #expect(throws: (any Error).self) { try ShareSnapshot.make(of: linkedFolder) }
+    }
+
+    @Test func aLinkedCaptionsFileIsLeftOut() throws {
+        let bundle = try bundle()
+        try Data("video".utf8).write(to: bundle.exportURL)
+        let secret = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).txt")
+        try Data("private".utf8).write(to: secret)
+        try FileManager.default.createSymbolicLink(at: bundle.captionsURL, withDestinationURL: secret)
+        let snapshot = try ShareSnapshot.make(of: bundle)
+        defer { snapshot.discard() }
+        #expect(snapshot.captions == nil)
+    }
+}

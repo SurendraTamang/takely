@@ -42,7 +42,9 @@ public enum TakelyTools {
         tool(
             "share",
             "Upload a finished recording to the person's own storage bucket and return its link — e.g. to put a demo "
-                + "in a pull request. Needs sharing set up in Takely's Settings.",
+                + "in a pull request. The person sees the video and confirms on screen; if they decline, don't retry "
+                + "unless they ask. Refused while secrets found on screen are unreviewed, or while recording. Needs "
+                + "sharing set up in Takely's Settings.",
             ["path": ("string", "The recording's MP4 (from record_stop or run_demo)")], required: ["path"]),
         tool(
             "transcript", "What was said in a recording, with times (made at export when transcription is on).",
@@ -99,7 +101,7 @@ public enum TakelyTools {
         var lines = ["state: \(reply.state)"]
         if let path = reply.path { lines.append("path: \(path)") }
         if let duration = reply.duration { lines.append(String(format: "duration: %.1f s", duration)) }
-        if let title = reply.title { lines.append("title: \(title)") }
+        if let title = reply.title { lines.append("title: \(oneLine(title))") }
         if let link = reply.link {
             lines.append("link: \(link)")
             lines.append(
@@ -113,10 +115,25 @@ public enum TakelyTools {
     /// A clickable poster (GitHub, GitLab and most Markdown renderers show the image), or a plain link without one.
     static func markdown(link: String, poster: String?, title: String?, duration: Double?) -> String {
         let length = duration.map { " (" + Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) + ")" } ?? ""
-        // Brackets escaped (CommonMark), so a title can't end the link text early.
-        let name = (title ?? "Demo video").replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]") + length
-        guard let poster else { return "[▶︎ \(name)](\(link))" }
-        return "[![▶︎ \(name)](\(poster))](\(link))"
+        // The title is anyone's text: backslash-escaped (CommonMark), so it can't close the link, add HTML or a line.
+        var name = ""
+        for character in oneLine(title ?? "Demo video") {
+            if "\\[]<>()`*_!".contains(character) { name.append("\\") }
+            name.append(character)
+        }
+        name += length
+        guard let poster else { return "[▶︎ \(name)](\(destination(link)))" }
+        return "[![▶︎ \(name)](\(destination(poster)))](\(destination(link)))"
+    }
+
+    /// Newlines and other control characters as spaces: one line of text.
+    static func oneLine(_ text: String) -> String {
+        String(text.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) })
+    }
+
+    /// A link target that can't end early: spaces, parentheses and angle brackets percent-encoded.
+    static func destination(_ url: String) -> String {
+        url.addingPercentEncoding(withAllowedCharacters: CharacterSet.urlFragmentAllowed.subtracting(.init(charactersIn: "()<>"))) ?? url
     }
 
     /// "[0:12] Hello there" per phrase; read straight from the recording (no app needed).

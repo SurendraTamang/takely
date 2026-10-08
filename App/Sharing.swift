@@ -1,3 +1,4 @@
+import AVFoundation
 import AppCore
 import AppKit
 import OSLog
@@ -115,7 +116,9 @@ final class Sharing {
 
     /// For automation (`takely share`, AI agents): uploads and waits, returning the link or why it couldn't. Never
     /// while another upload runs (one at a time); secrets blurred on screen stay blurred (the export is what's sent).
-    func shareNow(_ bundle: ProjectBundle) async -> Result<(link: URL, poster: URL?), AutomationFailure> {
+    /// `busy`: why sharing must wait now (a demo or a recording under way, which could click Share itself), else nil.
+    func shareNow(_ bundle: ProjectBundle, busy: () -> String?) async -> Result<(link: URL, poster: URL?), AutomationFailure> {
+        if let reason = busy() { return .failure(AutomationFailure(reason)) }
         guard let service else { return .failure(AutomationFailure(ShareError.notConfigured.localizedDescription)) }
         guard upload == nil else { return .failure(AutomationFailure("Another upload is running: try again when it's done.")) }
         // Secrets found on screen: the person reviews the blurs first (the same rule as uploading after recording).
@@ -124,12 +127,29 @@ final class Sharing {
             return .failure(
                 AutomationFailure("Secrets were found on screen: review the blurs in Takely (Review Blurs), then share it from Takely."))
         }
-        guard await confirmShare(bundle) else { return .failure(AutomationFailure("The person chose not to share it.")) }
+        // What's uploaded is a private copy, checked and shown to the person: the file on disk may change meanwhile.
+        let snapshot: ShareSnapshot
+        do {
+            snapshot = try await Task.detached { try ShareSnapshot.make(of: bundle) }.value
+        } catch {
+            return .failure(AutomationFailure("This recording hasn't been exported yet."))
+        }
+        defer { snapshot.discard() }
+        let asset = AVURLAsset(url: snapshot.video)
+        guard (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false else {
+            return .failure(AutomationFailure("The recording's video can't be read."))
+        }
+        guard await confirmShare(asset) else {
+            return .failure(AutomationFailure("The person chose not to share it. Don't ask again unless they tell you to."))
+        }
+        if let reason = busy() { return .failure(AutomationFailure(reason)) }
         guard upload == nil else { return .failure(AutomationFailure("Another upload is running: try again when it's done.")) }
         state = .uploading(bundle.url, 0)
         let includeText = settings.sharePublishText
         let work = Task { () -> Result<URL, any Error> in
-            do { return .success(try await service.share(bundle, includeText: includeText) { _ in }) } catch { return .failure(error) }
+            do {
+                return .success(try await service.share(bundle, includeText: includeText, snapshot: snapshot) { _ in })
+            } catch { return .failure(error) }
         }
         upload = Task { _ = await work.value }  // one upload at a time, whoever started it
         let result = await work.value
@@ -154,14 +174,20 @@ final class Sharing {
         }
     }
 
-    /// Publishing is the person's call: an agent or a command asks, and they see what would be shared.
-    private func confirmShare(_ bundle: ProjectBundle) async -> Bool {
-        let project = try? bundle.readProject()
+    /// Publishing is the person's call: an agent or a command asks, and they see what would be shared — a frame of the
+    /// very copy that would be uploaded, and its length (not a title anyone could have written).
+    private func confirmShare(_ asset: AVURLAsset) async -> Bool {
+        let seconds = (try? await asset.load(.duration).seconds) ?? 0
         let alert = NSAlert()
         alert.messageText = "Share this recording?"
-        let length = project.map { Duration.seconds($0.duration).formatted(.time(pattern: .minuteSecond)) } ?? ""
         alert.informativeText =
-            "An AI agent or a command wants to upload “\(project?.title ?? bundle.name)” (\(length)) to your bucket and get a link anyone with it can open."
+            "An AI agent or a command wants to upload this \(Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond))) video to your bucket and get a link anyone with it can open."
+        if let data = await ShareService.poster(asset), let image = NSImage(data: data) {
+            let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+            view.image = image
+            view.imageScaling = .scaleProportionallyUpOrDown
+            alert.accessoryView = view
+        }
         alert.addButton(withTitle: "Don't Share")
         alert.addButton(withTitle: "Share")
         alert.window.level = .floating

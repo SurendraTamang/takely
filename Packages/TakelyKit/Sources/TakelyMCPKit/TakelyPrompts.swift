@@ -23,8 +23,8 @@ public enum TakelyPrompts {
             messages: [.user(.text(text: prDemo(change: change, app: app)))])
     }
 
-    /// The steps an agent follows: the video shows the real app, narrated; the person confirms what runs; secrets are
-    /// blurred before anything is shared; the link goes in the pull request.
+    /// The steps an agent follows: the video shows the real app, narrated; the person confirms what runs and what's
+    /// shared; secrets found on screen are reviewed first; the link goes in the pull request.
     static func prDemo(change: String, app: String) -> String {
         """
         Make a short video showing \(change) working\(app), and attach it to the pull request.
@@ -36,8 +36,9 @@ public enum TakelyPrompts {
         3. Call `run_demo` with the plan. The person sees the plan and confirms it before anything runs; if they \
         decline, ask what to change. (To record manually instead: `record_start` with the app's window, do the steps, \
         `record_stop`.)
-        4. Call `share` with the returned path. It uploads to the person's own storage (secrets on screen are blurred \
-        when that setting is on) and returns Markdown with a clickable poster.
+        4. Call `share` with the returned path. The person sees the video and confirms before it uploads to their own \
+        storage; if they decline, don't share it and don't retry unless they ask. If secrets were found on screen, it's \
+        refused until the person reviews the blurs in Takely. It returns Markdown with a clickable poster.
         5. Add that Markdown to the pull request description under "Demo" (e.g. `gh pr edit --body-file` or a PR \
         comment), and mention the video's length.
         """

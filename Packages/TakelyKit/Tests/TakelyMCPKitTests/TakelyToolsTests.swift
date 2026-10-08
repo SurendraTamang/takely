@@ -81,6 +81,13 @@ import Testing
         #expect(sent[0].path == "/Movies/a.mp4" && sent[1].plan == "open TextEdit\nkey cmd+n")
     }
 
+    /// A title is anyone's text (the recording's name): it can't close the link, add HTML, or start a new line.
+    @Test func hostileTitlesStayInsideTheLinkText() {
+        let markdown = TakelyTools.markdown(link: "https://x.example/a b)/index.html", poster: nil, title: "a\\]b\n<x>(y)", duration: nil)
+        #expect(markdown == #"[▶︎ a\\\]b \<x\>\(y\)](https://x.example/a%20b%29/index.html)"#)
+        #expect(TakelyTools.oneLine("one\ntwo\rthree") == "one two three")
+    }
+
     @Test func transcriptIsReadFromTheRecording() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
