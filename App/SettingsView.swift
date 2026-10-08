@@ -184,6 +184,10 @@ struct SettingsView: View {
         return "sudo mkdir -p /usr/local/bin && sudo ln -sf \"\(tool)\" /usr/local/bin/takely"
     }
 
+    /// The MCP server inside this copy of Takely (wherever it's installed).
+    private var mcpPath: String { Bundle.main.bundleURL.appending(path: "Contents/Helpers/takely-mcp").path }
+    private var mcpCommand: String { "claude mcp add takely -- \"\(mcpPath)\"" }
+
     private var automation: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Command-line tool").font(.headline)
@@ -197,6 +201,23 @@ struct SettingsView: View {
                     NSPasteboard.general.setString(installCommand, forType: .string)
                 }
             }
+            Text("AI agents (MCP)").font(.headline).padding(.top, 6)
+            Text(
+                "Let Claude Code, Codex, Cursor or another MCP client record your screen, run demos you confirm, and share links — e.g. a video of a change for its pull request. Add Takely once:"
+            )
+            .font(.callout)
+            HStack(alignment: .top) {
+                Text(mcpCommand).font(.caption.monospaced()).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(mcpCommand, forType: .string)
+                }
+            }
+            Text(
+                "Other clients: run \(mcpPath) as a stdio MCP server. You always see when Takely records, demo plans wait for your OK, and secrets on screen are blurred when that's on."
+            )
+            .font(.caption).foregroundStyle(.secondary)
             Toggle("Let takely:// links control recording without asking", isOn: $settings.allowLinkControl)
             Text("Off: a link asks you first (any web page or app can open a link). Links never receive the video's location.")
                 .font(.caption).foregroundStyle(.secondary)

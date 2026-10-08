@@ -187,4 +187,23 @@ final class FakeHost: AutomationHost {
         )
         #expect(ControlURL(URL(string: "takely://doctor")!) == nil)  // never from a link
     }
+
+    @Test func shareGoesThroughTheAppsHookAndNeverFromALink() async throws {
+        let host = FakeHost()
+        let center = AutomationCenter(host: host)
+        let file = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).mp4")
+        FileManager.default.createFile(atPath: file.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: file) }
+        var request = ControlRequest(.share)
+        request.path = file.path
+        #expect(await center.perform(request).error == "Sharing isn't available.")
+        center.share = { _ in .success((URL(string: "https://x.example/t/a/index.html")!, URL(string: "https://x.example/t/a/p.jpg"))) }
+        let reply = await center.perform(request)
+        #expect(reply.ok && reply.link == "https://x.example/t/a/index.html" && reply.poster == "https://x.example/t/a/p.jpg")
+        center.share = { _ in .failure(AutomationFailure("The person chose not to share it.")) }
+        #expect(await center.perform(request).error == "The person chose not to share it.")
+        request.path = "/nope.mp4"
+        #expect(await center.perform(request).error == "No recording at that path.")
+        #expect(ControlURL(URL(string: "takely://share?path=/Users/x/.ssh/id_rsa")!) == nil)
+    }
 }

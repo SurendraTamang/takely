@@ -16,6 +16,7 @@ let usage = """
                                                          (Ctrl-C stops the demo and keeps what was recorded)
       demo stop                                          stop the running demo
       doctor                                             check permissions, copies of the app, disk, Apple Intelligence
+      share <video.mp4>                                  upload a recording to your bucket and print its link
 
       --json   print the reply as JSON
 
@@ -40,6 +41,10 @@ if name == "demo", arguments.dropFirst().first == "stop" { arguments = ["demo-st
 guard let command = ControlRequest.Command(rawValue: arguments[0]) else { exit(2, "Unknown command “\(name)”.\n\n" + usage) }
 var request = ControlRequest(command)
 var rest = arguments.dropFirst()
+if command == .share {
+    guard let file = rest.popFirst(), rest.isEmpty else { exit(2, "share needs the recording's MP4.\n\n" + usage) }
+    request.path = URL(filePath: file).standardizedFileURL.path
+}
 if command == .demo {
     if rest.first == "run" { rest.removeFirst() }
     guard let file = rest.popFirst(), rest.isEmpty else { exit(2, "demo needs one plan file (or - for standard input).\n\n" + usage) }
@@ -140,7 +145,9 @@ do {
         print(
             request.command == .doctor
                 ? reply.report ?? reply.state
-                : request.command == .stop || request.command == .demo ? reply.path ?? reply.state : reply.state)
+                : request.command == .share
+                    ? reply.link ?? reply.state
+                    : request.command == .stop || request.command == .demo ? reply.path ?? reply.state : reply.state)
     }
     if !reply.ok {
         if !json, let report = reply.report {

@@ -17,6 +17,10 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: 2.6.0
+  # The official Model Context Protocol SDK, for `takely-mcp` (AI agents).
+  MCPSwiftSDK:
+    url: https://github.com/modelcontextprotocol/swift-sdk
+    from: 0.11.0
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -57,6 +61,11 @@ targets:
         copy:
           destination: wrapper
           subpath: Contents/Helpers
+      # `takely-mcp`, the MCP server AI agents launch (Contents/Helpers/takely-mcp).
+      - target: takely-mcp
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
       - package: KeyboardShortcuts
       - package: Sparkle
     info:
@@ -92,6 +101,23 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.takely.Takely
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+  takely-mcp:
+    type: tool
+    platform: macOS
+    sources: [Packages/TakelyKit/Sources/takely-mcp]
+    dependencies:
+      - package: TakelyKit
+        product: TakelyMCPKit
+      - package: TakelyKit
+        product: TakelyControl
+      - package: MCPSwiftSDK
+        product: MCP
+    settings:
+      base:
+        PRODUCT_NAME: takely-mcp
+        SKIP_INSTALL: YES
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
   takely-cli:
