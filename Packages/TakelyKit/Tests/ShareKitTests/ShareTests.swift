@@ -3,8 +3,10 @@ import CryptoKit
 import Foundation
 import ProjectKit
 import Synchronization
+import TestSupport
 import Testing
 
+@testable import RenderKit
 @testable import ShareKit
 
 /// An in-memory S3: objects, multipart uploads, and injected failures.
@@ -277,6 +279,37 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         #expect(try await asset.load(.commonMetadata).isEmpty)
     }
 
+    /// A real Takely export (title, summary, AI-named chapters in French, a caption track, audio): an agent's share
+    /// uploads only its video and audio, the index first; the page's chapters come from the export.
+    @Test func aTakelyExportIsSharedWithoutItsText() async throws {
+        let bundle = try await exportedBundle()
+        let plain = bundle.exportsURL.appending(path: "plain.mp4")
+        try await writeVideo(to: plain, frames: 20, audio: true)
+        try FileManager.default.removeItem(at: bundle.exportURL)
+        try await MovieFinisher.write(
+            plain, to: bundle.exportURL,
+            extras: MovieExtras(
+                markers: [Marker(t: 1, title: "Démarrage secret")], captions: [CaptionCue(start: 0, end: 2, text: "secret transcript")],
+                captionsLocale: "fr_FR", title: "Secret title", summary: "Secret summary"))
+        try FileManager.default.removeItem(at: plain)
+        let export = try Data(contentsOf: bundle.exportURL)
+        #expect(["secret transcript", "Secret title", "Démarrage secret"].allSatisfy { export.range(of: Data($0.utf8)) != nil })
+
+        let snapshot = try await ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
+        #expect(snapshot.chapters.map(\.title).contains("Démarrage secret") && snapshot.textFree)
+        _ = try await ShareService(client: client()).share(bundle, includeText: false, snapshot: snapshot)
+        let video = try #require(FakeS3.state.withLock { $0.objects.first { $0.key.contains("/video-") }?.value })
+        for secret in ["secret transcript", "Secret title", "Secret summary", "Démarrage secret"] {
+            #expect(video.range(of: Data(secret.utf8)) == nil, "\(secret)")
+        }
+        let file = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).mp4")
+        try video.write(to: file)
+        #expect(Set(try await AVURLAsset(url: file).load(.tracks).map(\.mediaType)) == [.video, .audio])
+        let moov = try #require(video.range(of: Data("moov".utf8)))
+        let mdat = try #require(video.range(of: Data("mdat".utf8)))
+        #expect(moov.lowerBound < mdat.lowerBound)  // fast start
+    }
+
     @Test func aRecordingSharedToAnotherBucketIsLeftAlone() async throws {
         let bundle = try await exportedBundle()
         _ = try await ShareService(client: client()).share(bundle)
@@ -317,7 +350,7 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
 }
 
 /// A short real MP4 (a preview must be made from it).
-func writeVideo(to url: URL, frames: Int = 10, title: String? = nil) async throws {
+func writeVideo(to url: URL, frames: Int = 10, title: String? = nil, audio: Bool = false) async throws {
     if let title {  // as Takely's exporter adds it: a passthrough export with metadata
         let plain = url.deletingLastPathComponent().appending(path: "\(UUID()).mp4")
         try await writeVideo(to: plain, frames: frames)
@@ -336,8 +369,18 @@ func writeVideo(to url: URL, frames: Int = 10, title: String? = nil) async throw
         mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 64])
     let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: nil)
     writer.add(input)
+    let sound = AVAssetWriterInput(
+        mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: 2])
+    if audio { writer.add(sound) }
     writer.startWriting()
     writer.startSession(atSourceTime: .zero)
+    if audio {
+        for index in 0..<(frames * 4800 / 1024) {
+            while !sound.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(5)) }
+            sound.append(Synthetic.audio(pts: CMTime(value: CMTimeValue(index * 1024), timescale: 48_000)))
+        }
+        sound.markAsFinished()
+    }
     for frame in 0..<frames {
         while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(5)) }
         var buffer: CVPixelBuffer?

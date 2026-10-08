@@ -44,7 +44,7 @@ let package = Package(
         .testTarget(
             name: "AppCoreTests", dependencies: ["AppCore", "CaptureKit", "ProjectKit", "RenderKit", "TestSupport", "TakelyControl"]),
         .testTarget(name: "TakelyControlTests", dependencies: ["TakelyControl"]),
-        .testTarget(name: "ShareKitTests", dependencies: ["ShareKit", "ProjectKit"]),
+        .testTarget(name: "ShareKitTests", dependencies: ["ShareKit", "ProjectKit", "RenderKit", "TestSupport"]),
         .testTarget(
             name: "TakelyMCPKitTests",
             dependencies: ["TakelyMCPKit", "TakelyControl", "ProjectKit", .product(name: "MCP", package: "swift-sdk")]),

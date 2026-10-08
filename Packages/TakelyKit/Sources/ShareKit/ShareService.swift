@@ -168,7 +168,7 @@ public struct ShareService: Sendable {
     /// The export's chapters (already on the edited timeline); none unless there are at least two.
     static func chapters(_ asset: AVURLAsset) async -> [SharePage.Chapter] {
         // Named in the recording's language (whatever it is), else the Mac's.
-        let languages = ((try? await asset.load(.availableChapterLocales)) ?? []).map(\.identifier) + Locale.preferredLanguages
+        let languages = ((try? await asset.load(.availableChapterLocales)) ?? []).map { $0.identifier(.bcp47) } + Locale.preferredLanguages
         guard let groups = try? await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: languages + ["en"]) else {
             return []
         }
@@ -209,6 +209,8 @@ public enum ShareError: Error, LocalizedError, Equatable {
 /// only through this descriptor), the preview and facts read from it, and the text published with it.
 public final class ShareSnapshot: Sendable {
     let descriptor: Int32
+    /// The video has no text inside it (no metadata, caption or chapter track): the page's is all that's published.
+    public let textFree: Bool
     /// The copy's size and a SHA-256 per upload part (strict snapshots): each part is checked before it's sent.
     let sealed: (size: Int, parts: [SHA256.Digest])?
     public let poster: Data?
@@ -220,10 +222,12 @@ public final class ShareSnapshot: Sendable {
     public let captions: Captions?
 
     init(
-        descriptor: Int32, sealed: (size: Int, parts: [SHA256.Digest])?, poster: Data?, duration: Double, dimensions: CGSize,
+        descriptor: Int32, textFree: Bool = true, sealed: (size: Int, parts: [SHA256.Digest])?, poster: Data?, duration: Double,
+        dimensions: CGSize,
         chapters: [SharePage.Chapter], title: String?, summary: String?, captions: Captions?
     ) {
         self.descriptor = descriptor
+        self.textFree = textFree
         self.sealed = sealed
         self.poster = poster
         self.duration = duration
@@ -263,9 +267,11 @@ public final class ShareSnapshot: Sendable {
         if textFree {
             let copy = descriptor
             defer { close(copy) }
-            let original = AVURLAsset(url: URL(filePath: "/dev/fd/\(copy)"), options: [AVURLAssetOverrideMIMETypeKey: "video/mp4"])
+            let reader = SealedLoader(descriptor: copy, sealed: nil)  // pread, never a shared file offset
+            let original = reader.asset()
             namedChapters = await ShareService.chapters(original)
             descriptor = try await withoutText(original)
+            withExtendedLifetime(reader) {}
         }
         var kept = false
         defer { if !kept { close(descriptor) } }
@@ -294,7 +300,7 @@ public final class ShareSnapshot: Sendable {
         kept = true
         // Published as shown: text anyone could have written, with characters that hide or reorder text removed.
         return ShareSnapshot(
-            descriptor: descriptor, sealed: sealed, poster: poster, duration: duration, dimensions: dimensions,
+            descriptor: descriptor, textFree: textFree, sealed: sealed, poster: poster, duration: duration, dimensions: dimensions,
             chapters: chapters.map { .init(t: $0.t, title: displayable($0.title)) }, title: project?.title.map(displayable),
             summary: project?.summary.map(displayable),
             captions: captions.map { Captions(cues: $0.cues.map { .init(start: $0.start, end: $0.end, text: displayable($0.text)) }) })
@@ -322,6 +328,7 @@ public final class ShareSnapshot: Sendable {
         else { throw ShareError.unreadableVideo }
         export.metadata = []
         export.metadataItemFilter = .forSharing()
+        export.shouldOptimizeForNetworkUse = true  // the index first: a shared link starts playing at once
         let folder = FileManager.default.temporaryDirectory.appending(
             path: "takely-share-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -430,11 +437,11 @@ public final class ShareSnapshot: Sendable {
 }
 
 extension ShareSnapshot {
-    /// Everything published with the video of a text-free snapshot (automation's), in full, as the person is shown it
-    /// before sharing: with `includeText`, the page's title, summary, chapter names and the captions; else nothing.
-    /// Only what's there.
+    /// Everything published with the video, in full, as the person is shown it before sharing: with `includeText` the
+    /// page's title, summary, chapter names and captions; without, nothing for a text-free video (else the same text,
+    /// which the video file carries). Only what's there.
     public func publishedText(includeText: Bool) -> [(heading: String, text: String)] {
-        guard includeText else { return [] }
+        guard includeText || !textFree else { return [] }
         let chapterList = chapters.map { "\(SharePage.time($0.t))  \($0.title)" }
         let items: [(String, String?)] = [
             ("Title", title), ("Summary", summary), ("Chapters", chapterList.isEmpty ? nil : chapterList.joined(separator: "\n")),
