@@ -136,7 +136,7 @@ final class Sharing {
         } catch {
             return .failure(AutomationFailure("Takely couldn't copy the recording to share it: \(error.localizedDescription)"))
         }
-        guard let image = NSImage(data: snapshot.poster) else {
+        guard let poster = snapshot.poster, let image = NSImage(data: poster) else {
             return .failure(AutomationFailure(ShareError.unreadableVideo.localizedDescription))
         }
         let includeText = settings.sharePublishText
@@ -188,12 +188,8 @@ final class Sharing {
         let length = Duration.seconds(snapshot.duration).formatted(.time(pattern: .minuteSecond))
         var text =
             "An AI agent or a command wants to upload this \(length) video to your bucket and get a link anyone with it can open."
-        if withText {
-            let shown = [snapshot.title.map { "Title: \($0)" }, snapshot.summary.map { "Summary: \($0)" }].compactMap { $0 }
-                .map { Self.clipped($0, to: 300) }
-            text += "\n\nPublished with it (Settings › Share): captions, chapter names"
-            text += shown.isEmpty ? "." : ", and\n" + shown.joined(separator: "\n")
-        }
+        let published = withText ? Self.publishedText(snapshot) : []
+        if !published.isEmpty { text += "\n\nPublished with it (Settings › Share):\n" + published.joined(separator: "\n") }
         alert.informativeText = text
         let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
         view.image = image
@@ -206,10 +202,26 @@ final class Sharing {
         return await alert.runModalFromRunLoop() == .alertSecondButtonReturn
     }
 
-    /// One paragraph, at most `limit` characters: text anyone could have written can't fill or reshape the alert.
+    /// The text that goes on the page, as the person is shown it: each item one line, clipped.
+    static func publishedText(_ snapshot: ShareSnapshot) -> [String] {
+        let cues =
+            snapshot.captions.map { String(decoding: $0, as: UTF8.self) }?.components(separatedBy: .newlines)
+            .filter { !$0.isEmpty && $0 != "WEBVTT" && !$0.contains("-->") && Int($0) == nil } ?? []
+        return [
+            snapshot.title.flatMap { $0.isEmpty ? nil : "Title: \($0)" },
+            snapshot.summary.flatMap { $0.isEmpty ? nil : "Summary: \($0)" },
+            snapshot.chapters.isEmpty ? nil : "Chapters: " + snapshot.chapters.map(\.title).joined(separator: ", "),
+            cues.isEmpty ? nil : "Captions: “" + cues.prefix(3).joined(separator: " ") + (cues.count > 3 ? " …" : "") + "”",
+        ]
+        .compactMap { $0 }.map { clipped($0, to: 300) }
+    }
+
+    /// One line of at most `limit` Unicode scalars: text anyone could have written can't fill or reshape the alert.
     static func clipped(_ text: String, to limit: Int) -> String {
-        let line = String(text.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) })
-        return line.count > limit ? line.prefix(limit) + "…" : line
+        var scalars = String.UnicodeScalarView()
+        scalars.append(
+            contentsOf: text.unicodeScalars.prefix(limit).map { CharacterSet.controlCharacters.contains($0) ? " " : $0 })
+        return String(scalars) + (text.unicodeScalars.count > limit ? "…" : "")
     }
 
     /// Uploads (or re-uploads, keeping the link), then copies the link and says so.

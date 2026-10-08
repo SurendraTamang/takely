@@ -186,6 +186,50 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         #expect(video == original)
     }
 
+    /// A process that opened the copy in the instant it had a name, writing after the person was asked: the changed
+    /// part is caught before it's sent, and no page is published.
+    @Test func aCopyChangedAfterItWasShownIsntPublished() async throws {
+        let bundle = try await exportedBundle()
+        let file = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).mp4")
+        try FileManager.default.copyItem(at: bundle.exportURL, to: file)
+        let descriptor = open(file.path, O_RDWR)
+        let snapshot = ShareSnapshot(
+            descriptor: descriptor, sealed: try ShareSnapshot.partDigests(descriptor), poster: Data([0xFF, 0xD8]), duration: 1,
+            dimensions: CGSize(width: 64, height: 64), chapters: [], title: nil, summary: nil, captions: nil)
+        _ = Data("evil".utf8).withUnsafeBytes { pwrite(descriptor, $0.baseAddress, 4, 100) }
+        await #expect(throws: ShareError.self) { try await ShareService(client: client()).share(bundle, snapshot: snapshot) }
+        #expect(FakeS3.state.withLock { $0.objects.keys.filter { $0.hasSuffix("index.html") || $0.contains("/video-") } }.isEmpty)
+    }
+
+    /// The page's text is what the person was shown, even if project.json changes afterwards.
+    @Test func thePageTextComesFromTheSnapshot() async throws {
+        let bundle = try await exportedBundle()
+        var project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 64, height: 64), fps: 10, codec: .h264),
+            camera: .init(enabled: false))
+        project.title = "Shown title"
+        try bundle.write(project)
+        let snapshot = try await ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
+        project.title = "Swapped title"
+        try bundle.write(project)
+        _ = try await ShareService(client: client()).share(bundle, snapshot: snapshot)
+        let page = FakeS3.state.withLock { $0.objects.first { $0.key.hasSuffix("index.html") }?.value }.map {
+            String(decoding: $0, as: UTF8.self)
+        }
+        #expect(page?.contains("Shown title") == true && page?.contains("Swapped") == false)
+    }
+
+    @Test func aFileCutShortWhileReadingThrows() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(count: 10).write(to: file)
+        let descriptor = open(file.path, O_RDONLY)
+        defer { close(descriptor) }
+        #expect(try readFully(descriptor, 0..<10).count == 10)
+        #expect(throws: ShareError.self) { try readFully(descriptor, 0..<20) }
+        #expect(try readFully(descriptor, 5..<20, exact: false).count == 5)
+    }
+
     @Test func aRecordingSharedToAnotherBucketIsLeftAlone() async throws {
         let bundle = try await exportedBundle()
         _ = try await ShareService(client: client()).share(bundle)
@@ -268,13 +312,14 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
         try bundle.write(project)
         let original = SHA256.hash(data: try Data(contentsOf: bundle.exportURL))
         let snapshot = try await make(bundle)
-        #expect(snapshot.poster.starts(with: [0xFF, 0xD8]) && snapshot.duration > 0.5 && snapshot.dimensions.width == 64)
+        #expect(snapshot.sealed?.parts == [original])
+        #expect(snapshot.poster?.starts(with: [0xFF, 0xD8]) == true && snapshot.duration > 0.5 && snapshot.dimensions.width == 64)
         #expect(snapshot.captions == Data("WEBVTT\n".utf8) && snapshot.title == "Fix login")
         // Deleted while held open: nothing can reach it by path; changing the export changes nothing.
         var info = stat()
         #expect(fstat(snapshot.descriptor, &info) == 0 && info.st_nlink == 0)
         try Data("changed".utf8).write(to: bundle.exportURL)
-        #expect(try ShareSnapshot.digest(snapshot.descriptor) == original)
+        #expect(try ShareSnapshot.partDigests(snapshot.descriptor).parts == [original])
     }
 
     @Test func refusesALinkedExportOrExportsFolder() async throws {

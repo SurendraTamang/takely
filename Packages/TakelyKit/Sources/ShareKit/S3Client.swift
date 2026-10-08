@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Synchronization
 
@@ -126,21 +127,36 @@ public struct S3Client: Sendable {
         let descriptor = open(file.path, O_RDONLY | O_CLOEXEC)
         guard descriptor >= 0 else { throw CocoaError(.fileReadNoSuchFile) }
         defer { close(descriptor) }
-        try await upload(descriptor: descriptor, key: key, contentType: contentType, cacheControl: cacheControl, progress: progress)
+        try await upload(
+            descriptor: descriptor, sealed: nil, key: key, contentType: contentType, cacheControl: cacheControl, progress: progress)
+    }
+
+    /// How a file of `size` bytes is uploaded: one PUT, or parts (at most 10,000, so very large files get bigger ones).
+    static func partRanges(size: Int) -> [Range<Int>] {
+        guard size > multipartThreshold else { return [0..<size] }
+        let partSize = max(Self.partSize, (size + 9_999) / 10_000)
+        return stride(from: 0, to: size, by: partSize).map { $0..<min($0 + partSize, size) }
     }
 
     /// Uploads what an open file holds (read with pread, so the descriptor's offset doesn't matter). The caller
-    /// keeps it open until this returns.
-    public func upload(
-        descriptor: Int32, key: String, contentType: String, cacheControl: String? = nil,
-        progress: @escaping @Sendable (Double) -> Void = { _ in }
+    /// keeps it open until this returns. `sealed`: its size and each part's SHA-256 when it was shown to the person;
+    /// a part that differs stops the upload (and aborts it) before it's sent.
+    func upload(
+        descriptor: Int32, sealed: (size: Int, parts: [SHA256.Digest])?, key: String, contentType: String,
+        cacheControl: String? = nil, progress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws {
         var info = stat()
         guard fstat(descriptor, &info) == 0 else { throw CocoaError(.fileReadUnknown) }
-        let size = Int(info.st_size)
-        let reader = PartReader(descriptor)
+        let size = sealed?.size ?? Int(info.st_size)
+        let ranges = Self.partRanges(size: size)
+        if let sealed, sealed.parts.count != ranges.count { throw ShareError.changedWhileReading }
+        @Sendable func read(_ index: Int) throws -> Data {
+            let data = try readFully(descriptor, ranges[index])
+            if let sealed, SHA256.hash(data: data) != sealed.parts[index] { throw ShareError.changedWhileReading }
+            return data
+        }
         guard size > Self.multipartThreshold else {
-            try await put(key, data: try reader.read(offset: 0, length: size), contentType: contentType, cacheControl: cacheControl)
+            try await put(key, data: try read(0), contentType: contentType, cacheControl: cacheControl)
             return progress(1)
         }
         var initial = ["Content-Type": contentType]
@@ -150,9 +166,7 @@ public struct S3Client: Sendable {
             try await send("POST", url(key, query: [URLQueryItem(name: "uploads", value: nil)]), headers: headers)
         }
         guard let uploadID = Self.tag("UploadId", in: created) else { throw URLError(.cannotParseResponse) }
-        // S3 allows at most 10,000 parts: very large files get bigger parts.
-        let partSize = max(Self.partSize, (size + 9_999) / 10_000)
-        let parts = (size + partSize - 1) / partSize
+        let parts = ranges.count
         let sent = SentCounter(total: size, progress: progress)
         do {
             var etags = [String](repeating: "", count: parts)
@@ -162,7 +176,7 @@ public struct S3Client: Sendable {
                     let number = next + 1
                     next += 1
                     group.addTask {
-                        let data = try reader.read(offset: (number - 1) * partSize, length: partSize)
+                        let data = try read(number - 1)
                         let query = [
                             URLQueryItem(name: "partNumber", value: String(number)), URLQueryItem(name: "uploadId", value: uploadID),
                         ]
@@ -254,16 +268,20 @@ private final class SentCounter: @unchecked Sendable {
 }
 
 /// Reads parts of one open file (positioned reads, safe from several tasks at once).
-private final class PartReader: Sendable {
-    let descriptor: Int32
-
-    /// Not owned: whoever opened it closes it.
-    init(_ descriptor: Int32) { self.descriptor = descriptor }
-
-    func read(offset: Int, length: Int) throws -> Data {
-        var data = Data(count: length)
-        let count = data.withUnsafeMutableBytes { pread(descriptor, $0.baseAddress, length, off_t(offset)) }
+/// Exactly the bytes in `range` (pread, retried on EINTR and short reads), or fewer only at the end of the file when
+/// `exact` is false; a file that ends sooner throws (it was cut short meanwhile).
+func readFully(_ descriptor: Int32, _ range: Range<Int>, exact: Bool = true) throws -> Data {
+    var data = Data(count: range.count)
+    var filled = 0
+    while filled < range.count {
+        let count = data.withUnsafeMutableBytes {
+            pread(descriptor, $0.baseAddress! + filled, range.count - filled, off_t(range.lowerBound + filled))
+        }
+        if count < 0, errno == EINTR { continue }
         guard count >= 0 else { throw CocoaError(.fileReadUnknown) }
-        return data.prefix(count)
+        if count == 0 { break }
+        filled += count
     }
+    guard filled == range.count || !exact else { throw ShareError.changedWhileReading }
+    return data.prefix(filled)
 }
