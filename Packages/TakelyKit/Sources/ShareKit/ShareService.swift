@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CryptoKit
 import Foundation
 import ImageIO
 import ProjectKit
@@ -67,42 +68,40 @@ public struct ShareService: Sendable {
             complete: false)
         try bundle.write(record)
 
-        // A snapshot (an APFS clone: instant, no extra space): a re-export meanwhile can't mix two versions.
-        let video: URL
-        if let given = snapshot {
-            video = given.video
+        // What's published: automation's snapshot as the person saw it, else a clone of the export now (instant, no
+        // extra space; a re-export meanwhile can't mix two versions).
+        let facts: ShareSnapshot
+        if let snapshot {
+            facts = snapshot
         } else {
-            video = FileManager.default.temporaryDirectory.appending(path: "takely-share-\(UUID().uuidString).mp4")
-            try FileManager.default.copyItem(at: bundle.exportURL, to: video)
+            let folders = [bundle.url.deletingLastPathComponent()]
+            facts = try await ShareSnapshot.make(of: bundle, inside: folders, strict: false)
         }
-        defer { if snapshot == nil { try? FileManager.default.removeItem(at: video) } }
-        let asset = AVURLAsset(url: video)
-        let project = try? bundle.readProject()
 
         var uploaded = ["index.html", "oembed.json", videoName]
-        try await client.upload(video, key: "\(prefix)/\(videoName)", contentType: "video/mp4", cacheControl: Self.mediaCache) {
-            progress($0 * 0.9)
-        }
+        // The descriptor is only open while `facts` lives: kept alive until the upload is done.
+        defer { withExtendedLifetime(facts) {} }
+        try await client.upload(
+            descriptor: facts.descriptor, sealed: facts.sealed, key: "\(prefix)/\(videoName)", contentType: "video/mp4",
+            cacheControl: Self.mediaCache
+        ) { progress($0 * 0.9) }
         var posterName: String?
-        if let data = await Self.poster(asset) {
+        if let data = facts.poster {
             try await client.put("\(prefix)/\(poster)", data: data, contentType: "image/jpeg", cacheControl: Self.mediaCache)
             posterName = poster
             uploaded.append(poster)
         }
         var captionsName: String?
-        let captionsData = snapshot.map { $0.captions } ?? (try? Data(contentsOf: bundle.captionsURL))
-        if includeText, let captionsData {
+        if includeText, let captionsData = facts.captions {
             try await client.put(
                 "\(prefix)/\(captions)", data: captionsData, contentType: "text/vtt; charset=utf-8", cacheControl: Self.mediaCache)
             captionsName = captions
             uploaded.append(captions)
         }
-        let size = (try? await asset.loadTracks(withMediaType: .video).first?.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
-        let duration = (try? await asset.load(.duration).seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
         let page = SharePage(
-            title: includeText ? project?.title ?? "Recording" : "Recording", summary: includeText ? project?.summary : nil,
-            chapters: includeText ? await Self.chapters(asset) : [], duration: duration, width: Int(size.width), height: Int(size.height),
-            base: base, video: videoName, poster: posterName, captions: captionsName)
+            title: includeText ? facts.title ?? "Recording" : "Recording", summary: includeText ? facts.summary : nil,
+            chapters: includeText ? facts.chapters : [], duration: facts.duration, width: Int(facts.dimensions.width),
+            height: Int(facts.dimensions.height), base: base, video: videoName, poster: posterName, captions: captionsName)
         try await client.put(
             "\(prefix)/oembed.json", data: page.oEmbed, contentType: "application/json+oembed", cacheControl: Self.pageCache)
         // The page last: the link shows the new version only once everything it shows is there.
@@ -177,16 +176,22 @@ public struct ShareService: Sendable {
     }
 }
 
-public enum ShareError: Error, LocalizedError {
+public enum ShareError: Error, LocalizedError, Equatable {
     case notExported
     case notConfigured
     case otherBucket(String)
     case unsafeFile
+    case unreadableVideo
+    case changedWhileReading
+    case copyFailed
 
     public var errorDescription: String? {
         switch self {
         case .notExported: "This recording hasn't been exported yet."
         case .notConfigured: "Set up sharing first: Settings › Share."
+        case .unreadableVideo: "The recording's video can't be read, so Takely can't show what would be shared."
+        case .changedWhileReading: "The recording changed while Takely was preparing it, so it wasn't shared. Try again."
+        case .copyFailed: "Takely couldn't make a private copy of the recording to share (is the disk full?)."
         case .unsafeFile:
             "This recording can't be shared safely: its files aren't where Takely saved them (a link or a linked file). Share it from Takely."
         case .otherBucket(let bucket):
@@ -195,36 +200,137 @@ public enum ShareError: Error, LocalizedError {
     }
 }
 
-/// Files to share exactly as they were checked: a private copy of the video (and the captions' bytes), made without
-/// following symbolic links. Automation shares these, so what the person confirmed is what's uploaded.
-public struct ShareSnapshot: Sendable {
-    public let folder: URL
-    public let video: URL
+/// What's shared, fixed before the person is asked: the video (a private copy no other process can open any more,
+/// only through this descriptor), the preview and facts read from it, and the text published with it.
+public final class ShareSnapshot: Sendable {
+    let descriptor: Int32
+    /// The copy's size and a SHA-256 per upload part (strict snapshots): each part is checked before it's sent.
+    let sealed: (size: Int, parts: [SHA256.Digest])?
+    public let poster: Data?
+    public let duration: Double
+    public let dimensions: CGSize
+    public let chapters: [SharePage.Chapter]
+    public let title: String?
+    public let summary: String?
     public let captions: Data?
 
-    /// Copies `bundle`'s export (and captions) into a new private folder. Refuses unless the bundle sits directly in
-    /// one of `folders` (checked on what's actually opened), with no symbolic link under it, and each file is a
-    /// regular file with no other hard link (else it could be any file on the volume). Captions that aren't WebVTT
-    /// are left out.
-    public static func make(of bundle: ProjectBundle, inside folders: [URL]) throws -> ShareSnapshot {
+    init(
+        descriptor: Int32, sealed: (size: Int, parts: [SHA256.Digest])?, poster: Data?, duration: Double, dimensions: CGSize,
+        chapters: [SharePage.Chapter], title: String?, summary: String?, captions: Data?
+    ) {
+        self.descriptor = descriptor
+        self.sealed = sealed
+        self.poster = poster
+        self.duration = duration
+        self.dimensions = dimensions
+        self.chapters = chapters
+        self.title = title
+        self.summary = summary
+        self.captions = captions
+    }
+
+    deinit { close(descriptor) }
+
+    /// Strict (automation): the bundle must sit directly in one of `folders` (checked on what's actually opened),
+    /// with no symbolic link under it, and each file must be a regular file with no other hard link (else it could be
+    /// any file on the volume); captions that aren't WebVTT are left out; there must be a preview; and the copy is
+    /// hashed before and after the preview is read, and checked again part by part as it's uploaded. (Not caught: a
+    /// process that opened the copy in the instant it had a name, changing it only while the preview is read and
+    /// back afterwards — two tight races. An AVAssetResourceLoader serving checked bytes would close it.)
+    /// Not strict (the person shares it from Takely): the export as it is, links and all.
+    public static func make(of bundle: ProjectBundle, inside folders: [URL], strict: Bool = true) async throws -> ShareSnapshot {
         let allowed = Set(folders.compactMap(realPath))
+        let source =
+            strict
+            ? try open(bundle.exportURL, under: bundle.url, inside: allowed) : Darwin.open(bundle.exportURL.path, O_RDONLY | O_CLOEXEC)
+        guard source >= 0 else { throw ShareError.notExported }
+        let descriptor: Int32
+        do {
+            defer { close(source) }
+            descriptor = try privateCopy(of: source)
+        }
+        var kept = false
+        defer { if !kept { close(descriptor) } }
+        let before = strict ? try partDigests(descriptor) : nil
+
+        // Read through this process's own descriptor: no path another process could swap meanwhile.
+        let asset = AVURLAsset(url: URL(filePath: "/dev/fd/\(descriptor)"), options: [AVURLAssetOverrideMIMETypeKey: "video/mp4"])
+        guard (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false else { throw ShareError.unreadableVideo }
+        let poster = await ShareService.poster(asset)
+        if strict, poster == nil { throw ShareError.unreadableVideo }
+        let duration = (try? await asset.load(.duration).seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
+        let dimensions =
+            (try? await asset.loadTracks(withMediaType: .video).first?.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
+        let chapters = await ShareService.chapters(asset)
+
+        // Only a handle opened in the instant the copy had a name could still write to it: a change that's still
+        // there shows here, a later one when its part is uploaded.
+        let after = strict ? try partDigests(descriptor) : nil
+        if let before, let after, before.parts != after.parts || before.size != after.size {
+            throw ShareError.changedWhileReading
+        }
+        func read(_ file: URL) -> Data? {
+            strict ? try? readNoFollow(file, under: bundle.url, inside: allowed) : try? Data(contentsOf: file)
+        }
+        let captions = read(bundle.captionsURL).flatMap { $0.starts(with: Data("WEBVTT".utf8)) ? $0 : nil }
+        let project = read(bundle.manifestURL).flatMap { try? Project.decode($0) }
+        kept = true
+        return ShareSnapshot(
+            descriptor: descriptor, sealed: after, poster: poster, duration: duration, dimensions: dimensions, chapters: chapters,
+            title: project?.title, summary: project?.summary, captions: captions)
+    }
+
+    /// A copy of `source` in a new private folder (an APFS clone: instant, no extra space; else copied), opened and
+    /// deleted at once. Refused unless it then has no name left (another hard link, or the folder swapped for a link
+    /// so the delete missed it).
+    static func privateCopy(of source: Int32) throws -> Int32 {
         let folder = FileManager.default.temporaryDirectory.appending(
             path: "takely-share-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        do {
-            let video = folder.appending(path: "video.mp4")
-            try copyNoFollow(bundle.exportURL, under: bundle.url, inside: allowed, to: video)
-            let captions = (try? readNoFollow(bundle.captionsURL, under: bundle.url, inside: allowed)).flatMap {
-                $0.starts(with: Data("WEBVTT".utf8)) ? $0 : nil
+        defer { rmdir(folder.path) }
+        let path = folder.appending(path: "video.mp4").path
+        var descriptor: Int32
+        if fclonefileat(source, AT_FDCWD, path, 0) == 0 {
+            descriptor = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        } else {
+            descriptor = Darwin.open(path, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            if descriptor >= 0, (try? copy(from: source, to: descriptor)) == nil {
+                close(descriptor)
+                descriptor = -1
             }
-            return ShareSnapshot(folder: folder, video: video, captions: captions)
-        } catch {
-            try? FileManager.default.removeItem(at: folder)
-            throw error
+        }
+        unlink(path)
+        guard descriptor >= 0 else { throw ShareError.copyFailed }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_nlink == 0 else {
+            close(descriptor)
+            throw ShareError.unsafeFile
+        }
+        return descriptor
+    }
+
+    /// Up to the size it had when the copy began: a file that keeps growing can't fill the disk.
+    static func copy(from source: Int32, to destination: Int32) throws {
+        var info = stat()
+        guard fstat(source, &info) == 0 else { throw ShareError.copyFailed }
+        let size = Int(info.st_size)
+        var offset = 0
+        while offset < size {
+            let chunk = try readFully(source, offset..<min(offset + (8 << 20), size), exact: false)
+            if chunk.isEmpty { return }
+            let written = chunk.withUnsafeBytes { pwrite(destination, $0.baseAddress, chunk.count, off_t(offset)) }
+            guard written == chunk.count else { throw ShareError.copyFailed }
+            offset += chunk.count
         }
     }
 
-    public func discard() { try? FileManager.default.removeItem(at: folder) }
+    /// The size and a SHA-256 of each part, as `S3Client` will upload it.
+    static func partDigests(_ descriptor: Int32) throws -> (size: Int, parts: [SHA256.Digest]) {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else { throw ShareError.copyFailed }
+        let size = Int(info.st_size)
+        return (size, try S3Client.partRanges(size: size).map { SHA256.hash(data: try readFully(descriptor, $0)) })
+    }
 
     /// `file` must lie under `root` with no symbolic link on the way (the folder, `exports/`, the file itself), and
     /// `root` directly in one of `allowed` (real paths).
@@ -260,13 +366,4 @@ public struct ShareSnapshot: Sendable {
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true).readDataToEndOfFile()
     }
 
-    static func copyNoFollow(_ file: URL, under root: URL, inside allowed: Set<String>, to destination: URL) throws {
-        let source = FileHandle(fileDescriptor: try open(file, under: root, inside: allowed), closeOnDealloc: true)
-        // An APFS clone of the checked descriptor (instant, no extra space); a plain copy across volumes.
-        if fclonefileat(source.fileDescriptor, AT_FDCWD, destination.path, 0) == 0 { return }
-        let out = Darwin.open(destination.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard out >= 0 else { throw ShareError.notExported }
-        let sink = FileHandle(fileDescriptor: out, closeOnDealloc: true)
-        while let chunk = try source.read(upToCount: 8 << 20), !chunk.isEmpty { try sink.write(contentsOf: chunk) }
-    }
 }

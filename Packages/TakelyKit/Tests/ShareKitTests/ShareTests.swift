@@ -1,3 +1,5 @@
+import AVFoundation
+import CryptoKit
 import Foundation
 import ProjectKit
 import Synchronization
@@ -128,23 +130,23 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         #expect(FakeS3.state.withLock { $0.aborted } == ["up-1"])
     }
 
-    func exportedBundle() throws -> ProjectBundle {
+    func exportedBundle() async throws -> ProjectBundle {
         let bundle = try ProjectBundle.create(in: FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())"))
         try FileManager.default.createDirectory(at: bundle.exportsURL, withIntermediateDirectories: true)
-        try Data("not really a movie".utf8).write(to: bundle.exportURL)
+        try await writeVideo(to: bundle.exportURL)
         try "WEBVTT\n".write(to: bundle.captionsURL, atomically: true, encoding: .utf8)
         return bundle
     }
 
     @Test func sharingKeepsTheLinkAndReplacesTheOldVersionsFiles() async throws {
         let client = client()
-        let bundle = try exportedBundle()
+        let bundle = try await exportedBundle()
         let service = ShareService(client: client)
         let link = try await service.share(bundle)
         let first = try #require(bundle.readShareRecord())
         #expect(link == URL(string: "https://share.example.com/takely/\(first.id)/index.html") && first.complete && first.id.count == 26)
         let names = Set(FakeS3.state.withLock { $0.objects.keys }.map { $0.components(separatedBy: "/").last! })
-        #expect(names.contains("index.html") && names.contains("oembed.json") && names.count == 4)  // + video-…, captions-…
+        #expect(names.contains("index.html") && names.contains("oembed.json") && names.count == 5)  // + video-…, poster-…, captions-…
         #expect(FakeS3.state.withLock { $0.contentTypes["videos/takely/\(first.id)/index.html"] } == "text/html; charset=utf-8")
         // Re-sharing (after an edit): same link, new media names, the old ones deleted (a CDN can't serve them).
         #expect(try await service.share(bundle) == link)
@@ -162,7 +164,7 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
 
     @Test func aFailedFirstShareKeepsItsIDSoNothingIsOrphaned() async throws {
         let client = client()
-        let bundle = try exportedBundle()
+        let bundle = try await exportedBundle()
         FakeS3.state.withLock { $0.failNextPutOnce = true }  // the video goes up, the next file fails…
         await #expect(throws: (any Error).self) { try await ShareService(client: client).share(bundle) }
         let failed = try #require(bundle.readShareRecord())
@@ -172,8 +174,93 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         #expect(Set(FakeS3.state.withLock { $0.objects.keys }) == Set(bundle.readShareRecord()!.keys.map { "videos/" + $0 }))
     }
 
+    /// What's uploaded is the sealed copy, not whatever the export holds by then.
+    @Test func theSealedCopyIsWhatsUploaded() async throws {
+        let bundle = try await exportedBundle()
+        let original = try Data(contentsOf: bundle.exportURL)
+        let snapshot = try await ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
+        try Data("changed".utf8).write(to: bundle.exportURL)
+        let client = client()
+        _ = try await ShareService(client: client).share(bundle, snapshot: snapshot)
+        let video = FakeS3.state.withLock { $0.objects.first { $0.key.contains("/video-") }?.value }
+        #expect(video == original)
+    }
+
+    /// A process that opened the copy in the instant it had a name, writing after the person was asked: the changed
+    /// part is caught before it's sent, and no page is published.
+    @Test func aCopyChangedAfterItWasShownIsntPublished() async throws {
+        let bundle = try await exportedBundle()
+        let file = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).mp4")
+        try FileManager.default.copyItem(at: bundle.exportURL, to: file)
+        let descriptor = open(file.path, O_RDWR)
+        let snapshot = ShareSnapshot(
+            descriptor: descriptor, sealed: try ShareSnapshot.partDigests(descriptor), poster: Data([0xFF, 0xD8]), duration: 1,
+            dimensions: CGSize(width: 64, height: 64), chapters: [], title: nil, summary: nil, captions: nil)
+        _ = Data("evil".utf8).withUnsafeBytes { pwrite(descriptor, $0.baseAddress, 4, 100) }
+        await #expect(throws: ShareError.changedWhileReading) {
+            try await ShareService(client: client()).share(bundle, snapshot: snapshot)
+        }
+        #expect(FakeS3.state.withLock { $0.objects.keys.filter { $0.hasSuffix("index.html") || $0.contains("/video-") } }.isEmpty)
+    }
+
+    /// The same in parts: the changed part stops the upload, which is aborted.
+    @Test func aChangedPartStopsAMultipartUpload() async throws {
+        let client = client()
+        let file = try file(bytes: 17 << 20)
+        let descriptor = open(file.path, O_RDWR)
+        defer { close(descriptor) }
+        let sealed = try ShareSnapshot.partDigests(descriptor)
+        #expect(sealed.parts.count == 3)
+        _ = Data("evil".utf8).withUnsafeBytes { pwrite(descriptor, $0.baseAddress, 4, off_t(16 << 20)) }
+        await #expect(throws: ShareError.changedWhileReading) {
+            try await client.upload(descriptor: descriptor, sealed: sealed, key: "k", contentType: "video/mp4")
+        }
+        for _ in 0..<40 where FakeS3.state.withLock({ $0.aborted.isEmpty }) { try await Task.sleep(for: .milliseconds(50)) }
+        #expect(FakeS3.state.withLock { $0.aborted.count } == 1 && FakeS3.state.withLock { $0.objects["videos/k"] } == nil)
+    }
+
+    /// The page's text is what the person was shown, even if project.json changes afterwards.
+    @Test func thePageTextComesFromTheSnapshot() async throws {
+        let bundle = try await exportedBundle()
+        var project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 64, height: 64), fps: 10, codec: .h264),
+            camera: .init(enabled: false))
+        project.title = "Shown title"
+        try bundle.write(project)
+        let snapshot = try await ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
+        project.title = "Swapped title"
+        try bundle.write(project)
+        _ = try await ShareService(client: client()).share(bundle, snapshot: snapshot)
+        let page = FakeS3.state.withLock { $0.objects.first { $0.key.hasSuffix("index.html") }?.value }.map {
+            String(decoding: $0, as: UTF8.self)
+        }
+        #expect(page?.contains("Shown title") == true && page?.contains("Swapped") == false)
+    }
+
+    @Test func theFallbackCopyStopsAtTheSizeItStartedWith() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(repeating: 7, count: 100).write(to: folder.appending(path: "a"))
+        let source = open(folder.appending(path: "a").path, O_RDONLY)
+        let destination = open(folder.appending(path: "b").path, O_RDWR | O_CREAT, 0o600)
+        defer { close(source); close(destination) }
+        try ShareSnapshot.copy(from: source, to: destination)
+        #expect(try Data(contentsOf: folder.appending(path: "b")) == Data(repeating: 7, count: 100))
+    }
+
+    @Test func aFileCutShortWhileReadingThrows() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(count: 10).write(to: file)
+        let descriptor = open(file.path, O_RDONLY)
+        defer { close(descriptor) }
+        #expect(try readFully(descriptor, 0..<10).count == 10)
+        #expect(throws: ShareError.self) { try readFully(descriptor, 0..<20) }
+        #expect(try readFully(descriptor, 5..<20, exact: false).count == 5)
+    }
+
     @Test func aRecordingSharedToAnotherBucketIsLeftAlone() async throws {
-        let bundle = try exportedBundle()
+        let bundle = try await exportedBundle()
         _ = try await ShareService(client: client()).share(bundle)
         var other = config
         other.bucket = "elsewhere"
@@ -211,81 +298,114 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
     }
 }
 
-/// Automation uploads a private copy made without following links: a recording can't be swapped for another file.
+/// A short real MP4 (a preview must be made from it).
+func writeVideo(to url: URL, frames: Int = 10) async throws {
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+    let input = AVAssetWriterInput(
+        mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 64])
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: nil)
+    writer.add(input)
+    writer.startWriting()
+    writer.startSession(atSourceTime: .zero)
+    for frame in 0..<frames {
+        while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(5)) }
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_32BGRA, nil, &buffer)
+        adaptor.append(buffer!, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: 10))
+    }
+    input.markAsFinished()
+    await writer.finishWriting()
+}
+
+/// Automation shares a sealed copy: made without following links, then deleted while held open, so what the person
+/// was shown is what's uploaded.
 @Suite struct ShareSnapshotTests {
-    func bundle() throws -> ProjectBundle {
+    func bundle(video: Bool = true) async throws -> ProjectBundle {
         let bundle = try ProjectBundle.create(in: FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())"))
         try FileManager.default.createDirectory(at: bundle.exportsURL, withIntermediateDirectories: true)
+        if video { try await writeVideo(to: bundle.exportURL) }
         return bundle
     }
 
-    @Test func copiesTheExportAndCaptions() throws {
-        let bundle = try bundle()
-        try Data("video".utf8).write(to: bundle.exportURL)
-        try Data("WEBVTT".utf8).write(to: bundle.captionsURL)
-        let snapshot = try ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
-        defer { snapshot.discard() }
-        #expect(try Data(contentsOf: snapshot.video) == Data("video".utf8))
-        #expect(snapshot.captions == Data("WEBVTT".utf8))
-        try Data("changed".utf8).write(to: bundle.exportURL)
-        #expect(try Data(contentsOf: snapshot.video) == Data("video".utf8))
+    func make(_ bundle: ProjectBundle, inside folders: [URL]? = nil) async throws -> ShareSnapshot {
+        try await ShareSnapshot.make(of: bundle, inside: folders ?? [bundle.url.deletingLastPathComponent()])
     }
 
-    @Test func refusesALinkedExportOrExportsFolder() throws {
+    @Test func sealsTheExportWithItsPreviewAndText() async throws {
+        let bundle = try await bundle()
+        try Data("WEBVTT\n".utf8).write(to: bundle.captionsURL)
+        var project = Project(
+            capture: .init(target: .display, pixelSize: PixelSize(width: 64, height: 64), fps: 10, codec: .h264),
+            camera: .init(enabled: false))
+        project.title = "Fix login"
+        try bundle.write(project)
+        let original = SHA256.hash(data: try Data(contentsOf: bundle.exportURL))
+        let snapshot = try await make(bundle)
+        #expect(snapshot.sealed?.parts == [original])
+        #expect(snapshot.poster?.starts(with: [0xFF, 0xD8]) == true && snapshot.duration > 0.5 && snapshot.dimensions.width == 64)
+        #expect(snapshot.captions == Data("WEBVTT\n".utf8) && snapshot.title == "Fix login")
+        // Deleted while held open: nothing can reach it by path; changing the export changes nothing.
+        var info = stat()
+        #expect(fstat(snapshot.descriptor, &info) == 0 && info.st_nlink == 0)
+        try Data("changed".utf8).write(to: bundle.exportURL)
+        #expect(try ShareSnapshot.partDigests(snapshot.descriptor).parts == [original])
+    }
+
+    @Test func refusesALinkedExportOrExportsFolder() async throws {
         let secret = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())-secret")
         try FileManager.default.createDirectory(at: secret, withIntermediateDirectories: true)
-        try Data("private".utf8).write(to: secret.appending(path: "x.mp4"))
+        try await writeVideo(to: secret.appending(path: "x.mp4"))
 
-        let linkedFile = try bundle()
+        let linkedFile = try await bundle(video: false)
         try FileManager.default.createSymbolicLink(at: linkedFile.exportURL, withDestinationURL: secret.appending(path: "x.mp4"))
-        #expect(throws: (any Error).self) { try ShareSnapshot.make(of: linkedFile, inside: [linkedFile.url.deletingLastPathComponent()]) }
+        await #expect(throws: ShareError.self) { try await make(linkedFile) }
 
-        let linkedFolder = try bundle()
+        let linkedFolder = try await bundle(video: false)
         try FileManager.default.removeItem(at: linkedFolder.exportsURL)
         try FileManager.default.copyItem(at: secret.appending(path: "x.mp4"), to: secret.appending(path: "\(linkedFolder.name).mp4"))
         try FileManager.default.createSymbolicLink(at: linkedFolder.exportsURL, withDestinationURL: secret)
-        #expect(throws: (any Error).self) {
-            try ShareSnapshot.make(of: linkedFolder, inside: [linkedFolder.url.deletingLastPathComponent()])
-        }
+        await #expect(throws: ShareError.self) { try await make(linkedFolder) }
     }
 
-    @Test func aLinkedCaptionsFileIsLeftOut() throws {
-        let bundle = try bundle()
-        try Data("video".utf8).write(to: bundle.exportURL)
+    /// Captions linked elsewhere (symbolic or hard link) or not WebVTT: left out.
+    @Test func captionsThatArentTheRecordingsAreLeftOut() async throws {
         let secret = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).txt")
-        try Data("private".utf8).write(to: secret)
-        try FileManager.default.createSymbolicLink(at: bundle.captionsURL, withDestinationURL: secret)
-        let snapshot = try ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
-        defer { snapshot.discard() }
-        #expect(snapshot.captions == nil)
+        try Data("WEBVTT\naws_secret_access_key = x".utf8).write(to: secret)
+        let symbolic = try await bundle()
+        try FileManager.default.createSymbolicLink(at: symbolic.captionsURL, withDestinationURL: secret)
+        #expect(try await make(symbolic).captions == nil)
+        let hard = try await bundle()
+        try FileManager.default.linkItem(at: secret, to: hard.captionsURL)
+        #expect(try await make(hard).captions == nil)
+        let notVTT = try await bundle()
+        try Data("aws_secret_access_key = x".utf8).write(to: notVTT.captionsURL)
+        #expect(try await make(notVTT).captions == nil)
     }
 
-    /// A hard link has no symbolic link in its path, but it's another file's bytes: refused.
-    @Test func refusesAHardLinkedExport() throws {
-        let bundle = try bundle()
-        let secret = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).mp4")
-        try Data("private".utf8).write(to: secret)
-        try FileManager.default.linkItem(at: secret, to: bundle.exportURL)
-        #expect(throws: ShareError.self) { try ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()]) }
+    /// A hard link has no symbolic link in its path, but it's another file's bytes: refused (automation only).
+    @Test func refusesAHardLinkedExportUnlessThePersonShares() async throws {
+        let bundle = try await bundle(video: false)
+        let other = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).mp4")
+        try await writeVideo(to: other)
+        try FileManager.default.linkItem(at: other, to: bundle.exportURL)
+        await #expect(throws: ShareError.self) { try await make(bundle) }
+        _ = try await ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()], strict: false)
     }
 
     /// A recording reached through a link to a folder Takely doesn't save in: refused, whatever the path says.
-    @Test func refusesABundleOutsideTheSaveFolders() throws {
-        let real = try bundle()
-        try Data("video".utf8).write(to: real.exportURL)
+    @Test func refusesABundleOutsideTheSaveFolders() async throws {
+        let real = try await bundle()
         let saveFolder = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: saveFolder, withIntermediateDirectories: true)
         let linked = ProjectBundle(url: saveFolder.appending(path: real.url.lastPathComponent))
         try FileManager.default.createSymbolicLink(at: linked.url, withDestinationURL: real.url)
-        #expect(throws: ShareError.self) { try ShareSnapshot.make(of: linked, inside: [saveFolder]) }
+        await #expect(throws: ShareError.self) { try await make(linked, inside: [saveFolder]) }
     }
 
-    @Test func captionsThatArentWebVTTAreLeftOut() throws {
-        let bundle = try bundle()
-        try Data("video".utf8).write(to: bundle.exportURL)
-        try Data("aws_secret_access_key = x".utf8).write(to: bundle.captionsURL)
-        let snapshot = try ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
-        defer { snapshot.discard() }
-        #expect(snapshot.captions == nil)
+    @Test func aFileThatIsntAVideoIsRefused() async throws {
+        let bundle = try await bundle(video: false)
+        try Data("not a movie".utf8).write(to: bundle.exportURL)
+        await #expect(throws: ShareError.self) { try await make(bundle) }
     }
+
 }
