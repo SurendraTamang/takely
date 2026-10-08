@@ -177,13 +177,12 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
     /// What's uploaded is the sealed copy, not whatever the export holds by then.
     @Test func theSealedCopyIsWhatsUploaded() async throws {
         let bundle = try await exportedBundle()
-        let original = try Data(contentsOf: bundle.exportURL)
         let snapshot = try await ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
         try Data("changed".utf8).write(to: bundle.exportURL)
         let client = client()
         _ = try await ShareService(client: client).share(bundle, snapshot: snapshot)
         let video = FakeS3.state.withLock { $0.objects.first { $0.key.contains("/video-") }?.value }
-        #expect(video == original)
+        #expect(video == (try readFully(snapshot.descriptor, 0..<(snapshot.sealed?.size ?? 0))))
     }
 
     /// A process that opened the copy in the instant it had a name, writing after the person was asked: the changed
@@ -261,6 +260,23 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         #expect(try readFully(descriptor, 5..<20, exact: false).count == 5)
     }
 
+    /// An agent's share publishes a video with no text inside it: what's published as text is only the page's, shown
+    /// to the person first.
+    @Test func automatedSharesPublishAVideoWithoutText() async throws {
+        let bundle = try await exportedBundle()
+        try await writeVideo(to: bundle.exportURL, title: "Secret project name")
+        #expect(try Data(contentsOf: bundle.exportURL).range(of: Data("Secret project name".utf8)) != nil)
+        let snapshot = try await ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
+        _ = try await ShareService(client: client()).share(bundle, includeText: false, snapshot: snapshot)
+        let video = try #require(FakeS3.state.withLock { $0.objects.first { $0.key.contains("/video-") }?.value })
+        #expect(video.range(of: Data("Secret project name".utf8)) == nil)
+        let file = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).mp4")
+        try video.write(to: file)
+        let asset = AVURLAsset(url: file)
+        #expect(try await asset.load(.tracks).map(\.mediaType) == [.video])
+        #expect(try await asset.load(.commonMetadata).isEmpty)
+    }
+
     @Test func aRecordingSharedToAnotherBucketIsLeftAlone() async throws {
         let bundle = try await exportedBundle()
         _ = try await ShareService(client: client()).share(bundle)
@@ -301,7 +317,20 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
 }
 
 /// A short real MP4 (a preview must be made from it).
-func writeVideo(to url: URL, frames: Int = 10) async throws {
+func writeVideo(to url: URL, frames: Int = 10, title: String? = nil) async throws {
+    if let title {  // as Takely's exporter adds it: a passthrough export with metadata
+        let plain = url.deletingLastPathComponent().appending(path: "\(UUID()).mp4")
+        try await writeVideo(to: plain, frames: frames)
+        let item = AVMutableMetadataItem()
+        item.identifier = .commonIdentifierTitle
+        item.value = title as NSString
+        item.extendedLanguageTag = "und"
+        let export = try #require(AVAssetExportSession(asset: AVURLAsset(url: plain), presetName: AVAssetExportPresetPassthrough))
+        export.metadata = [item]
+        try? FileManager.default.removeItem(at: url)
+        try await export.export(to: url, as: .mp4)
+        return
+    }
     let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
     let input = AVAssetWriterInput(
         mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 64])
@@ -341,16 +370,15 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
             camera: .init(enabled: false))
         project.title = "Fix login"
         try bundle.write(project)
-        let original = SHA256.hash(data: try Data(contentsOf: bundle.exportURL))
         let snapshot = try await make(bundle)
-        #expect(snapshot.sealed?.parts == [original])
+        let sealed = try #require(snapshot.sealed)
         #expect(snapshot.poster?.starts(with: [0xFF, 0xD8]) == true && snapshot.duration > 0.5 && snapshot.dimensions.width == 64)
         #expect(snapshot.captions?.cues.map(\.text) == ["Hello"] && snapshot.title == "Fix login")
         // Deleted while held open: nothing can reach it by path; changing the export changes nothing.
         var info = stat()
         #expect(fstat(snapshot.descriptor, &info) == 0 && info.st_nlink == 0)
         try Data("changed".utf8).write(to: bundle.exportURL)
-        #expect(try ShareSnapshot.partDigests(snapshot.descriptor).parts == [original])
+        #expect(try ShareSnapshot.partDigests(snapshot.descriptor).parts == sealed.parts)
     }
 
     @Test func refusesALinkedExportOrExportsFolder() async throws {
@@ -470,8 +498,8 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
         #expect(shown[1].text == long)
         #expect(shown[2].text == "\(SharePage.time(0))  Intro\n\(SharePage.time(3700))  Demo")
         #expect(shown[3].text == "Hello there\nsecond\nline")
-        // Text off: chapter names still travel inside the video, so they're still shown.
-        #expect(snapshot.publishedText(includeText: false).map(\.heading) == ["Chapters"])
+        // Text off: nothing but the (text-free) video is published.
+        #expect(snapshot.publishedText(includeText: false).isEmpty)
     }
 
     /// Captions are published as rebuilt from their cues, so nothing else in the file goes public unseen.

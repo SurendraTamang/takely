@@ -76,7 +76,7 @@ public struct ShareService: Sendable {
             facts = snapshot
         } else {
             let folders = [bundle.url.deletingLastPathComponent()]
-            facts = try await ShareSnapshot.make(of: bundle, inside: folders, strict: false)
+            facts = try await ShareSnapshot.make(of: bundle, inside: folders, strict: false, textFree: !includeText)
         }
 
         var uploaded = ["index.html", "oembed.json", videoName]
@@ -165,9 +165,13 @@ public struct ShareService: Sendable {
         return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
-    /// The export's chapters (already on the edited timeline), without the implicit "Start".
+    /// The export's chapters (already on the edited timeline); none unless there are at least two.
     static func chapters(_ asset: AVURLAsset) async -> [SharePage.Chapter] {
-        guard let groups = try? await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: ["en"]) else { return [] }
+        // Named in the recording's language (whatever it is), else the Mac's.
+        let languages = ((try? await asset.load(.availableChapterLocales)) ?? []).map(\.identifier) + Locale.preferredLanguages
+        guard let groups = try? await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: languages + ["en"]) else {
+            return []
+        }
         var chapters: [SharePage.Chapter] = []
         for group in groups where group.timeRange.start.seconds.isFinite {
             let title = (try? await group.items.first?.load(.stringValue)) ?? nil
@@ -237,16 +241,31 @@ public final class ShareSnapshot: Sendable {
     /// any file on the volume); captions that aren't WebVTT are left out; there must be a preview; and the copy is
     /// hashed once, then checked part by part both as the preview is read and as it's uploaded.
     /// Not strict (the person shares it from Takely): the export as it is, links and all.
-    public static func make(of bundle: ProjectBundle, inside folders: [URL], strict: Bool = true) async throws -> ShareSnapshot {
+    /// `textFree` (always for automation; in Takely when text isn't published): the video is remuxed with only its
+    /// video and audio tracks — no title, summary, caption or chapter track inside the file — so the only text
+    /// published is the page's, which the person is shown.
+    public static func make(
+        of bundle: ProjectBundle, inside folders: [URL], strict: Bool = true, textFree: Bool? = nil
+    ) async throws -> ShareSnapshot {
+        let textFree = textFree ?? strict
         let allowed = Set(folders.compactMap(realPath))
         let source =
             strict
             ? try open(bundle.exportURL, under: bundle.url, inside: allowed) : Darwin.open(bundle.exportURL.path, O_RDONLY | O_CLOEXEC)
         guard source >= 0 else { throw ShareError.notExported }
-        let descriptor: Int32
+        var descriptor: Int32
         do {
             defer { close(source) }
             descriptor = try privateCopy(of: source)
+        }
+        // Chapter names for the page come from the export as it is (they're shown, and it's what they say).
+        var namedChapters: [SharePage.Chapter]?
+        if textFree {
+            let copy = descriptor
+            defer { close(copy) }
+            let original = AVURLAsset(url: URL(filePath: "/dev/fd/\(copy)"), options: [AVURLAssetOverrideMIMETypeKey: "video/mp4"])
+            namedChapters = await ShareService.chapters(original)
+            descriptor = try await withoutText(original)
         }
         var kept = false
         defer { if !kept { close(descriptor) } }
@@ -263,7 +282,8 @@ public final class ShareSnapshot: Sendable {
         let duration = (try? await asset.load(.duration).seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
         let dimensions =
             (try? await asset.loadTracks(withMediaType: .video).first?.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
-        let chapters = await ShareService.chapters(asset)
+        var chapters = namedChapters ?? []
+        if namedChapters == nil { chapters = await ShareService.chapters(asset) }
         if loader.changed { throw ShareError.changedWhileReading }
         if strict, poster == nil { throw ShareError.unreadableVideo }
         func read(_ file: URL) -> Data? {
@@ -272,9 +292,51 @@ public final class ShareSnapshot: Sendable {
         let captions = read(bundle.captionsURL).flatMap(Captions.init)
         let project = read(bundle.manifestURL).flatMap { try? Project.decode($0) }
         kept = true
+        // Published as shown: text anyone could have written, with characters that hide or reorder text removed.
         return ShareSnapshot(
-            descriptor: descriptor, sealed: sealed, poster: poster, duration: duration, dimensions: dimensions, chapters: chapters,
-            title: project?.title, summary: project?.summary, captions: captions)
+            descriptor: descriptor, sealed: sealed, poster: poster, duration: duration, dimensions: dimensions,
+            chapters: chapters.map { .init(t: $0.t, title: displayable($0.title)) }, title: project?.title.map(displayable),
+            summary: project?.summary.map(displayable),
+            captions: captions.map { Captions(cues: $0.cues.map { .init(start: $0.start, end: $0.end, text: displayable($0.text)) }) })
+    }
+
+    /// `asset`'s video and audio tracks, remuxed (not re-encoded) into a new private file with no metadata, opened and
+    /// deleted at once (like `privateCopy`).
+    static func withoutText(_ asset: AVURLAsset) async throws -> Int32 {
+        let composition = AVMutableComposition()
+        do {
+            let range = CMTimeRange(start: .zero, duration: try await asset.load(.duration))
+            for type in [AVMediaType.video, .audio] {
+                for track in try await asset.loadTracks(withMediaType: type) {
+                    guard let copy = composition.addMutableTrack(withMediaType: type, preferredTrackID: kCMPersistentTrackID_Invalid)
+                    else { throw ShareError.copyFailed }
+                    try copy.insertTimeRange(range, of: track, at: .zero)
+                    copy.preferredTransform = try await track.load(.preferredTransform)
+                }
+            }
+        } catch {
+            throw ShareError.unreadableVideo
+        }
+        guard !composition.tracks(withMediaType: .video).isEmpty,
+            let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough)
+        else { throw ShareError.unreadableVideo }
+        export.metadata = []
+        export.metadataItemFilter = .forSharing()
+        let folder = FileManager.default.temporaryDirectory.appending(
+            path: "takely-share-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "video.mp4")
+        do { try await export.export(to: file, as: .mp4) } catch { throw ShareError.copyFailed }
+        let descriptor = Darwin.open(file.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        unlink(file.path)
+        guard descriptor >= 0 else { throw ShareError.copyFailed }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_nlink == 0 else {
+            close(descriptor)
+            throw ShareError.unsafeFile
+        }
+        return descriptor
     }
 
     /// A copy of `source` in a new private folder (an APFS clone: instant, no extra space; else copied), opened and
@@ -368,14 +430,16 @@ public final class ShareSnapshot: Sendable {
 }
 
 extension ShareSnapshot {
-    /// Everything published with the video, in full, as the person is shown it before sharing: chapter names (they're
-    /// in the video file itself), and with `includeText` the title, summary and what the captions say. Only what's there.
+    /// Everything published with the video of a text-free snapshot (automation's), in full, as the person is shown it
+    /// before sharing: with `includeText`, the page's title, summary, chapter names and the captions; else nothing.
+    /// Only what's there.
     public func publishedText(includeText: Bool) -> [(heading: String, text: String)] {
+        guard includeText else { return [] }
         let chapterList = chapters.map { "\(SharePage.time($0.t))  \($0.title)" }
-        let items: [(String, String?)] =
-            (includeText ? [("Title", title), ("Summary", summary)] : [])
-            + [("Chapters", chapterList.isEmpty ? nil : chapterList.joined(separator: "\n"))]
-            + (includeText ? [("Captions", captions.map { $0.cues.map(\.text).joined(separator: "\n") })] : [])
+        let items: [(String, String?)] = [
+            ("Title", title), ("Summary", summary), ("Chapters", chapterList.isEmpty ? nil : chapterList.joined(separator: "\n")),
+            ("Captions", captions.map { $0.cues.map(\.text).joined(separator: "\n") }),
+        ]
         return items.compactMap { heading, text in
             guard let text = text.map(Self.displayable), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return (heading, text)
@@ -406,20 +470,27 @@ public struct Captions: Sendable, Equatable {
     /// Larger files aren't captions Takely wrote: left out.
     static let maximumSize = 1 << 20
 
+    init(cues: [Cue]) { self.cues = cues }
+
     /// nil unless it's WebVTT with at least one cue.
     init?(_ data: Data) {
-        guard data.count <= Self.maximumSize, data.starts(with: Data("WEBVTT".utf8)) else { return nil }
+        guard data.count <= Self.maximumSize else { return nil }
         let text = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
-        let stamp = /(\d+:)?\d{2}:\d{2}\.\d{3}/
+        guard text == "WEBVTT" || text.hasPrefix("WEBVTT\n") || text.hasPrefix("WEBVTT ") || text.hasPrefix("WEBVTT\t") else {
+            return nil
+        }
+        let stamp = /([0-9]+:)?[0-9]{2}:[0-9]{2}\.[0-9]{3}/
         cues = text.components(separatedBy: "\n\n").compactMap { block in
             let lines = block.components(separatedBy: "\n")
             guard let timing = lines.firstIndex(where: { $0.contains("-->") }) else { return nil }  // header, NOTE, STYLE
             let sides = lines[timing].components(separatedBy: "-->")
             guard sides.count == 2 else { return nil }
             let start = sides[0].trimmingCharacters(in: .whitespaces)
-            let end = sides[1].split(separator: " ", omittingEmptySubsequences: true).first.map(String.init) ?? ""
-            let text = lines[(timing + 1)...].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.joined(separator: "\n")
+            // A cue's text can't hold "-->" (players would start a new cue there).
+            let end = sides[1].split(whereSeparator: { $0 == " " || $0 == "\t" }).first.map(String.init) ?? ""
+            let text = lines[(timing + 1)...].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.contains("-->") }
+                .joined(separator: "\n")
             guard (try? stamp.wholeMatch(in: start)) != nil, (try? stamp.wholeMatch(in: end)) != nil, !text.isEmpty else {
                 return nil
             }
