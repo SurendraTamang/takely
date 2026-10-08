@@ -402,6 +402,26 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
         await #expect(throws: ShareError.self) { try await make(linked, inside: [saveFolder]) }
     }
 
+    /// The preview is read only through bytes that match the seal: a change after sealing fails it.
+    @Test func thePreviewIsMadeOnlyFromSealedBytes() async throws {
+        let bundle = try await bundle()
+        let descriptor = open(bundle.exportURL.path, O_RDWR)
+        defer { close(descriptor) }
+        let sealed = try ShareSnapshot.partDigests(descriptor)
+        let intact = SealedLoader(descriptor: descriptor, sealed: sealed)
+        let asset = AVURLAsset(url: SealedLoader.url)
+        asset.resourceLoader.setDelegate(intact, queue: SealedLoader.queue)
+        #expect(try await asset.loadTracks(withMediaType: .video).count == 1)
+        withExtendedLifetime(intact) {}
+
+        _ = Data("evil".utf8).withUnsafeBytes { pwrite(descriptor, $0.baseAddress, 4, 0) }
+        let changed = SealedLoader(descriptor: descriptor, sealed: sealed)
+        let other = AVURLAsset(url: SealedLoader.url)
+        other.resourceLoader.setDelegate(changed, queue: SealedLoader.queue)
+        #expect((try? await other.loadTracks(withMediaType: .video)) == nil && changed.changed)
+        withExtendedLifetime(changed) {}
+    }
+
     @Test func aFileThatIsntAVideoIsRefused() async throws {
         let bundle = try await bundle(video: false)
         try Data("not a movie".utf8).write(to: bundle.exportURL)

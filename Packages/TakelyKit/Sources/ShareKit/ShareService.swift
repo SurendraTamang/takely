@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import ImageIO
 import ProjectKit
+import Synchronization
 import UniformTypeIdentifiers
 
 /// A recording's shared copy (`share.json`): where it is, and which files make it up, so it can be copied,
@@ -234,9 +235,7 @@ public final class ShareSnapshot: Sendable {
     /// Strict (automation): the bundle must sit directly in one of `folders` (checked on what's actually opened),
     /// with no symbolic link under it, and each file must be a regular file with no other hard link (else it could be
     /// any file on the volume); captions that aren't WebVTT are left out; there must be a preview; and the copy is
-    /// hashed before and after the preview is read, and checked again part by part as it's uploaded. (Not caught: a
-    /// process that opened the copy in the instant it had a name, changing it only while the preview is read and
-    /// back afterwards — two tight races. An AVAssetResourceLoader serving checked bytes would close it.)
+    /// hashed once, then checked part by part both as the preview is read and as it's uploaded.
     /// Not strict (the person shares it from Takely): the export as it is, links and all.
     public static func make(of bundle: ProjectBundle, inside folders: [URL], strict: Bool = true) async throws -> ShareSnapshot {
         let allowed = Set(folders.compactMap(realPath))
@@ -251,24 +250,24 @@ public final class ShareSnapshot: Sendable {
         }
         var kept = false
         defer { if !kept { close(descriptor) } }
-        let before = strict ? try partDigests(descriptor) : nil
+        let sealed = strict ? try partDigests(descriptor) : nil
 
-        // Read through this process's own descriptor: no path another process could swap meanwhile.
-        let asset = AVURLAsset(url: URL(filePath: "/dev/fd/\(descriptor)"), options: [AVURLAssetOverrideMIMETypeKey: "video/mp4"])
-        guard (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false else { throw ShareError.unreadableVideo }
+        // AVFoundation reads the copy only through `loader`, which serves (strict) only parts that match the seal:
+        // the preview is made from the very bytes that are uploaded, each part checked again then.
+        let loader = SealedLoader(descriptor: descriptor, sealed: sealed)
+        let asset = AVURLAsset(url: SealedLoader.url)
+        asset.resourceLoader.setDelegate(loader, queue: SealedLoader.queue)
+        guard (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false else {
+            throw loader.changed ? ShareError.changedWhileReading : ShareError.unreadableVideo
+        }
         let poster = await ShareService.poster(asset)
-        if strict, poster == nil { throw ShareError.unreadableVideo }
         let duration = (try? await asset.load(.duration).seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
         let dimensions =
             (try? await asset.loadTracks(withMediaType: .video).first?.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
         let chapters = await ShareService.chapters(asset)
-
-        // Only a handle opened in the instant the copy had a name could still write to it: a change that's still
-        // there shows here, a later one when its part is uploaded.
-        let after = strict ? try partDigests(descriptor) : nil
-        if let before, let after, before.parts != after.parts || before.size != after.size {
-            throw ShareError.changedWhileReading
-        }
+        withExtendedLifetime(loader) {}  // the resource loader holds its delegate weakly
+        if loader.changed { throw ShareError.changedWhileReading }
+        if strict, poster == nil { throw ShareError.unreadableVideo }
         func read(_ file: URL) -> Data? {
             strict ? try? readNoFollow(file, under: bundle.url, inside: allowed) : try? Data(contentsOf: file)
         }
@@ -276,7 +275,7 @@ public final class ShareSnapshot: Sendable {
         let project = read(bundle.manifestURL).flatMap { try? Project.decode($0) }
         kept = true
         return ShareSnapshot(
-            descriptor: descriptor, sealed: after, poster: poster, duration: duration, dimensions: dimensions, chapters: chapters,
+            descriptor: descriptor, sealed: sealed, poster: poster, duration: duration, dimensions: dimensions, chapters: chapters,
             title: project?.title, summary: project?.summary, captions: captions)
     }
 
@@ -366,4 +365,68 @@ public final class ShareSnapshot: Sendable {
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true).readDataToEndOfFile()
     }
 
+}
+
+/// Serves the sealed copy to AVFoundation (a custom URL scheme, so it never opens a path), part by part as `S3Client`
+/// uploads it; with a seal, a part whose SHA-256 differs fails the read and sets `changed`.
+final class SealedLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
+    static let url = URL(string: "takely-sealed://share/video.mp4")!
+    static let queue = DispatchQueue(label: "app.takely.share.sealed")
+    let descriptor: Int32
+    let sealed: (size: Int, parts: [SHA256.Digest])?
+    let size: Int
+    let ranges: [Range<Int>]
+    /// The last part read (AVFoundation asks for small pieces near each other). Touched only on `queue`.
+    private var cached: (index: Int, data: Data)?
+    private let changedFlag = Mutex(false)
+    var changed: Bool { changedFlag.withLock { $0 } }
+
+    init(descriptor: Int32, sealed: (size: Int, parts: [SHA256.Digest])?) {
+        self.descriptor = descriptor
+        self.sealed = sealed
+        var info = stat()
+        size = sealed?.size ?? (fstat(descriptor, &info) == 0 ? Int(info.st_size) : 0)
+        ranges = S3Client.partRanges(size: size)
+    }
+
+    func part(_ index: Int) throws -> Data {
+        if let cached, cached.index == index { return cached.data }
+        let data = try readFully(descriptor, ranges[index])
+        if let sealed, sealed.parts.count != ranges.count || SHA256.hash(data: data) != sealed.parts[index] {
+            throw ShareError.changedWhileReading
+        }
+        cached = (index, data)
+        return data
+    }
+
+    func resourceLoader(
+        _ resourceLoader: AVAssetResourceLoader, shouldWaitForLoadingOfRequestedResource request: AVAssetResourceLoadingRequest
+    ) -> Bool {
+        if let info = request.contentInformationRequest {
+            info.contentType = UTType.mpeg4Movie.identifier
+            info.contentLength = Int64(size)
+            info.isByteRangeAccessSupported = true
+        }
+        if let data = request.dataRequest {
+            var offset = Int(data.requestedOffset)
+            let end = data.requestsAllDataToEndOfResource ? size : min(size, offset + data.requestedLength)
+            while offset < end, !request.isCancelled {
+                guard let index = ranges.firstIndex(where: { $0.contains(offset) }) else { break }
+                do {
+                    let bytes = try part(index)
+                    let from = offset - ranges[index].lowerBound
+                    let to = min(end, ranges[index].upperBound) - ranges[index].lowerBound
+                    data.respond(with: bytes.subdata(in: from..<to))
+                    offset += to - from
+                } catch {
+                    if (error as? ShareError) == .changedWhileReading { changedFlag.withLock { $0 = true } }
+                    request.finishLoading(with: error)
+                    return true
+                }
+            }
+            if request.isCancelled { return true }
+        }
+        request.finishLoading()
+        return true
+    }
 }
