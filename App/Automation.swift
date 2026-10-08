@@ -27,7 +27,7 @@ extension RecordingCoordinator: AutomationHost {
             let candidates = windows.map {
                 WindowMatch.Candidate(
                     app: $0.owningApplication?.applicationName ?? "", bundleID: $0.owningApplication?.bundleIdentifier ?? "",
-                    title: $0.title ?? "")
+                    title: $0.title ?? "", area: $0.frame.width * $0.frame.height)
             }
             guard let index = WindowMatch.best(query, among: candidates) else {
                 controller.errorMessage =

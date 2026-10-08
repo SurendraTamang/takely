@@ -19,4 +19,18 @@ import Testing
         #expect(WindowMatch.best("Finder", among: windows) == nil)
         #expect(WindowMatch.best("  ", among: windows) == nil)
     }
+
+    /// An app's main window, not a strip it keeps in front of it (seen live: iTerm2's 1512×68 window).
+    @Test func theAppsMainWindowNotAStripInFront() {
+        let iTerm = [
+            WindowMatch.Candidate(app: "iTerm2", bundleID: "com.googlecode.iterm2", title: "", area: 1512 * 68),
+            WindowMatch.Candidate(app: "iTerm2", bundleID: "com.googlecode.iterm2", title: "", area: 1512 * 913),
+        ]
+        #expect(WindowMatch.best("iTerm2", among: iTerm) == 1)
+        let equal = [
+            WindowMatch.Candidate(app: "Notes", bundleID: "com.apple.Notes", title: "A", area: 100),
+            WindowMatch.Candidate(app: "Notes", bundleID: "com.apple.Notes", title: "B", area: 100),
+        ]
+        #expect(WindowMatch.best("Notes", among: equal) == 0)  // same size: the front one
+    }
 }
