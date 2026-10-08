@@ -76,7 +76,9 @@ public struct ShareService: Sendable {
             facts = snapshot
         } else {
             let folders = [bundle.url.deletingLastPathComponent()]
-            facts = try await ShareSnapshot.make(of: bundle, inside: folders, strict: false, textFree: !includeText)
+            facts = try await ShareSnapshot.make(of: bundle, inside: folders, strict: false, textFree: !includeText) {
+                progress($0 * 0.1)
+            }
         }
 
         var uploaded = ["index.html", "oembed.json", videoName]
@@ -85,7 +87,7 @@ public struct ShareService: Sendable {
         try await client.upload(
             descriptor: facts.descriptor, sealed: facts.sealed, key: "\(prefix)/\(videoName)", contentType: "video/mp4",
             cacheControl: Self.mediaCache
-        ) { progress($0 * 0.9) }
+        ) { progress((snapshot == nil ? 0.1 : 0) + $0 * (snapshot == nil ? 0.8 : 0.9)) }
         var posterName: String?
         if let data = facts.poster {
             try await client.put("\(prefix)/\(poster)", data: data, contentType: "image/jpeg", cacheControl: Self.mediaCache)
@@ -249,7 +251,8 @@ public final class ShareSnapshot: Sendable {
     /// video and audio tracks — no title, summary, caption or chapter track inside the file — so the only text
     /// published is the page's, which the person is shown.
     public static func make(
-        of bundle: ProjectBundle, inside folders: [URL], strict: Bool = true, textFree: Bool? = nil
+        of bundle: ProjectBundle, inside folders: [URL], strict: Bool = true, textFree: Bool? = nil,
+        progress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> ShareSnapshot {
         let textFree = textFree ?? strict
         let allowed = Set(folders.compactMap(realPath))
@@ -270,7 +273,7 @@ public final class ShareSnapshot: Sendable {
             let reader = SealedLoader(descriptor: copy, sealed: nil)  // pread, never a shared file offset
             let original = reader.asset()
             namedChapters = await ShareService.chapters(original)
-            descriptor = try await withoutText(original)
+            descriptor = try await withoutText(original, progress: progress)
             withExtendedLifetime(reader) {}
         }
         var kept = false
@@ -308,7 +311,7 @@ public final class ShareSnapshot: Sendable {
 
     /// `asset`'s video and audio tracks, remuxed (not re-encoded) into a new private file with no metadata, opened and
     /// deleted at once (like `privateCopy`).
-    static func withoutText(_ asset: AVURLAsset) async throws -> Int32 {
+    static func withoutText(_ asset: AVURLAsset, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Int32 {
         let composition = AVMutableComposition()
         do {
             let range = CMTimeRange(start: .zero, duration: try await asset.load(.duration))
@@ -334,7 +337,21 @@ public final class ShareSnapshot: Sendable {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = folder.appending(path: "video.mp4")
-        do { try await export.export(to: file, as: .mp4) } catch { throw ShareError.copyFailed }
+        // ponytail: the session's states are made to be watched while it exports; it isn't Sendable only by type.
+        struct Watched: @unchecked Sendable { let session: AVAssetExportSession }
+        let watched = Watched(session: export)
+        let watcher = Task {
+            for await state in watched.session.states(updateInterval: 0.25) {
+                if case .exporting(let done) = state { progress(done.fractionCompleted) }
+            }
+        }
+        defer { watcher.cancel() }
+        do { try await export.export(to: file, as: .mp4) } catch is CancellationError { throw CancellationError() } catch {
+            throw ShareError.copyFailed
+        }
+        watcher.cancel()
+        await watcher.value  // no late update after the last one
+        progress(1)
         let descriptor = Darwin.open(file.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         unlink(file.path)
         guard descriptor >= 0 else { throw ShareError.copyFailed }
@@ -482,7 +499,8 @@ public struct Captions: Sendable, Equatable {
     /// nil unless it's WebVTT with at least one cue.
     init?(_ data: Data) {
         guard data.count <= Self.maximumSize else { return nil }
-        let text = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
+        let text = String(decoding: data.starts(with: [0xEF, 0xBB, 0xBF]) ? data.dropFirst(3) : data, as: UTF8.self)
+            .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         guard text == "WEBVTT" || text.hasPrefix("WEBVTT\n") || text.hasPrefix("WEBVTT ") || text.hasPrefix("WEBVTT\t") else {
             return nil

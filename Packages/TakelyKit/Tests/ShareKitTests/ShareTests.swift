@@ -310,6 +310,15 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         #expect(moov.lowerBound < mdat.lowerBound)  // fast start
     }
 
+    /// Sharing from Takely with text off cleans the video first; progress covers that too, and never goes back.
+    @Test func progressCoversCleaningTheVideo() async throws {
+        let bundle = try await exportedBundle()
+        let seen = Mutex<[Double]>([])
+        _ = try await ShareService(client: client()).share(bundle, includeText: false) { value in seen.withLock { $0.append(value) } }
+        let values = seen.withLock { $0 }
+        #expect(values.last == 1 && values == values.sorted() && values.contains { $0 > 0 && $0 <= 0.1 })
+    }
+
     @Test func aRecordingSharedToAnotherBucketIsLeftAlone() async throws {
         let bundle = try await exportedBundle()
         _ = try await ShareService(client: client()).share(bundle)
@@ -533,11 +542,11 @@ func writeVideo(to url: URL, frames: Int = 10, title: String? = nil, audio: Bool
         let long = String(repeating: "word ", count: 200)
         let snapshot = ShareSnapshot(
             descriptor: -1, sealed: nil, poster: nil, duration: 4, dimensions: .zero,
-            chapters: [.init(t: 0, title: "Intro"), .init(t: 3700, title: "Demo")], title: "Fix \u{202E}login\u{0007}",
+            chapters: [.init(t: 0, title: "Intro"), .init(t: 3700, title: "Demo")], title: "Fix \u{202E}lo\u{200B}gin\u{0007}",
             summary: long, captions: captions)
         let shown = snapshot.publishedText(includeText: true)
         #expect(shown.map(\.heading) == ["Title", "Summary", "Chapters", "Captions"])
-        #expect(shown[0].text == "Fix  login ")
+        #expect(shown[0].text == "Fix  lo gin ")
         #expect(shown[1].text == long)
         #expect(shown[2].text == "\(SharePage.time(0))  Intro\n\(SharePage.time(3700))  Demo")
         #expect(shown[3].text == "Hello there\nsecond\nline")
@@ -558,6 +567,8 @@ func writeVideo(to url: URL, frames: Int = 10, title: String? = nil, audio: Bool
         #expect(parsed.cues == [.init(start: "00:01.000", end: "00:02.000", text: "Shown")])
         #expect(String(decoding: parsed.vtt, as: UTF8.self) == "WEBVTT\n\n00:01.000 --> 00:02.000\nShown\n")
         #expect(Captions(Data("WEBVTT\n\nNOTE only a note\n".utf8)) == nil)
+        // A byte-order mark (some editors add one) is fine.
+        #expect(Captions(Data([0xEF, 0xBB, 0xBF]) + Data("WEBVTT\n\n00:01.000 --> 00:02.000\nHi\n".utf8))?.cues.count == 1)
         #expect(Captions(Data("WEBVTT\n\nnot a time --> 00:01.000\nx\n".utf8)) == nil)
         #expect(Captions(Data(("WEBVTT\n\n" + String(repeating: "x", count: 1 << 20)).utf8)) == nil)
     }
