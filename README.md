@@ -78,19 +78,32 @@ can record your screen, run narrated demos of native Mac apps, and share the vid
 works, right in its pull request.
 
 ```sh
-claude mcp add takely -- /Applications/Takely.app/Contents/Helpers/takely-mcp
+claude mcp add takely -- /Applications/Takely.app/Contents/Helpers/takely-mcp   # Claude Code
+codex mcp add takely -- /Applications/Takely.app/Contents/Helpers/takely-mcp    # Codex
 ```
 
-(Settings › Automation has the command for where Takely is installed. Other clients: run that file as a stdio server.)
+Cursor and other clients that take JSON (e.g. `~/.cursor/mcp.json`; VS Code's `.vscode/mcp.json` names the key
+`"servers"`):
+
+```json
+{ "mcpServers": { "takely": { "command": "/Applications/Takely.app/Contents/Helpers/takely-mcp" } } }
+```
+
+Settings › Automation has these for wherever Takely is installed, with Copy buttons.
 
 - **Tools:** `status`, `record_start` (a display, one app's window, camera/microphone on or off), `record_stop` (the
   video's path, length and title), `pause`, `resume`, `marker`, `run_demo` (a step-by-step plan, narrated), `share`
   (a link to the video in your own bucket, plus Markdown with a clickable poster), `transcript`, `frames` (stills to check the video before sharing), `doctor`.
 - **Prompt:** `pr_demo` — record a short narrated demo of a change and add it to the pull request.
-- **Safety:** the server talks to Takely over the same private socket as the `takely` command (your user only). You
-  always see when Takely records; a demo plan is shown to you and runs only when you confirm; secrets on screen (API
-  keys, emails, card numbers) are blurred when that's on; videos go only to your own storage. `takely://` links can't
-  do any of this.
+- **Safety:** the server talks to Takely over the same private socket as the `takely` command (your user only), and
+  `takely://` links can't do any of this.
+  - You always see when Takely records; a demo plan is shown to you and runs only when you confirm.
+  - Nothing is shared until you confirm it: you see a preview frame, the length, and every word published with it
+    (title, summary, chapter names, captions). Declining is final for the agent.
+  - What's uploaded is what you saw: a sealed private copy, checked part by part as it uploads, remuxed with no text
+    inside the video file (no metadata, caption or chapter tracks).
+  - Secrets found on screen (API keys, emails, card numbers) block an agent's share until you review the blurs; no
+    sharing while a demo or recording runs; videos go only to your own storage.
 - Everything runs on your Mac: recording, transcription, and AI titles and summaries (Apple Intelligence).
 
 ## Testing a local build
