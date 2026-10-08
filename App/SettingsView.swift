@@ -186,7 +186,14 @@ struct SettingsView: View {
 
     /// The MCP server inside this copy of Takely (wherever it's installed).
     private var mcpPath: String { Bundle.main.bundleURL.appending(path: "Contents/Helpers/takely-mcp").path }
-    private var mcpCommand: String { "claude mcp add takely -- \"\(mcpPath)\"" }
+    /// How each kind of MCP client adds Takely (Claude Code, Codex, and the JSON most others read).
+    private var mcpSetups: [(client: String, text: String)] {
+        [
+            ("Claude Code", "claude mcp add takely -- \"\(mcpPath)\""),
+            ("Codex", "codex mcp add takely -- \"\(mcpPath)\""),
+            ("Cursor, others (JSON)", #"{ "mcpServers": { "takely": { "command": "\#(mcpPath)" } } }"#),
+        ]
+    }
 
     private var automation: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -206,16 +213,19 @@ struct SettingsView: View {
                 "Let Claude Code, Codex, Cursor or another MCP client record your screen, run demos you confirm, and share links — e.g. a video of a change for its pull request. Add Takely once:"
             )
             .font(.callout)
-            HStack(alignment: .top) {
-                Text(mcpCommand).font(.caption.monospaced()).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(mcpCommand, forType: .string)
+            ForEach(mcpSetups, id: \.client) { setup in
+                HStack(alignment: .top) {
+                    Text(setup.client).font(.caption).frame(width: 110, alignment: .leading)
+                    Text(setup.text).font(.caption.monospaced()).textSelection(.enabled).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(setup.text, forType: .string)
+                    }
                 }
             }
             Text(
-                "Other clients: run \(mcpPath) as a stdio MCP server. You always see when Takely records, demo plans wait for your OK, and secrets on screen are blurred when that's on."
+                "You always see when Takely records, demo plans wait for your OK, and nothing is shared until you've seen the preview and every word published with it."
             )
             .font(.caption).foregroundStyle(.secondary)
             Toggle("Let takely:// links control recording without asking", isOn: $settings.allowLinkControl)
