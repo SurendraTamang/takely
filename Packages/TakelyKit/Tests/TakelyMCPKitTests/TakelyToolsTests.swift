@@ -86,6 +86,7 @@ import Testing
         let markdown = TakelyTools.markdown(link: "https://x.example/a b)/index.html", poster: nil, title: "a\\]b\n<x>(y)", duration: nil)
         #expect(markdown == #"[▶︎ a\\\]b \<x\>\(y\)](https://x.example/a%20b%29/index.html)"#)
         #expect(TakelyTools.oneLine("one\ntwo\rthree") == "one two three")
+        #expect(TakelyTools.destination("https://x.example/a%20b/#t") == "https://x.example/a%20b/#t")
     }
 
     @Test func transcriptIsReadFromTheRecording() async throws {

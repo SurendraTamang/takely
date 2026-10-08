@@ -140,9 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         automation = Automation(host: coordinator, settings: settings)
         automation?.center.share = { [weak self] url in
             guard let self else { return .failure(AutomationFailure("Takely is quitting.")) }
-            switch await Self.shareableRecording(url, folders: [settings.saveFolder.path] + settings.pastSaveFolders) {
+            let folders = [settings.saveFolder.path] + settings.pastSaveFolders
+            switch await Self.shareableRecording(url, folders: folders) {
             case .success(let bundle):
-                return await sharing.shareNow(bundle) { [weak self] in
+                return await sharing.shareNow(bundle, folders: folders.map { URL(filePath: $0, directoryHint: .isDirectory) }) {
+                    [weak self] in
                     guard let self else { return "Takely is quitting." }
                     if automation?.center.isDemoRunning == true { return "A demo is running: share when it's done." }
                     return controller.isRecording || controller.isBusy ? "Takely is recording: share when it's done." : nil

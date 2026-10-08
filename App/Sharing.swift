@@ -109,28 +109,31 @@ final class Sharing {
         guard isConfigured, let bundle = ProjectBundle.containing(export) else { return }
         if bundle.readShareRecord() != nil { return share(bundle) }
         guard settings.shareAutomatically else { return }
-        let blurred = ((try? bundle.readRedactions()) ?? []).contains { $0.enabled && $0.kind != .manual }
-        guard !blurred else { return log.info("not uploaded automatically: secrets were blurred, review first") }
+        guard !Self.needsBlurReview(bundle) else { return log.info("not uploaded automatically: secrets were blurred, review first") }
         share(bundle)
     }
 
     /// For automation (`takely share`, AI agents): uploads and waits, returning the link or why it couldn't. Never
     /// while another upload runs (one at a time); secrets blurred on screen stay blurred (the export is what's sent).
     /// `busy`: why sharing must wait now (a demo or a recording under way, which could click Share itself), else nil.
-    func shareNow(_ bundle: ProjectBundle, busy: () -> String?) async -> Result<(link: URL, poster: URL?), AutomationFailure> {
+    /// `folders`: the save folders; the recording must be directly in one, checked on the files actually read.
+    func shareNow(_ bundle: ProjectBundle, folders: [URL], busy: () -> String?) async -> Result<
+        (link: URL, poster: URL?), AutomationFailure
+    > {
         if let reason = busy() { return .failure(AutomationFailure(reason)) }
         guard let service else { return .failure(AutomationFailure(ShareError.notConfigured.localizedDescription)) }
         guard upload == nil else { return .failure(AutomationFailure("Another upload is running: try again when it's done.")) }
         // Secrets found on screen: the person reviews the blurs first (the same rule as uploading after recording).
-        let blurred = ((try? bundle.readRedactions()) ?? []).contains { $0.enabled && $0.kind != .manual }
-        guard !blurred else {
+        guard !Self.needsBlurReview(bundle) else {
             return .failure(
                 AutomationFailure("Secrets were found on screen: review the blurs in Takely (Review Blurs), then share it from Takely."))
         }
         // What's uploaded is a private copy, checked and shown to the person: the file on disk may change meanwhile.
         let snapshot: ShareSnapshot
         do {
-            snapshot = try await Task.detached { try ShareSnapshot.make(of: bundle) }.value
+            snapshot = try await Task.detached { try ShareSnapshot.make(of: bundle, inside: folders) }.value
+        } catch let error as ShareError {
+            return .failure(AutomationFailure(error.localizedDescription))
         } catch {
             return .failure(AutomationFailure("This recording hasn't been exported yet."))
         }
@@ -139,7 +142,10 @@ final class Sharing {
         guard (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false else {
             return .failure(AutomationFailure("The recording's video can't be read."))
         }
-        guard await confirmShare(asset) else {
+        guard let poster = await ShareService.poster(asset), let image = NSImage(data: poster) else {
+            return .failure(AutomationFailure("Takely couldn't show a preview of this video, so it can't ask to share it."))
+        }
+        guard await confirmShare(asset, image: image, withText: settings.sharePublishText) else {
             return .failure(AutomationFailure("The person chose not to share it. Don't ask again unless they tell you to."))
         }
         if let reason = busy() { return .failure(AutomationFailure(reason)) }
@@ -174,20 +180,25 @@ final class Sharing {
         }
     }
 
+    /// Secrets were found on screen and not reviewed — or the review file can't be read, which counts as unreviewed.
+    static func needsBlurReview(_ bundle: ProjectBundle) -> Bool {
+        guard let redactions = try? bundle.readRedactions() else { return true }
+        return redactions.contains { $0.enabled && $0.kind != .manual }
+    }
+
     /// Publishing is the person's call: an agent or a command asks, and they see what would be shared — a frame of the
     /// very copy that would be uploaded, and its length (not a title anyone could have written).
-    private func confirmShare(_ asset: AVURLAsset) async -> Bool {
+    private func confirmShare(_ asset: AVURLAsset, image: NSImage, withText: Bool) async -> Bool {
         let seconds = (try? await asset.load(.duration).seconds) ?? 0
         let alert = NSAlert()
         alert.messageText = "Share this recording?"
         alert.informativeText =
             "An AI agent or a command wants to upload this \(Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond))) video to your bucket and get a link anyone with it can open."
-        if let data = await ShareService.poster(asset), let image = NSImage(data: data) {
-            let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
-            view.image = image
-            view.imageScaling = .scaleProportionallyUpOrDown
-            alert.accessoryView = view
-        }
+            + (withText ? " Its title, summary and captions are published with it (Settings › Share)." : "")
+        let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        view.image = image
+        view.imageScaling = .scaleProportionallyUpOrDown
+        alert.accessoryView = view
         alert.addButton(withTitle: "Don't Share")
         alert.addButton(withTitle: "Share")
         alert.window.level = .floating

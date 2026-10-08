@@ -223,7 +223,7 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         let bundle = try bundle()
         try Data("video".utf8).write(to: bundle.exportURL)
         try Data("WEBVTT".utf8).write(to: bundle.captionsURL)
-        let snapshot = try ShareSnapshot.make(of: bundle)
+        let snapshot = try ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
         defer { snapshot.discard() }
         #expect(try Data(contentsOf: snapshot.video) == Data("video".utf8))
         #expect(snapshot.captions == Data("WEBVTT".utf8))
@@ -238,13 +238,15 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
 
         let linkedFile = try bundle()
         try FileManager.default.createSymbolicLink(at: linkedFile.exportURL, withDestinationURL: secret.appending(path: "x.mp4"))
-        #expect(throws: (any Error).self) { try ShareSnapshot.make(of: linkedFile) }
+        #expect(throws: (any Error).self) { try ShareSnapshot.make(of: linkedFile, inside: [linkedFile.url.deletingLastPathComponent()]) }
 
         let linkedFolder = try bundle()
         try FileManager.default.removeItem(at: linkedFolder.exportsURL)
         try FileManager.default.copyItem(at: secret.appending(path: "x.mp4"), to: secret.appending(path: "\(linkedFolder.name).mp4"))
         try FileManager.default.createSymbolicLink(at: linkedFolder.exportsURL, withDestinationURL: secret)
-        #expect(throws: (any Error).self) { try ShareSnapshot.make(of: linkedFolder) }
+        #expect(throws: (any Error).self) {
+            try ShareSnapshot.make(of: linkedFolder, inside: [linkedFolder.url.deletingLastPathComponent()])
+        }
     }
 
     @Test func aLinkedCaptionsFileIsLeftOut() throws {
@@ -253,7 +255,36 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         let secret = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).txt")
         try Data("private".utf8).write(to: secret)
         try FileManager.default.createSymbolicLink(at: bundle.captionsURL, withDestinationURL: secret)
-        let snapshot = try ShareSnapshot.make(of: bundle)
+        let snapshot = try ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
+        defer { snapshot.discard() }
+        #expect(snapshot.captions == nil)
+    }
+
+    /// A hard link has no symbolic link in its path, but it's another file's bytes: refused.
+    @Test func refusesAHardLinkedExport() throws {
+        let bundle = try bundle()
+        let secret = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID()).mp4")
+        try Data("private".utf8).write(to: secret)
+        try FileManager.default.linkItem(at: secret, to: bundle.exportURL)
+        #expect(throws: ShareError.self) { try ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()]) }
+    }
+
+    /// A recording reached through a link to a folder Takely doesn't save in: refused, whatever the path says.
+    @Test func refusesABundleOutsideTheSaveFolders() throws {
+        let real = try bundle()
+        try Data("video".utf8).write(to: real.exportURL)
+        let saveFolder = FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: saveFolder, withIntermediateDirectories: true)
+        let linked = ProjectBundle(url: saveFolder.appending(path: real.url.lastPathComponent))
+        try FileManager.default.createSymbolicLink(at: linked.url, withDestinationURL: real.url)
+        #expect(throws: ShareError.self) { try ShareSnapshot.make(of: linked, inside: [saveFolder]) }
+    }
+
+    @Test func captionsThatArentWebVTTAreLeftOut() throws {
+        let bundle = try bundle()
+        try Data("video".utf8).write(to: bundle.exportURL)
+        try Data("aws_secret_access_key = x".utf8).write(to: bundle.captionsURL)
+        let snapshot = try ShareSnapshot.make(of: bundle, inside: [bundle.url.deletingLastPathComponent()])
         defer { snapshot.discard() }
         #expect(snapshot.captions == nil)
     }

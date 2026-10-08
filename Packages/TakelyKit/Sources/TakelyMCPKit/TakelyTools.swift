@@ -133,7 +133,9 @@ public enum TakelyTools {
 
     /// A link target that can't end early: spaces, parentheses and angle brackets percent-encoded.
     static func destination(_ url: String) -> String {
-        url.addingPercentEncoding(withAllowedCharacters: CharacterSet.urlFragmentAllowed.subtracting(.init(charactersIn: "()<>"))) ?? url
+        url.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.urlFragmentAllowed.union(.init(charactersIn: "%#")).subtracting(.init(charactersIn: "()<>"))
+        ) ?? url
     }
 
     /// "[0:12] Hello there" per phrase; read straight from the recording (no app needed).
