@@ -66,6 +66,8 @@ public final class AutomationCenter {
     public var isDemoRunning = false
     /// Stops the running demo (set by Takely Pro).
     public var stopDemo: (() -> Void)?
+    /// Runs the checks for `takely doctor` (set by the app).
+    public var doctor: (() async -> [DoctorCheck])?
 
     public init(host: any AutomationHost) {
         self.host = host
@@ -126,6 +128,13 @@ public final class AutomationCenter {
             case .success(let url): return reply(host, path: url)
             case .failure(let failure): return fail(host, failure.message)
             }
+        case .doctor:
+            guard let doctor else { return fail(host, "Not available.") }
+            let checks = await doctor()
+            var answer = reply(host)
+            answer.report = DoctorCheck.report(checks)
+            answer.ok = !checks.contains { $0.status == .problem }
+            return answer
         case .stopDemo:
             guard isDemoRunning, let stopDemo else { return fail(host, "No demo is running.") }
             stopDemo()

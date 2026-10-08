@@ -9,6 +9,8 @@ public struct ControlRequest: Codable, Sendable, Equatable {
         case demo
         /// Stops the running demo (`takely demo stop`, or Ctrl-C on `takely demo`); what was recorded is saved.
         case stopDemo = "demo-stop"
+        /// Checks what Takely depends on (permissions, copies of the app, disk, Apple Intelligence) and says what to fix.
+        case doctor
     }
 
     public var command: Command
@@ -59,8 +61,14 @@ public struct ControlReply: Codable, Sendable, Equatable {
     public var duration: Double?
     public var title: String?
     public var error: String?
+    /// `doctor`: the report, one line per check.
+    public var report: String?
 
-    public init(ok: Bool, state: String, path: String? = nil, duration: Double? = nil, title: String? = nil, error: String? = nil) {
+    public init(
+        ok: Bool, state: String, path: String? = nil, duration: Double? = nil, title: String? = nil, error: String? = nil,
+        report: String? = nil
+    ) {
+        self.report = report
         self.ok = ok
         self.state = state
         self.path = path
@@ -93,7 +101,8 @@ public struct ControlURL: Sendable, Equatable {
         let parts = ([url.host() ?? ""] + url.pathComponents.filter { $0 != "/" }).filter { !$0.isEmpty }
         let name = parts.first == "record" ? parts.dropFirst().first : parts.first
         // A demo drives the keyboard and mouse: never from a link (any web page can open one).
-        guard let name, let command = ControlRequest.Command(rawValue: name), command != .demo, command != .stopDemo else { return nil }
+        guard let name, let command = ControlRequest.Command(rawValue: name), command != .demo, command != .stopDemo, command != .doctor
+        else { return nil }  // `doctor` too: a web page mustn't learn what's on the Mac
         let query = Dictionary((components.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { $1 })
         var request = ControlRequest(command)
         if let countdown = query["countdown"] { request.countdown = !["0", "false", "no", "off"].contains(countdown.lowercased()) }
