@@ -93,7 +93,7 @@ public struct ShareService: Sendable {
             uploaded.append(poster)
         }
         var captionsName: String?
-        if includeText, let captionsData = facts.captions {
+        if includeText, let captionsData = facts.captions?.vtt {
             try await client.put(
                 "\(prefix)/\(captions)", data: captionsData, contentType: "text/vtt; charset=utf-8", cacheControl: Self.mediaCache)
             captionsName = captions
@@ -213,11 +213,11 @@ public final class ShareSnapshot: Sendable {
     public let chapters: [SharePage.Chapter]
     public let title: String?
     public let summary: String?
-    public let captions: Data?
+    public let captions: Captions?
 
     init(
         descriptor: Int32, sealed: (size: Int, parts: [SHA256.Digest])?, poster: Data?, duration: Double, dimensions: CGSize,
-        chapters: [SharePage.Chapter], title: String?, summary: String?, captions: Data?
+        chapters: [SharePage.Chapter], title: String?, summary: String?, captions: Captions?
     ) {
         self.descriptor = descriptor
         self.sealed = sealed
@@ -269,7 +269,7 @@ public final class ShareSnapshot: Sendable {
         func read(_ file: URL) -> Data? {
             strict ? try? readNoFollow(file, under: bundle.url, inside: allowed) : try? Data(contentsOf: file)
         }
-        let captions = read(bundle.captionsURL).flatMap { $0.starts(with: Data("WEBVTT".utf8)) ? $0 : nil }
+        let captions = read(bundle.captionsURL).flatMap(Captions.init)
         let project = read(bundle.manifestURL).flatMap { try? Project.decode($0) }
         kept = true
         return ShareSnapshot(
@@ -368,31 +368,18 @@ public final class ShareSnapshot: Sendable {
 }
 
 extension ShareSnapshot {
-    /// Everything published with the video when text is on, in full, as the person is shown it before sharing: the
-    /// title, summary, chapter names and what the captions say. Only what's there.
-    public var publishedText: [(heading: String, text: String)] {
-        let chapterList = chapters.map { "\(Duration.seconds($0.t).formatted(.time(pattern: .minuteSecond)))  \($0.title)" }
-        let items: [(String, String?)] = [
-            ("Title", title), ("Summary", summary), ("Chapters", chapterList.isEmpty ? nil : chapterList.joined(separator: "\n")),
-            ("Captions", captions.map(Self.captionText)),
-        ]
+    /// Everything published with the video, in full, as the person is shown it before sharing: chapter names (they're
+    /// in the video file itself), and with `includeText` the title, summary and what the captions say. Only what's there.
+    public func publishedText(includeText: Bool) -> [(heading: String, text: String)] {
+        let chapterList = chapters.map { "\(SharePage.time($0.t))  \($0.title)" }
+        let items: [(String, String?)] =
+            (includeText ? [("Title", title), ("Summary", summary)] : [])
+            + [("Chapters", chapterList.isEmpty ? nil : chapterList.joined(separator: "\n"))]
+            + (includeText ? [("Captions", captions.map { $0.cues.map(\.text).joined(separator: "\n") })] : [])
         return items.compactMap { heading, text in
             guard let text = text.map(Self.displayable), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return (heading, text)
         }
-    }
-
-    /// What WebVTT captions say: each cue's text (the lines after its timing), one cue per line.
-    static func captionText(_ data: Data) -> String {
-        String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
-            .components(separatedBy: "\n\n")
-            .compactMap { block -> String? in
-                let lines = block.components(separatedBy: "\n")
-                guard let timing = lines.firstIndex(where: { $0.contains("-->") }) else { return nil }  // header, NOTE, STYLE
-                let text = lines[(timing + 1)...].filter { !$0.isEmpty }.joined(separator: " ")
-                return text.isEmpty ? nil : text
-            }
-            .joined(separator: "\n")
     }
 
     /// Text anyone could have written, safe to show: control and direction-override characters (which can reorder
@@ -403,6 +390,46 @@ extension ShareSnapshot {
         var scalars = String.UnicodeScalarView()
         scalars.append(contentsOf: text.unicodeScalars.map { hidden.contains($0) ? " " : $0 })
         return String(scalars)
+    }
+}
+
+/// Captions as they're published: only their cues (timing and text), rebuilt — so nothing in the original file (its
+/// header, notes, styles, cue settings, odd line endings) goes public without being shown first.
+public struct Captions: Sendable, Equatable {
+    public struct Cue: Sendable, Equatable {
+        public var start: String
+        public var end: String
+        public var text: String
+    }
+    public var cues: [Cue]
+
+    /// Larger files aren't captions Takely wrote: left out.
+    static let maximumSize = 1 << 20
+
+    /// nil unless it's WebVTT with at least one cue.
+    init?(_ data: Data) {
+        guard data.count <= Self.maximumSize, data.starts(with: Data("WEBVTT".utf8)) else { return nil }
+        let text = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let stamp = /(\d+:)?\d{2}:\d{2}\.\d{3}/
+        cues = text.components(separatedBy: "\n\n").compactMap { block in
+            let lines = block.components(separatedBy: "\n")
+            guard let timing = lines.firstIndex(where: { $0.contains("-->") }) else { return nil }  // header, NOTE, STYLE
+            let sides = lines[timing].components(separatedBy: "-->")
+            guard sides.count == 2 else { return nil }
+            let start = sides[0].trimmingCharacters(in: .whitespaces)
+            let end = sides[1].split(separator: " ", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+            let text = lines[(timing + 1)...].filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.joined(separator: "\n")
+            guard (try? stamp.wholeMatch(in: start)) != nil, (try? stamp.wholeMatch(in: end)) != nil, !text.isEmpty else {
+                return nil
+            }
+            return Cue(start: start, end: end, text: text)
+        }
+        if cues.isEmpty { return nil }
+    }
+
+    public var vtt: Data {
+        Data(("WEBVTT\n\n" + cues.map { "\($0.start) --> \($0.end)\n\($0.text)\n" }.joined(separator: "\n")).utf8)
     }
 }
 

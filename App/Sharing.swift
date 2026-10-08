@@ -188,8 +188,8 @@ final class Sharing {
         let length = Duration.seconds(snapshot.duration).formatted(.time(pattern: .minuteSecond))
         var text =
             "An AI agent or a command wants to upload this \(length) video to your bucket and get a link anyone with it can open."
-        let published = withText ? snapshot.publishedText : []
-        if !published.isEmpty { text += " This text is published with it (Settings › Share):" }
+        let published = snapshot.publishedText(includeText: withText)
+        if !published.isEmpty { text += " Below the preview: the text published with it (Settings › Share)." }
         alert.informativeText = text
         alert.accessoryView = Self.preview(image, published)
         alert.addButton(withTitle: "Don't Share")

@@ -134,7 +134,7 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
         let bundle = try ProjectBundle.create(in: FileManager.default.temporaryDirectory.appending(path: "takely-tests/\(UUID())"))
         try FileManager.default.createDirectory(at: bundle.exportsURL, withIntermediateDirectories: true)
         try await writeVideo(to: bundle.exportURL)
-        try "WEBVTT\n".write(to: bundle.captionsURL, atomically: true, encoding: .utf8)
+        try "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n".write(to: bundle.captionsURL, atomically: true, encoding: .utf8)
         return bundle
     }
 
@@ -235,6 +235,8 @@ final class FakeS3: URLProtocol, @unchecked Sendable {
             String(decoding: $0, as: UTF8.self)
         }
         #expect(page?.contains("Shown title") == true && page?.contains("Swapped") == false)
+        let uploaded = FakeS3.state.withLock { $0.objects.first { $0.key.contains("/captions-") }?.value }
+        #expect(uploaded != nil && uploaded == snapshot.captions?.vtt)
     }
 
     @Test func theFallbackCopyStopsAtTheSizeItStartedWith() throws {
@@ -333,7 +335,7 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
 
     @Test func sealsTheExportWithItsPreviewAndText() async throws {
         let bundle = try await bundle()
-        try Data("WEBVTT\n".utf8).write(to: bundle.captionsURL)
+        try Data("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n".utf8).write(to: bundle.captionsURL)
         var project = Project(
             capture: .init(target: .display, pixelSize: PixelSize(width: 64, height: 64), fps: 10, codec: .h264),
             camera: .init(enabled: false))
@@ -343,7 +345,7 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
         let snapshot = try await make(bundle)
         #expect(snapshot.sealed?.parts == [original])
         #expect(snapshot.poster?.starts(with: [0xFF, 0xD8]) == true && snapshot.duration > 0.5 && snapshot.dimensions.width == 64)
-        #expect(snapshot.captions == Data("WEBVTT\n".utf8) && snapshot.title == "Fix login")
+        #expect(snapshot.captions?.cues.map(\.text) == ["Hello"] && snapshot.title == "Fix login")
         // Deleted while held open: nothing can reach it by path; changing the export changes nothing.
         var info = stat()
         #expect(fstat(snapshot.descriptor, &info) == 0 && info.st_nlink == 0)
@@ -451,23 +453,41 @@ func writeVideo(to url: URL, frames: Int = 10) async throws {
     }
 
     /// What the person reads before sharing: all of it, only what's there, nothing that can reorder or fake lines.
-    @Test func thePublishedTextIsShownInFull() {
-        let captions = Data(
-            "WEBVTT\n\nNOTE made by Takely\n\n1\n00:00.000 --> 00:02.000\nHello there\n\n00:02.000 --> 00:04.000\nsecond\nline\n".utf8)
+    @Test func thePublishedTextIsShownInFull() throws {
+        let captions = try #require(
+            Captions(
+                Data(
+                    "WEBVTT\n\nNOTE made by Takely\n\n1\n00:00.000 --> 00:02.000\nHello there\n\n00:02.000 --> 00:04.000\nsecond\nline\n"
+                        .utf8)))
         let long = String(repeating: "word ", count: 200)
         let snapshot = ShareSnapshot(
             descriptor: -1, sealed: nil, poster: nil, duration: 4, dimensions: .zero,
-            chapters: [.init(t: 0, title: "Intro"), .init(t: 65, title: "Demo")], title: "Fix \u{202E}login\u{0007}",
+            chapters: [.init(t: 0, title: "Intro"), .init(t: 3700, title: "Demo")], title: "Fix \u{202E}login\u{0007}",
             summary: long, captions: captions)
-        let shown = snapshot.publishedText
+        let shown = snapshot.publishedText(includeText: true)
         #expect(shown.map(\.heading) == ["Title", "Summary", "Chapters", "Captions"])
         #expect(shown[0].text == "Fix  login ")
         #expect(shown[1].text == long)
-        #expect(shown[2].text == "0:00  Intro\n1:05  Demo")
-        #expect(shown[3].text == "Hello there\nsecond line")
-        let empty = ShareSnapshot(
-            descriptor: -1, sealed: nil, poster: nil, duration: 1, dimensions: .zero, chapters: [], title: " ", summary: nil,
-            captions: Data("WEBVTT\n".utf8))
-        #expect(empty.publishedText.isEmpty)
+        #expect(shown[2].text == "\(SharePage.time(0))  Intro\n\(SharePage.time(3700))  Demo")
+        #expect(shown[3].text == "Hello there\nsecond\nline")
+        // Text off: chapter names still travel inside the video, so they're still shown.
+        #expect(snapshot.publishedText(includeText: false).map(\.heading) == ["Chapters"])
+    }
+
+    /// Captions are published as rebuilt from their cues, so nothing else in the file goes public unseen.
+    @Test func captionsArePublishedAsShown() throws {
+        // Takely's own captions come back byte for byte.
+        let own = Data("WEBVTT\n\n00:00:00.000 --> 00:00:05.036\nHi everyone\ntwo lines\n\n00:00:05.036 --> 00:00:07.000\nBye\n".utf8)
+        #expect(Captions(own)?.vtt == own)
+        // Old Mac line endings, a header, notes, styles, cue settings, cue IDs: only cues remain.
+        let odd = Data(
+            "WEBVTT hidden header\r\rNOTE hidden note\r\rSTYLE\r::cue { color: red }\r\rid-1\r00:01.000 --> 00:02.000 line:0 align:start\rShown\r"
+                .utf8)
+        let parsed = try #require(Captions(odd))
+        #expect(parsed.cues == [.init(start: "00:01.000", end: "00:02.000", text: "Shown")])
+        #expect(String(decoding: parsed.vtt, as: UTF8.self) == "WEBVTT\n\n00:01.000 --> 00:02.000\nShown\n")
+        #expect(Captions(Data("WEBVTT\n\nNOTE only a note\n".utf8)) == nil)
+        #expect(Captions(Data("WEBVTT\n\nnot a time --> 00:01.000\nx\n".utf8)) == nil)
+        #expect(Captions(Data(("WEBVTT\n\n" + String(repeating: "x", count: 1 << 20)).utf8)) == nil)
     }
 }
