@@ -168,4 +168,23 @@ final class FakeHost: AutomationHost {
         try? await Task.sleep(for: .milliseconds(50))
         #expect(host.phase == .idle)  // the stop ran
     }
+
+    @Test func doctorReportsAndFailsOnProblems() async {
+        let host = FakeHost()
+        let center = AutomationCenter(host: host)
+        #expect(await center.perform(ControlRequest(.doctor)).error == "Not available.")
+        center.doctor = {
+            [
+                DoctorCheck("Screen Recording", .problem, "off", fix: "Turn it on."), DoctorCheck("Camera", .ok, "allowed"),
+                DoctorCheck("Notifications", .note, "off", fix: "Allow them."),
+            ]
+        }
+        let reply = await center.perform(ControlRequest(.doctor))
+        #expect(!reply.ok)
+        #expect(
+            reply.report
+                == "✗ Screen Recording: off\n    → Turn it on.\n✓ Camera: allowed\n• Notifications: off\n    → Allow them.\n\n1 problem to fix."
+        )
+        #expect(ControlURL(URL(string: "takely://doctor")!) == nil)  // never from a link
+    }
 }

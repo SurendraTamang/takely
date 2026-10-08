@@ -15,6 +15,7 @@ let usage = """
       demo [run] <plan.txt | ->                          record a Demo Mode plan (Takely Pro); prints the video's path
                                                          (Ctrl-C stops the demo and keeps what was recorded)
       demo stop                                          stop the running demo
+      doctor                                             check permissions, copies of the app, disk, Apple Intelligence
 
       --json   print the reply as JSON
 
@@ -136,10 +137,21 @@ do {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         print(String(decoding: try encoder.encode(reply), as: UTF8.self))
     } else if reply.ok {
-        print(request.command == .stop || request.command == .demo ? reply.path ?? reply.state : reply.state)
+        print(
+            request.command == .doctor
+                ? reply.report ?? reply.state
+                : request.command == .stop || request.command == .demo ? reply.path ?? reply.state : reply.state)
     }
     if !reply.ok {
-        if !json { FileHandle.standardError.write(Data(((reply.error ?? "Failed.") + "\n").utf8)) }
+        if !json, let report = reply.report {
+            print(report)  // doctor found problems: the report says which
+        } else if !json {
+            // An app older than this command doesn't know the request (e.g. updated but not restarted).
+            let error =
+                reply.error == "Couldn't read the request" && request.command == .doctor
+                ? "This Takely is older than the takely command: quit and reopen Takely (or update it)." : reply.error ?? "Failed."
+            FileHandle.standardError.write(Data((error + "\n").utf8))
+        }
         exit(1)
     }
 } catch {

@@ -138,6 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.statusItem = statusItem
         HotkeyCenter.install(controller: controller, coordinator: coordinator, statusItem: statusItem)
         automation = Automation(host: coordinator, settings: settings)
+        automation?.center.doctor = { [weak self] in
+            guard let self else { return [] }
+            return await Doctor.checks(settings: settings, license: licenseSummary)
+        }
         #if canImport(TakelyPro)
             // Hourly: the trial's end and the offline grace take effect on time (the key itself is checked weekly).
             Task { [license] in
@@ -319,6 +323,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // MARK: Windows
+
+    /// The license for `takely doctor` (Takely Pro builds).
+    private var licenseSummary: (status: DoctorCheck.Status, text: String)? {
+        #if canImport(TakelyPro)
+            switch license.state {
+            case .trial(let days): (.ok, "trial, \(days) day\(days == 1 ? "" : "s") left")
+            case .licensed(let product): (.ok, product)
+            case .locked(let reason): (.problem, "locked: \(reason)")
+            case .unverified(let reason): (.note, reason)
+            }
+        #else
+            nil
+        #endif
+    }
 
     private var licenseView: AnyView? {
         #if canImport(TakelyPro)
