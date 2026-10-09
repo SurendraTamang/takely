@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Added
+- An MCP server for AI agents (`takely-mcp`, Claude Code, Codex, Cursor…): record, pause, markers, check frames, read the transcript, run a confirmed demo, share — and a `pr_demo` prompt for putting a demo of a change in its pull request. Long calls report progress.
+- Agent shares ask the person first, showing a preview, the length and every word published; the upload is a sealed copy checked part by part, remuxed with no text inside the video; unreviewed secrets on screen block it.
+- `takely doctor` (permissions, other copies of the app, disk space, Apple Intelligence) and `takely share`.
+- A project page (`site/`, GitHub Pages) and a logo.
 - Window and area capture, device pickers, countdown, a draggable camera bubble and a control bar.
 - Prompter, oops-retake, markers as chapters, drawing on screen.
 - Non-destructive edits (cuts, trims, zooms) rendered at export; blurred areas with a review window.
