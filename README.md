@@ -1,6 +1,25 @@
 # Takely
 
-A native macOS screen recorder for async video: record your screen with a camera bubble, system audio and your voice, trim it, and share a link in seconds. Pure Swift, on-device, no web runtime.
+**The private screen recorder your AI agents can use safely.**
+
+A native macOS screen recorder for async video: record your screen with a camera bubble, system audio and your voice, trim it, and share a link in seconds. Pure Swift, on-device, no web runtime — and an [MCP](https://modelcontextprotocol.io) server so AI agents can record, demo and share too, with you in charge.
+
+## Our goal
+
+AI agents now do real work on our computers: they write code, change apps and open pull requests. They need a way to
+**show** what they did, and people need to **see** it before anything leaves their Mac. Takely's goal is to be the
+screen recorder that people and their agents share, built on four promises:
+
+1. **You're always in charge.** Recording is always visible. A demo plan runs only after you confirm it. Nothing is
+   published until you've seen the preview and every word that goes with it, and "no" is final for the agent.
+2. **What you approve is exactly what's sent.** An agent's share is a sealed copy, checked part by part as it uploads,
+   with no text hidden inside the video file. Secrets found on screen block it until you've reviewed them.
+3. **Everything stays yours.** Recording, transcription and AI run on your Mac. Videos go only to your own storage.
+   No account, no Takely cloud, no tracking.
+4. **It's open, so you can check.** The recorder, the agent server and every safety check above are open source
+   (AGPL-3.0): these promises can be verified, not just trusted.
+
+Without an agent, it's simply a fast, native recorder for async video.
 
 **Status:** alpha. It builds and its test suite passes, but many features haven't had much real-world use yet. Expect rough edges, and please [report what you find](../../issues).
 
@@ -24,6 +43,7 @@ A native macOS screen recorder for async video: record your screen with a camera
 **Automation**
 - `takely` command-line tool: `takely record start --no-countdown`, `takely record stop --json` (prints the video's path)
 - Shortcuts and Siri actions; `takely://` links (x-callback-url; links ask before acting)
+- An MCP server for AI agents (Claude Code, Codex, Cursor…): record, check frames, share — see [AI agents](#ai-agents-mcp)
 
 ## Takely Pro
 
@@ -92,7 +112,7 @@ Cursor and other clients that take JSON (e.g. `~/.cursor/mcp.json`; VS Code's `.
 Settings › Automation has these for wherever Takely is installed, with Copy buttons.
 
 - **Tools:** `status`, `record_start` (a display, one app's window, camera/microphone on or off), `record_stop` (the
-  video's path, length and title), `pause`, `resume`, `marker`, `run_demo` (a step-by-step plan, narrated), `share`
+  video's path, length and title), `pause`, `resume`, `marker`, `run_demo` (a step-by-step plan, narrated; Takely Pro), `share`
   (a link to the video in your own bucket, plus Markdown with a clickable poster), `transcript`, `frames` (stills to check the video before sharing), `doctor`.
 - **Prompt:** `pr_demo` — record a short narrated demo of a change and add it to the pull request.
 - **Safety:** the server talks to Takely over the same private socket as the `takely` command (your user only), and
