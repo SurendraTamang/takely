@@ -1,0 +1,33 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      placeholder: Steps to reproduce, what you saw, what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `takely doctor`
+      description: >-
+        Run `/Applications/Takely.app/Contents/Helpers/takely doctor` (or `takely doctor` if you installed the command)
+        and paste the result. It lists permissions, other copies of Takely, disk space and Apple Intelligence — nothing
+        private.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Takely and macOS versions
+      placeholder: Takely 0.9.2, macOS 26.0 (Apple silicon)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (optional)
+      description: "`/usr/bin/log show --last 10m --predicate 'subsystem == \"app.takely\"'` — check it for anything private first."
+      render: text

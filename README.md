@@ -2,6 +2,10 @@
 
 # Takely
 
+[![CI](https://github.com/SurendraTamang/takely/actions/workflows/ci.yml/badge.svg)](https://github.com/SurendraTamang/takely/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/website-takely-ff3b5c.svg)](https://surendratamang.github.io/takely/)
+
 **The private screen recorder your AI agents can use safely.**
 
 A native macOS screen recorder for async video: record your screen with a camera bubble, system audio and your voice, trim it, and share a link in seconds. Pure Swift, on-device, no web runtime — and an [MCP](https://modelcontextprotocol.io) server so AI agents can record, demo and share too, with you in charge.
