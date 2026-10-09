@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Takely — the private screen recorder your AI agents can use safely</title>
+<meta name="description" content="A native macOS screen recorder for async video, with an MCP server so AI agents can record, demo and share — with you in charge. On-device, open source (AGPL-3.0).">
+<meta property="og:title" content="Takely">
+<meta property="og:description" content="The private screen recorder your AI agents can use safely.">
+<meta property="og:image" content="logo-256.png">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  :root { --bg: #fbfbfd; --fg: #1d1d1f; --muted: #6e6e73; --card: #fff; --line: #e5e5ea; --accent: #ff3b5c; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0c0c0e; --fg: #f5f5f7; --muted: #a1a1a6; --card: #17171a; --line: #2a2a2e; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
+  header { text-align: center; padding: 72px 0 40px; }
+  header img { width: 112px; height: 112px; }
+  h1 { font-size: clamp(32px, 6vw, 52px); line-height: 1.1; margin: 18px 0 14px; letter-spacing: -0.02em; }
+  .lead { font-size: 20px; color: var(--muted); max-width: 640px; margin: 0 auto 28px; }
+  .cta a { display: inline-block; margin: 6px; padding: 12px 22px; border-radius: 999px; text-decoration: none; font-weight: 600; }
+  .primary { background: var(--accent); color: #fff; }
+  .secondary { border: 1px solid var(--line); color: var(--fg); }
+  h2 { font-size: 28px; margin: 56px 0 8px; letter-spacing: -0.01em; }
+  section > p { color: var(--muted); margin-top: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .n { color: var(--accent); font-weight: 700; margin-right: 6px; }
+  pre { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; overflow-x: auto; font-size: 13px; }
+  footer { margin: 64px 0 40px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="logo.svg" alt="Takely logo">
+    <h1>The private screen recorder<br>your AI agents can use safely</h1>
+    <p class="lead">A native macOS recorder for async video — and an MCP server so Claude Code, Codex, Cursor and other agents can record, demo and share their work, with you in charge.</p>
+    <div class="cta">
+      <a class="primary" href="https://github.com/SurendraTamang/takely">View on GitHub</a>
+      <a class="secondary" href="https://github.com/SurendraTamang/takely#ai-agents-mcp">Set up for your agent</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>Our goal</h2>
+    <p>AI agents now do real work on our computers. They need a way to <b>show</b> what they did, and people need to <b>see</b> it before anything leaves their Mac. Takely is the screen recorder people and their agents share, built on four promises:</p>
+    <div class="grid">
+      <div class="card"><h3><span class="n">1</span>You're always in charge</h3><p>Recording is always visible. Demo plans run only after you confirm. Nothing is published until you've seen the preview and every word that goes with it — and "no" is final.</p></div>
+      <div class="card"><h3><span class="n">2</span>What you approve is what's sent</h3><p>An agent's share is a sealed copy, checked part by part as it uploads, with no text hidden inside the video. Secrets found on screen block it until you review them.</p></div>
+      <div class="card"><h3><span class="n">3</span>Everything stays yours</h3><p>Recording, captions and AI run on your Mac. Videos go only to your own storage. No account, no Takely cloud, no tracking.</p></div>
+      <div class="card"><h3><span class="n">4</span>Open, so you can check</h3><p>The recorder, the agent server and every safety check are open source (AGPL-3.0). The promises can be verified, not just trusted.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>A good recorder on its own</h2>
+    <p>Pure Swift, built on Apple's frameworks — no web runtime.</p>
+    <div class="grid">
+      <div class="card"><h3>Screen, camera, voice</h3><p>A display, a window or an area, a draggable camera bubble, system sound and your mic — speaker echo removed live.</p></div>
+      <div class="card"><h3>Presenter tools</h3><p>An invisible prompter, an "oops" key that takes back your last sentence, markers that become chapters, drawing on screen.</p></div>
+      <div class="card"><h3>Share a link</h3><p>Upload to your own Cloudflare R2, S3 or B2 bucket: a clean player page with previews.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Give your agent a camera</h2>
+    <p>Add Takely's MCP server once (Settings › Automation has these for wherever it's installed):</p>
+<pre>claude mcp add takely -- /Applications/Takely.app/Contents/Helpers/takely-mcp
+codex mcp add takely -- /Applications/Takely.app/Contents/Helpers/takely-mcp</pre>
+    <p>Then ask: <i>"Record a short demo of this change, check the frames, and add the link to the pull request."</i></p>
+  </section>
+
+  <footer>
+    <span>Takely · alpha · open source under AGPL-3.0 (some features are in Takely Pro)</span>
+    <span><a href="https://github.com/SurendraTamang/takely">Source</a> · <a href="https://github.com/SurendraTamang/takely/blob/main/SECURITY.md">Security</a></span>
+  </footer>
+</div>
+</body>
+</html>

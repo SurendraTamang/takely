@@ -1,3 +1,5 @@
+<p align="center"><img src="site/logo-256.png" width="128" height="128" alt="Takely logo"></p>
+
 # Takely
 
 **The private screen recorder your AI agents can use safely.**
