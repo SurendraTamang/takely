@@ -138,14 +138,16 @@ public enum TakelyTools {
             Task {
                 var elapsed = Duration.zero
                 while !Task.isCancelled {
-                    try await Task.sleep(for: interval)
+                    try await Task.sleep(for: interval)  // throws once cancelled: no tick after the call returns
                     elapsed += interval
                     await progress(Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
                 }
             }
         }
-        defer { heartbeat?.cancel() }
-        return await work()
+        let result = await work()
+        heartbeat?.cancel()
+        _ = await heartbeat?.result  // a tick already underway lands before the result, never after
+        return result
     }
 
     /// A clickable poster (GitHub, GitLab and most Markdown renderers show the image), or a plain link without one.

@@ -25,6 +25,14 @@ final class FakeSession: RecordingSession {
     var pauseDelay: Duration = .zero
     /// Makes start/stop take a while, to open the window for overlapping commands.
     var delay: Duration = .zero
+    /// Holds `start` until `releaseStart()`: a test controls the window without guessing timings.
+    var holdStart = false
+    private var heldStarts: [CheckedContinuation<Void, Never>] = []
+    func releaseStart() {
+        holdStart = false
+        heldStarts.forEach { $0.resume() }
+        heldStarts = []
+    }
     var engineState: CaptureSession.State = .idle
     private(set) var handles: [RecordingHandle] = []
     private var nextID = 0
@@ -33,6 +41,7 @@ final class FakeSession: RecordingSession {
 
     func start(in folder: URL) async throws -> RecordingHandle {
         calls.append("start")
+        if holdStart { await withCheckedContinuation { heldStarts.append($0) } }
         try await Task.sleep(for: delay)
         if let startError { throw startError }
         nextID += 1
@@ -347,15 +356,15 @@ struct Harness {
 
     @Test func failureDuringStartIsHandledOnceStartReturns() async {
         let h = Harness()
-        h.session.delay = .milliseconds(100)
+        h.session.holdStart = true
         async let started: Void = h.controller.start()
-        try? await Task.sleep(for: .milliseconds(30))
+        while h.session.calls.isEmpty { await Task.yield() }
         #expect(h.controller.phase == .starting)
         // The new recording (ID 1) fails before `start` has even returned its handle.
         h.session.emit(.streamStopped(userInitiated: false), for: 1)
-        h.session.delay = .zero  // the in-flight start already read its delay; the queued stop should be quick
         await h.settle()
         #expect(h.session.calls == ["start"])
+        h.session.releaseStart()
         await started
         await h.settle()
         #expect(h.controller.phase == .idle)
