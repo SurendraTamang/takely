@@ -33,6 +33,14 @@ final class FakeSession: RecordingSession {
         heldStarts.forEach { $0.resume() }
         heldStarts = []
     }
+    /// Holds `pause` until `releasePause()`: a test controls the window without guessing timings.
+    var holdPause = false
+    private var heldPauses: [CheckedContinuation<Void, Never>] = []
+    func releasePause() {
+        holdPause = false
+        heldPauses.forEach { $0.resume() }
+        heldPauses = []
+    }
     var engineState: CaptureSession.State = .idle
     private(set) var handles: [RecordingHandle] = []
     private var nextID = 0
@@ -58,6 +66,7 @@ final class FakeSession: RecordingSession {
 
     func pause() async throws {
         calls.append("pause")
+        if holdPause { await withCheckedContinuation { heldPauses.append($0) } }
         try await Task.sleep(for: pauseDelay)
         if let pauseError { throw pauseError }
         engineState = .paused
@@ -376,13 +385,14 @@ struct Harness {
     @Test func failureDuringACommandIsHandledRightAfter() async {
         let h = Harness()
         await h.controller.start()
-        h.session.pauseDelay = .milliseconds(100)
+        h.session.holdPause = true
         async let paused: Void = h.controller.togglePause()
-        try? await Task.sleep(for: .milliseconds(30))
+        while h.session.calls.last != "pause" { await Task.yield() }
         #expect(h.controller.isBusy)  // the pause is in flight, so the event must wait for it
         h.session.emit(.streamStopped(userInitiated: false), for: 1)
         await h.settle()
         #expect(h.session.calls == ["start", "pause"])
+        h.session.releasePause()
         await paused
         await h.settle()
         #expect(h.controller.phase == .idle)
